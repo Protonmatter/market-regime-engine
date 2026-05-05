@@ -1,0 +1,23 @@
+agency: bea
+generated_at_utc: '2026-05-01T00:00:00Z'
+notes: |
+  Hand-curated v1.4 seed for BEA-published series. The catalog
+  doesn't directly reference a BEA series id today (debt-to-GDP is
+  treated as a fiscal proxy), but BEA's GDP/PCE schedule is the
+  reference clock for the fiscal/credit families. Release timestamps
+  reflect the standard 08:30 ET advance estimate slot (12:30 UTC).
+entries:
+  - agency: bea
+    series_id: GFDEGDQ188S
+    observation_date: '2025-12-01'
+    release_timestamp_utc: '2026-01-30T13:30:00Z'
+    source_url: https://www.bea.gov/news/schedule
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-gfdegdq188s-2026-01
+  - agency: bea
+    series_id: GFDEGDQ188S
+    observation_date: '2026-03-01'
+    release_timestamp_utc: '2026-04-29T12:30:00Z'
+    source_url: https://www.bea.gov/news/schedule
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-gfdegdq188s-2026-04

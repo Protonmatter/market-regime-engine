@@ -1,0 +1,23 @@
+# v0.5 conservative release-calendar metadata.
+# Exact government release timestamps should replace these defaults for production.
+# lag_months means the observation is treated as known no earlier than date + lag.
+series:
+  UNRATE: {lag_months: 1, release_family: bls_employment_situation, domain: labor}
+  U6RATE: {lag_months: 1, release_family: bls_employment_situation, domain: labor}
+  PAYEMS: {lag_months: 1, release_family: bls_employment_situation, domain: labor}
+  CPIAUCSL: {lag_months: 1, release_family: bls_cpi, domain: inflation}
+  CPILFESL: {lag_months: 1, release_family: bls_cpi, domain: inflation}
+  PCEPI: {lag_months: 1, release_family: bea_pce, domain: inflation}
+  FEDFUNDS: {lag_months: 1, release_family: fed_h15, domain: rates}
+  DGS10: {lag_days: 1, release_family: fed_h15, domain: rates}
+  DGS2: {lag_days: 1, release_family: fed_h15, domain: rates}
+  T10Y3M: {lag_days: 1, release_family: fred_derived, domain: rates}
+  BAA10Y: {lag_days: 1, release_family: fred_derived, domain: credit}
+  MORTGAGE30US: {lag_days: 7, release_family: freddie_mac, domain: housing}
+  PERMIT: {lag_months: 1, release_family: census_construction, domain: housing}
+  HOUST: {lag_months: 1, release_family: census_construction, domain: housing}
+  DCOILWTICO: {lag_days: 1, release_family: eia_market, domain: energy}
+  DTWEXBGS: {lag_days: 1, release_family: fed_h10, domain: fx}
+  GFDEGDQ188S: {lag_months: 3, release_family: fred_quarterly_fiscal, domain: fiscal}
+  SP500: {lag_days: 1, release_family: market_close, domain: market}
+  USREC: {lag_days: 1, release_family: fred_nber_indicator, domain: recession}

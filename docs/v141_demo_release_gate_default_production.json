@@ -1,0 +1,35 @@
+{
+  "explicit_profile_default": {
+    "active_trigger_names": "",
+    "approved": true,
+    "confidence": 0.65,
+    "confidence_grade": "B",
+    "date": "2026-05-01",
+    "decision": "release",
+    "high_invalidation_triggers": 0,
+    "major_drift": 0,
+    "max_psi": 0.0,
+    "mcs_evidence": "absent",
+    "metadata_json": "{}",
+    "reasons": "passed",
+    "severe_drift": 0,
+    "worst_coverage": null
+  },
+  "no_flags_no_env": {
+    "active_trigger_names": "",
+    "approved": false,
+    "confidence": 0.65,
+    "confidence_grade": "B",
+    "date": "2026-05-01",
+    "decision": "hold",
+    "high_invalidation_triggers": 0,
+    "major_drift": 0,
+    "max_psi": 0.0,
+    "mcs_evidence": "absent",
+    "metadata_json": "{}",
+    "reasons": "confidence_below_0.75,mcs_evidence_absent",
+    "severe_drift": 0,
+    "worst_coverage": null
+  },
+  "scenario": "Synthetic input: confidence=0.65 (passes v1.2.1 0.55 floor, fails production 0.75 floor) AND mcs_evidence=absent (passes v1.2.1 default require_mcs_membership=False, fails production require_mcs_membership=True)."
+}

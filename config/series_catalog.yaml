@@ -1,0 +1,81 @@
+series:
+  - series_id: SPX
+    domain: market
+    source: sample
+    transforms: [level, pct_change, pct_1m, log_yoy]
+    description: Synthetic S&P-like index
+  - series_id: FEDFUNDS
+    domain: rates
+    source: fred
+    transforms: [level, diff_3m, diff_12m]
+    description: Effective Fed Funds
+  - series_id: DGS10
+    domain: rates
+    source: fred
+    transforms: [level, diff_3m, diff_12m]
+    description: 10-year Treasury yield
+  - series_id: T10Y3M
+    domain: rates
+    source: fred
+    transforms: [level, diff_3m, diff_12m]
+    description: 10y minus 3m spread
+  - series_id: UNRATE
+    domain: labor
+    source: fred
+    transforms: [level, diff_3m, diff_12m, z_60m]
+    description: U-3 unemployment
+  - series_id: U6RATE
+    domain: labor
+    source: fred
+    transforms: [level, diff_3m, diff_12m]
+    description: U-6 underutilization
+  - series_id: PAYEMS
+    domain: labor
+    source: fred
+    transforms: [level, log_3m, log_yoy]
+    description: Nonfarm payrolls
+  - series_id: CPIAUCSL
+    domain: inflation
+    source: fred
+    transforms: [level, log_yoy, log_3m]
+    description: CPI
+  - series_id: CPILFESL
+    domain: inflation
+    source: fred
+    transforms: [level, log_yoy, log_3m]
+    description: Core CPI
+  - series_id: BAA10Y
+    domain: credit
+    source: fred
+    transforms: [level, diff_3m, z_60m]
+    description: Baa minus 10y spread
+  - series_id: PERMIT
+    domain: housing
+    source: fred
+    transforms: [level, log_yoy, log_3m]
+    description: Building permits
+  - series_id: HOUST
+    domain: housing
+    source: fred
+    transforms: [level, log_yoy, log_3m]
+    description: Housing starts
+  - series_id: MORTGAGE30US
+    domain: housing
+    source: fred
+    transforms: [level, diff_3m, diff_12m]
+    description: 30-year mortgage
+  - series_id: DCOILWTICO
+    domain: energy
+    source: fred
+    transforms: [level, log_yoy, log_3m]
+    description: WTI oil
+  - series_id: DTWEXBGS
+    domain: fx
+    source: fred
+    transforms: [level, log_yoy, log_3m]
+    description: Broad dollar index
+  - series_id: GFDEGDQ188S
+    domain: fiscal
+    source: fred
+    transforms: [level, diff_12m]
+    description: Federal debt/GDP proxy

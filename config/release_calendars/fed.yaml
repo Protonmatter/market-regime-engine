@@ -1,0 +1,44 @@
+agency: fed
+generated_at_utc: '2026-05-01T00:00:00Z'
+notes: |
+  Hand-curated v1.4 seed for Federal Reserve releases. The H.15
+  Selected Interest Rates page lands every business day at 16:15 ET
+  (20:15 UTC); FEDFUNDS / DGS10 / T10Y3M / MORTGAGE30US are all
+  observed at the same release timestamp. Run
+  ``mre refresh-release-calendars --agency fed`` to pull the latest.
+entries:
+  - agency: fed
+    series_id: FEDFUNDS
+    observation_date: '2026-04-01'
+    release_timestamp_utc: '2026-04-02T20:15:00Z'
+    source_url: https://www.federalreserve.gov/releases/h15/
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-fedfunds-2026-04
+  - agency: fed
+    series_id: DGS10
+    observation_date: '2026-04-01'
+    release_timestamp_utc: '2026-04-02T20:15:00Z'
+    source_url: https://www.federalreserve.gov/releases/h15/
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-dgs10-2026-04
+  - agency: fed
+    series_id: T10Y3M
+    observation_date: '2026-04-01'
+    release_timestamp_utc: '2026-04-02T20:15:00Z'
+    source_url: https://www.federalreserve.gov/releases/h15/
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-t10y3m-2026-04
+  - agency: fed
+    series_id: MORTGAGE30US
+    observation_date: '2026-04-01'
+    release_timestamp_utc: '2026-04-03T19:00:00Z'
+    source_url: https://www.federalreserve.gov/releases/h15/
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-mortgage30us-2026-04
+  - agency: fed
+    series_id: BAA10Y
+    observation_date: '2026-04-01'
+    release_timestamp_utc: '2026-04-02T20:15:00Z'
+    source_url: https://www.federalreserve.gov/releases/h15/
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-baa10y-2026-04

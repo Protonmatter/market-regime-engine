@@ -1,0 +1,13 @@
+{
+  "approved": false,
+  "differences": {
+    "extra:foo": {
+      "current": "baz",
+      "stored": "bar"
+    }
+  },
+  "lockfile_present": true,
+  "missing_envelope": false,
+  "run_id": "3c59441fe7bd468e",
+  "warnings": []
+}

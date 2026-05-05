@@ -1,0 +1,15 @@
+﻿{
+  "approved": false,
+  "differences": {
+    "training_mode_drift": {
+      "expected": "point_in_time",
+      "stored_mode": "legacy_fallback_explicit"
+    }
+  },
+  "lockfile_present": true,
+  "missing_envelope": false,
+  "run_id": "13b81f812f960d2b",
+  "warnings": [
+    "legacy_fallback_authorized"
+  ]
+}

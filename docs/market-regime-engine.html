@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Market Regime Engine — workflow &amp; math</title>
+    <style>
+      :root {
+        --bg-editor: #181818;
+        --bg-chrome: #141414;
+        --bg-elevated: #1c1c1c;
+        --text-primary: #e4e4e4eb;
+        --text-secondary: #e4e4e48d;
+        --text-tertiary: #e4e4e45e;
+        --text-quaternary: #e4e4e442;
+        --fill-primary: #e4e4e430;
+        --fill-secondary: #e4e4e41e;
+        --fill-tertiary: #e4e4e411;
+        --fill-quaternary: #e4e4e40a;
+        --stroke-primary: #e4e4e455;
+        --stroke-secondary: #e4e4e41f;
+        --stroke-tertiary: #e4e4e414;
+        --accent: #599ce7;
+        --link: #87c3ff;
+        --success: #52b896;
+        --success-border: rgba(82, 184, 150, 0.4);
+        --info-border: rgba(89, 156, 231, 0.45);
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: var(--bg-editor);
+        color: var(--text-primary);
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-size: 14px;
+        line-height: 20px;
+        padding: 32px;
+      }
+      .page {
+        max-width: 1180px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 28px;
+      }
+      h1 {
+        font-size: 24px;
+        line-height: 30px;
+        font-weight: 590;
+        margin: 0;
+      }
+      h2 {
+        font-size: 18px;
+        line-height: 24px;
+        font-weight: 590;
+        margin: 0;
+      }
+      h3 {
+        font-size: 16px;
+        line-height: 22px;
+        font-weight: 590;
+        margin: 0;
+      }
+      p { margin: 0; }
+      code {
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.92em;
+        background: var(--fill-tertiary);
+        padding: 1px 4px;
+        border-radius: 3px;
+      }
+      a { color: var(--link); }
+      .stack { display: flex; flex-direction: column; gap: 8px; }
+      .stack-12 { display: flex; flex-direction: column; gap: 12px; }
+      .stack-16 { display: flex; flex-direction: column; gap: 16px; }
+      .row { display: flex; flex-direction: row; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .grid {
+        display: grid;
+        gap: 16px;
+      }
+      .grid-2 { grid-template-columns: 1fr 1fr; }
+      .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+      .grid-5 { grid-template-columns: repeat(5, 1fr); }
+      hr.divider {
+        border: 0;
+        border-top: 1px solid var(--stroke-tertiary);
+        margin: 0;
+      }
+      .text-secondary { color: var(--text-secondary); }
+      .text-tertiary { color: var(--text-tertiary); }
+      .small { font-size: 12px; line-height: 16px; }
+      .semibold { font-weight: 590; }
+
+      .stat {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        padding: 12px 14px;
+        background: var(--bg-elevated);
+        border: 1px solid var(--stroke-secondary);
+        border-radius: 8px;
+      }
+      .stat-value { font-size: 24px; font-weight: 590; line-height: 30px; }
+      .stat-value.success { color: var(--success); }
+      .stat-label { font-size: 12px; line-height: 16px; color: var(--text-secondary); }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--stroke-secondary);
+        font-size: 12px;
+        line-height: 16px;
+        color: var(--text-secondary);
+      }
+      .pill.info { color: var(--accent); border-color: var(--info-border); }
+      .pill.success { color: var(--success); border-color: var(--success-border); }
+      .pill.sm {
+        padding: 1px 6px;
+        font-size: 11px;
+        border: none;
+        background: var(--fill-tertiary);
+      }
+
+      .card {
+        background: var(--bg-elevated);
+        border: 1px solid var(--stroke-secondary);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .card-header {
+        padding: 8px 14px;
+        font-size: 12px;
+        line-height: 16px;
+        font-weight: 590;
+        border-bottom: 1px solid var(--stroke-tertiary);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      .card-body { padding: 14px; }
+
+      table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        border: 1px solid var(--stroke-secondary);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--bg-elevated);
+      }
+      th {
+        text-align: left;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 590;
+        color: var(--text-secondary);
+        background: var(--bg-elevated);
+        border-bottom: 1px solid var(--stroke-tertiary);
+      }
+      td {
+        padding: 8px 12px;
+        font-size: 13px;
+        line-height: 18px;
+        border-bottom: 1px solid var(--stroke-tertiary);
+        vertical-align: top;
+      }
+      tbody tr:nth-child(even) td { background: var(--fill-quaternary); }
+      tbody tr:last-child td { border-bottom: none; }
+
+      .formula {
+        background: var(--bg-elevated);
+        border: 1px solid var(--stroke-secondary);
+        border-radius: 8px;
+        padding: 18px;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 18px;
+        line-height: 26px;
+        overflow-x: auto;
+      }
+      .formula .accent { color: var(--accent); }
+
+      .pipeline-wrapper {
+        background: var(--bg-elevated);
+        border: 1px solid var(--stroke-secondary);
+        border-radius: 8px;
+        padding: 12px;
+        overflow-x: auto;
+      }
+      .pipeline-wrapper svg { display: block; max-width: 100%; height: auto; }
+      .node-rect { fill: var(--fill-tertiary); stroke: var(--stroke-secondary); }
+      .node-rect.emphasis { fill: var(--fill-secondary); stroke: var(--accent); }
+      .node-text {
+        fill: var(--text-primary);
+        font-weight: 600;
+        font-size: 13px;
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+      .node-sublabel {
+        fill: var(--text-secondary);
+        font-size: 11px;
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+      .edge-path { fill: none; stroke: var(--stroke-primary); stroke-width: 1.4; }
+      .arrow-head { fill: var(--stroke-primary); }
+
+      @media (max-width: 1000px) {
+        .grid-5 { grid-template-columns: repeat(2, 1fr); }
+        .grid-3 { grid-template-columns: 1fr; }
+        .grid-2 { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <!-- Header -->
+      <header class="stack">
+        <h1>Market Regime Engine — workflow &amp; math</h1>
+        <p class="text-secondary">
+          Python-first, Rust-ready macro/market regime intelligence engine. v1.2 is the math-correctness floor plus a
+          2026-2027 SOTA frontier modeling layer: time-series-native conformal, mixed-frequency nowcasting,
+          distributional regression heads, a neural sequence baseline, and sequential e-value safe-testing — all wired
+          into a fail-closed governance pipeline with a verifiable reproducibility envelope.
+        </p>
+      </header>
+
+      <!-- Stats strip -->
+      <section class="grid grid-5">
+        <div class="stat">
+          <div class="stat-value success">162</div>
+          <div class="stat-label">Tests passing</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">80+</div>
+          <div class="stat-label">Python modules</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">41</div>
+          <div class="stat-label">CLI subcommands</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">6</div>
+          <div class="stat-label">Conformal backends</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">25+</div>
+          <div class="stat-label">Cited papers</div>
+        </div>
+      </section>
+
+      <hr class="divider" />
+
+      <!-- What it does -->
+      <section class="stack-12">
+        <h2>What the engine emits</h2>
+        <div class="grid grid-2">
+          <div class="stack">
+            <p class="semibold">Forecast outputs</p>
+            <p class="text-secondary">
+              Regime probability · drawdown probability · forward-return quantiles · recession probability and hazard ·
+              mixed-frequency nowcast factors · historical analogs · driver attribution and counterfactual deltas ·
+              model confidence and invalidation triggers.
+            </p>
+          </div>
+          <div class="stack">
+            <p class="semibold">Governance outputs</p>
+            <p class="text-secondary">
+              Calibrated probabilities (Platt + 6 conformal backends) · per-bucket and joint coverage reports · drift
+              PSI · release-gate decision (Hansen MCS or sequential e-value) · alert routing · promotion workflow
+              record · immutable model run with a verifiable reproducibility envelope.
+            </p>
+          </div>
+        </div>
+        <div class="row">
+          <span class="pill info">point-in-time</span>
+          <span class="pill info">conformal coverage guarantees</span>
+          <span class="pill info">anytime-valid promotion</span>
+          <span class="pill info">mixed-frequency nowcast</span>
+          <span class="pill info">scenario replay 1973 → 2022</span>
+          <span class="pill">fail-closed gates</span>
+        </div>
+      </section>
+
+      <!-- Pipeline DAG -->
+      <section class="stack-12">
+        <h2>Pipeline workflow</h2>
+        <p class="text-secondary">
+          Each rank is a hard contract: features cannot violate the point-in-time invariant, conformal layers cannot
+          ship without a coverage report, the release gate cannot fire without a verifiable reproducibility envelope.
+          Two parallel branches at the regime layer (change-point and regime posterior) feed one head layer.
+        </p>
+        <div class="pipeline-wrapper">
+          <svg
+            width="620"
+            height="1096"
+            viewBox="0 0 620 1096"
+            role="img"
+            aria-label="Market Regime Engine pipeline DAG"
+          >
+            <defs>
+              <marker
+                id="mre-arrow"
+                viewBox="0 0 8 8"
+                refX="7"
+                refY="4"
+                markerWidth="8"
+                markerHeight="8"
+                orient="auto-start-reverse"
+              >
+                <path d="M0,0 L8,4 L0,8 z" class="arrow-head" />
+              </marker>
+            </defs>
+
+            <!-- Edges. Cubic Bezier with control points at midY for smooth s-curves on diverging branches. -->
+            <!-- ingest -> warehouse -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 80 C 310 98, 310 98, 310 112"
+            />
+            <!-- warehouse -> pit -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 180 C 310 198, 310 198, 310 212"
+            />
+            <!-- pit -> features -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 280 C 310 298, 310 298, 310 312"
+            />
+            <!-- features -> changepoint -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 380 C 310 398, 156 398, 156 412"
+            />
+            <!-- features -> regime -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 380 C 310 398, 464 398, 464 412"
+            />
+            <!-- changepoint -> heads -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 156 480 C 156 498, 310 498, 310 512"
+            />
+            <!-- regime -> heads -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 464 480 C 464 498, 310 498, 310 512"
+            />
+            <!-- heads -> conformal -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 580 C 310 598, 310 598, 310 612"
+            />
+            <!-- conformal -> bma -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 680 C 310 698, 310 698, 310 712"
+            />
+            <!-- bma -> validation -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 780 C 310 798, 310 798, 310 812"
+            />
+            <!-- validation -> governance -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 880 C 310 898, 310 898, 310 912"
+            />
+            <!-- governance -> surfaces -->
+            <path
+              class="edge-path"
+              marker-end="url(#mre-arrow)"
+              d="M 310 980 C 310 998, 310 998, 310 1012"
+            />
+
+            <!-- Nodes -->
+            <!-- 0 ingest -->
+            <g transform="translate(170,16)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Ingestion</text>
+              <text class="node-sublabel" x="14" y="42">FRED · ALFRED · synthetic sample</text>
+            </g>
+            <!-- 1 warehouse -->
+            <g transform="translate(170,116)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">SQLite warehouse</text>
+              <text class="node-sublabel" x="14" y="42">WAL · busy_timeout · 33 tables</text>
+            </g>
+            <!-- 2 pit (emphasis) -->
+            <g transform="translate(170,216)">
+              <rect class="node-rect emphasis" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Point-in-time materialisation</text>
+              <text class="node-sublabel" x="14" y="42">feature_asof_values + audit gate</text>
+            </g>
+            <!-- 3 features -->
+            <g transform="translate(170,316)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Feature builder</text>
+              <text class="node-sublabel" x="14" y="42">transforms · robust z · DFM · DFM-MQ · MIDAS</text>
+            </g>
+            <!-- 4a changepoint -->
+            <g transform="translate(16,416)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Change-point</text>
+              <text class="node-sublabel" x="14" y="42">NIW BOCPD · BOCPD-MUSE · GP-BOCPD · cov. hazard</text>
+            </g>
+            <!-- 4b regime -->
+            <g transform="translate(324,416)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Regime posterior</text>
+              <text class="node-sublabel" x="14" y="42">HMM Baum-Welch · MS-VAR Hamilton-Kim · WFST</text>
+            </g>
+            <!-- 5 heads -->
+            <g transform="translate(170,516)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Heads</text>
+              <text class="node-sublabel" x="14" y="42">logistic · HGBR quantile · hazard · NGBoost · IDR · DVBF · PatchTST</text>
+            </g>
+            <!-- 6 conformal (emphasis) -->
+            <g transform="translate(170,616)">
+              <rect class="node-rect emphasis" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Calibration + conformal</text>
+              <text class="node-sublabel" x="14" y="42">Platt · CQR · ACI · Mondrian · block · NexCP · cond. · loc. · e-conf.</text>
+            </g>
+            <!-- 7 bma -->
+            <g transform="translate(170,716)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Online BMA</text>
+              <text class="node-sublabel" x="14" y="42">exponentially-discounted log-score (post-norm floor)</text>
+            </g>
+            <!-- 8 validation -->
+            <g transform="translate(170,816)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Validation</text>
+              <text class="node-sublabel" x="14" y="42">purged WF · DM-HLN · GW · MCS T_R+T_SQ · PIT · Christof. · CRPS-DM</text>
+            </g>
+            <!-- 9 governance (emphasis) -->
+            <g transform="translate(170,916)">
+              <rect class="node-rect emphasis" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Governance</text>
+              <text class="node-sublabel" x="14" y="42">release-gate (MCS or e-value) · drift · alerts · model_runs envelope</text>
+            </g>
+            <!-- 10 surfaces -->
+            <g transform="translate(170,1016)">
+              <rect class="node-rect" width="280" height="64" rx="6" ry="6" />
+              <text class="node-text" x="14" y="22">Surfaces</text>
+              <text class="node-sublabel" x="14" y="42">CLI · /v1 API · Streamlit · institutional report · DuckDB · scenarios</text>
+            </g>
+          </svg>
+        </div>
+      </section>
+
+      <hr class="divider" />
+
+      <!-- Math primitives table -->
+      <section class="stack-12">
+        <h2>Math primitives by layer</h2>
+        <p class="text-secondary">
+          Every primitive is implemented from its cited paper, with a regression test pinning the contract. The
+          conformal and validation rows are the differentiators: most regime engines ship with one calibration scheme;
+          this one carries six and reports per-bucket coverage on every release.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Layer</th>
+              <th>Primitive</th>
+              <th>Reference</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Change-point</td><td>Online BOCPD with NIW conjugate prior</td><td>Adams-MacKay 2007 · Murphy 2007 §3.6</td></tr>
+            <tr><td>Change-point</td><td>BOCPD-MUSE — model uncertainty over emissions</td><td>Knoblauch-Damoulas 2018</td></tr>
+            <tr><td>Change-point</td><td>GP-BOCPD with deep-kernel hook (v1.2)</td><td>Saatçi-Turner-Rasmussen 2010</td></tr>
+            <tr><td>Change-point</td><td>Covariate-conditioned hazard</td><td>logistic surrogate of Cox 1972</td></tr>
+            <tr><td>Regime</td><td>Baum-Welch HMM (full-cov Gaussian, label-pinned)</td><td>Rabiner 1989</td></tr>
+            <tr><td>Regime</td><td>Markov-Switching VAR(p) with EM</td><td>Hamilton 1989 · Kim 1994</td></tr>
+            <tr><td>Regime</td><td>WFST log-space Viterbi (learnable arc costs)</td><td>Mohri 2002</td></tr>
+            <tr><td>Features</td><td>Watson-Engle DFM with EM Kalman + RTS smoother</td><td>Watson-Engle 1983</td></tr>
+            <tr><td>Features</td><td>Mixed-frequency DFM-MQ (v1.2)</td><td>Bańbura-Modugno 2014</td></tr>
+            <tr><td>Features</td><td>MIDAS Almon-polynomial weights (v1.2)</td><td>Ghysels-Sinko-Valkanov 2007</td></tr>
+            <tr><td>Features</td><td>MAD / winsorized robust z (PIT-respecting)</td><td>Hampel 1974</td></tr>
+            <tr><td>Calibration</td><td>Platt logit calibration</td><td>Platt 1999</td></tr>
+            <tr><td>Calibration</td><td>Mondrian split conformal — per regime bucket</td><td>Vovk-Gammerman-Shafer 2005</td></tr>
+            <tr><td>Calibration</td><td>Block conformal (β-mixing) (v1.2)</td><td>Politis-Romano 1994 + split-conformal</td></tr>
+            <tr><td>Calibration</td><td>NexCP for time-series (v1.2)</td><td>Stankevičiūtė-Alaa-van der Schaar 2021</td></tr>
+            <tr><td>Calibration</td><td>Conformalized Quantile Regression</td><td>Romano-Patterson-Candès 2019</td></tr>
+            <tr><td>Calibration</td><td>Adaptive Conformal Inference</td><td>Gibbs-Candès 2021</td></tr>
+            <tr><td>Calibration</td><td>Conditional conformal (group-conditional) (v1.2)</td><td>Gibbs-Cherian-Candès 2023</td></tr>
+            <tr><td>Calibration</td><td>Localized split conformal (RBF) (v1.2)</td><td>Lin-Trivedi-Sun 2023</td></tr>
+            <tr><td>Calibration</td><td>Sequential e-conformal (anytime-valid) (v1.2)</td><td>Vovk-Wang 2021 · JASA 2024</td></tr>
+            <tr><td>Calibration</td><td>Bonferroni multi-horizon coherent</td><td>Stankevičiūtė et al. 2021</td></tr>
+            <tr><td>Validation</td><td>Purged + embargoed walk-forward · CPCV</td><td>López de Prado 2018 Ch. 7</td></tr>
+            <tr><td>Validation</td><td>Diebold-Mariano with HLN small-sample correction</td><td>Harvey-Leybourne-Newbold 1997</td></tr>
+            <tr><td>Validation</td><td>Giacomini-White conditional</td><td>Giacomini-White 2006</td></tr>
+            <tr><td>Validation</td><td>Hansen MCS (T_R and T_SQ) (v1.2)</td><td>Hansen-Lunde-Nason 2011</td></tr>
+            <tr><td>Validation</td><td>PIT histogram + Knüppel raw + autocorr (v1.2)</td><td>Diebold-Gunther-Tay 1998 · Knüppel 2015</td></tr>
+            <tr><td>Validation</td><td>Christoffersen unconditional + conditional</td><td>Christoffersen 1998</td></tr>
+            <tr><td>Validation</td><td>Murphy reliability/resolution/uncertainty</td><td>Murphy 1973</td></tr>
+            <tr><td>Validation</td><td>CRPS-DM for distributional forecasts (v1.2)</td><td>Diks-Panchenko-van Dijk 2011</td></tr>
+            <tr><td>Heads</td><td>Logistic + non-crossing HGBR quantile</td><td>Platt 1999 · Chernozhukov-Fernández-Val 2010</td></tr>
+            <tr><td>Heads</td><td>Discrete-time hazard (path-aware horizon)</td><td>Allison 1982</td></tr>
+            <tr><td>Heads</td><td>NGBoost natural-gradient boosting (v1.2)</td><td>Duan et al. 2020</td></tr>
+            <tr><td>Heads</td><td>Isotonic Distributional Regression (v1.2)</td><td>Henzi-Ziegel-Gneiting 2021</td></tr>
+            <tr><td>Heads</td><td>Deep variational Bayes filter (DVBF) (v1.2)</td><td>Karl-Soelch-Bayer-van der Smagt 2017</td></tr>
+            <tr><td>Heads</td><td>PatchTST neural sequence model (v1.2)</td><td>Nie-Nguyen-Sinthong-Kalagnanam 2023</td></tr>
+            <tr><td>Ensembling</td><td>Online BMA (exponentially-discounted log-score)</td><td>Bates-Granger 1969 · Raftery-Karny-Ettler 2010</td></tr>
+            <tr><td>Promotion</td><td>EValueLogScore (anytime-valid) (v1.2)</td><td>Howard-Ramdas 2021</td></tr>
+            <tr><td>Promotion</td><td>SafeTestPromotion (e-value safe testing) (v1.2)</td><td>Grünwald-de Heide-Koolen 2024</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Composite formula -->
+      <section class="stack-12">
+        <h2>Composite forecast distribution</h2>
+        <div class="formula">
+          <span class="accent">F̂</span><sub>t,h</sub>(y) =
+          <span class="accent">C</span><sub>h,R</sub> ⎡ ∑<sub>m</sub> w<sub>m,t,h</sub>(CP<sub>t</sub>, γ<sub>t</sub>,
+          R<sub>t</sub>, Loss<sub>m</sub>, CalErr<sub>m</sub>) · F<sub>m,t,h</sub>(y) ⎤
+        </div>
+        <div class="grid grid-2">
+          <div class="stack">
+            <p class="semibold">CP<sub>t</sub></p>
+            <p class="text-secondary small">
+              online change-point probability (NIW BOCPD, BOCPD-MUSE, or GP-BOCPD; covariate-conditioned hazard
+              optional)
+            </p>
+          </div>
+          <div class="stack">
+            <p class="semibold">γ<sub>t</sub></p>
+            <p class="text-secondary small">latent regime posterior (HMM Baum-Welch or MS-VAR Hamilton-Kim)</p>
+          </div>
+          <div class="stack">
+            <p class="semibold">R<sub>t</sub></p>
+            <p class="text-secondary small">WFST-decoded regime state</p>
+          </div>
+          <div class="stack">
+            <p class="semibold">w<sub>m,t,h</sub></p>
+            <p class="text-secondary small">
+              online BMA weights — exponentially-discounted log-score; floor applied after normalisation (v1.2)
+            </p>
+          </div>
+          <div class="stack">
+            <p class="semibold">C<sub>h,R</sub>[·]</p>
+            <p class="text-secondary small">
+              regime-conditional conformal layer; backend ∈ {split, block, nexcp, conditional, localized, e_conformal}.
+              Optionally extended with Bonferroni multi-horizon for joint coverage.
+            </p>
+          </div>
+          <div class="stack">
+            <p class="semibold">Loss<sub>m</sub>, CalErr<sub>m</sub></p>
+            <p class="text-secondary small">
+              rolling validation loss and calibration error per model — feed the BMA weight update
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Single forecast trace -->
+      <section class="stack-12">
+        <h2>Anatomy of a single forecast</h2>
+        <p class="text-secondary">
+          How a forecast at <code>t = 2024-12-01</code>, <code>horizon = 12m</code> is produced. Every step is
+          fail-closed: if the audit fires, the run is rejected before the forecast is emitted.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Step</th>
+              <th>Module / function</th>
+              <th>Math · invariant</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1. Materialise PIT panel</td>
+              <td><code>asof.materialize_feature_asof_values</code></td>
+              <td>observation_date ≤ t and vintage_date ≤ t for every row</td>
+            </tr>
+            <tr>
+              <td>2. Audit lineage</td>
+              <td><code>asof.audit_feature_asof_lineage</code> (fail-closed)</td>
+              <td>violations = 0 → continue · else SystemExit(2)</td>
+            </tr>
+            <tr>
+              <td>3. Build features</td>
+              <td><code>features.build_features</code> + robust_stats + <code>dfm.DFMDomainModel.transform</code></td>
+              <td>v1.2: cached training (μ, σ) → factor scale stable across panels</td>
+            </tr>
+            <tr>
+              <td>4. Score change-point</td>
+              <td><code>bocpd.MultivariateNIWBOCPD</code> or <code>bocpd_muse.BOCPDMuse</code> or <code>frontier.gp_cpd.GPBOCPD</code></td>
+              <td>CP_t = P(run-length = 0 | x_{1:t})</td>
+            </tr>
+            <tr>
+              <td>5. Score regime posterior</td>
+              <td><code>hmm.HMMRegimePosterior</code> + <code>msvar.MarkovSwitchingVAR</code> + <code>wfst.RegimeWFST</code></td>
+              <td>γ_t via Baum-Welch / Hamilton-Kim filter; R_t via Viterbi</td>
+            </tr>
+            <tr>
+              <td>6. Run heads</td>
+              <td>
+                <code>models.QuantileReturnModel</code> + <code>hazard_model.DiscreteTimeHazardModel</code> +
+                <code>frontier.distributional.*</code> + <code>frontier.neural_seq.PatchTSTHead</code>
+              </td>
+              <td>non-crossing repair on quantiles; path-aware horizon survival on hazard</td>
+            </tr>
+            <tr>
+              <td>7. Calibrate + conformalise</td>
+              <td>
+                <code>calibration.PlattCalibrator</code> →
+                <code>conformal.MondrianBinaryConformal(backend=…)</code>
+              </td>
+              <td>marginal coverage 1−α conditional on regime bucket (block / NexCP / Gibbs-Cherian-Candès / Lin / Vovk-Wang)</td>
+            </tr>
+            <tr>
+              <td>8. Mix</td>
+              <td><code>bma.OnlineBMA.mix</code></td>
+              <td>F̂_{t,h}(y) = ∑_m w_{m,t,h} · F_{m,t,h}(y); floor applied post-norm</td>
+            </tr>
+            <tr>
+              <td>9. Validate against baselines</td>
+              <td><code>walk_forward.PurgedWalkForward</code> + <code>forecast_compare.{DM, GW, MCS, CRPS-DM}</code></td>
+              <td>DM-significant beat at 5% AND MCS membership (T_R or T_SQ) OR e-value ≥ 1/α</td>
+            </tr>
+            <tr>
+              <td>10. Governance gate</td>
+              <td><code>release_gates.evaluate_release_gate(promotion_method=…, min_coverage=…)</code></td>
+              <td>fail-closed on confidence / drift / invalidation / coverage / promotion</td>
+            </tr>
+            <tr>
+              <td>11. Persist run</td>
+              <td><code>model_runs.create_model_run</code> with full ReproEnvelope</td>
+              <td>git SHA · lockfile sha256 · feature/output/vintage payload sha256 · RNG seeds</td>
+            </tr>
+            <tr>
+              <td>12. Verify</td>
+              <td><code>mre verify-run --run-id &lt;id&gt;</code></td>
+              <td>exit 0 with approved: true ⇔ envelope round-trips bit-for-bit</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <hr class="divider" />
+
+      <!-- Frontier modules -->
+      <section class="stack-12">
+        <h2>v1.2 frontier package</h2>
+        <p class="text-secondary">
+          Optional dependencies (<code>statsmodels</code>, <code>ngboost</code>, <code>torch</code>) live behind the
+          <code>[frontier]</code> extra. Every module degrades gracefully when its soft dep is missing — the engine
+          never breaks; it just falls back to the closest pure-numpy primitive.
+        </p>
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="card-header">
+              <span>Time-series-native conformal — 5 backends</span>
+              <span class="pill success sm">PASS</span>
+            </div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>frontier.conformal_ts</code></p>
+              <p>
+                BlockConformalBinary · NexCPForecaster · ConditionalConformalRegressor · LocalizedSplitConformal ·
+                SequentialEConformal. Reachable via <code>MondrianBinaryConformal(backend=…)</code>.
+              </p>
+              <p class="small text-tertiary">
+                Politis-Romano 1994 · Stankevičiūtė et al. 2021 · Gibbs-Cherian-Candès 2023 · Lin-Trivedi-Sun 2023 ·
+                Vovk-Wang 2021
+              </p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span>Mixed-frequency nowcasting</span>
+              <span class="pill success sm">PASS</span>
+            </div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>frontier.dfm_mq + frontier.midas</code></p>
+              <p>
+                <code>MQDynamicFactorModel</code> wraps statsmodels' <code>DynamicFactorMQ</code> with graceful fallback
+                to v1.0 DFM. <code>MIDASRegressor</code> with Almon polynomial lag weights — pure numpy.
+              </p>
+              <p class="small text-tertiary">Bańbura-Modugno 2014 · Ghysels-Sinko-Valkanov 2007</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span>Distributional regression heads</span>
+              <span class="pill success sm">PASS</span>
+            </div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>frontier.distributional</code></p>
+              <p>
+                <code>NGBoostHead</code> (parametric SOTA) · <code>IsotonicDistributionalHead</code> (non-parametric
+                calibration) · <code>DeepStateSpaceHead</code> (DVBF). Soft-degrade to NGBoost when torch missing.
+              </p>
+              <p class="small text-tertiary">Duan et al. 2020 · Henzi-Ziegel-Gneiting 2021 · Karl et al. 2017</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span>PatchTST sequence baseline</span>
+              <span class="pill success sm">PASS</span>
+            </div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>frontier.neural_seq</code></p>
+              <p>
+                CPU-friendly small variant (depth 4, d_model 128, patch_len 12). Plugs into BMA via the
+                <code>dict[str, float]</code> interface. Raises <code>ImportError</code> without torch.
+              </p>
+              <p class="small text-tertiary">Nie-Nguyen-Sinthong-Kalagnanam 2023 (ICLR)</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span>Sequential safe-test promotion</span>
+              <span class="pill success sm">PASS</span>
+            </div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>frontier.sequential_testing</code></p>
+              <p>
+                <code>EValueLogScore</code> confidence-sequence e-process · <code>SafeTestPromotion</code>. Wired into
+                <code>release_gates(promotion_method='e_values')</code>.
+              </p>
+              <p class="small text-tertiary">Howard-Ramdas 2021 · Grünwald-de Heide-Koolen 2024</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span>CRPS-DM for distributional forecasts</span>
+              <span class="pill success sm">PASS</span>
+            </div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>forecast_compare.crps_diks_panchenko</code></p>
+              <p>
+                CRPS-direct DM-style HAC test. Pairs with Murphy decomposition for distributional comparison; pluggable
+                into the validation pipeline.
+              </p>
+              <p class="small text-tertiary">Diks-Panchenko-van Dijk 2011</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <span>GP-BOCPD with deep-kernel hook</span>
+              <span class="pill success sm">PASS</span>
+            </div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>frontier.gp_cpd</code></p>
+              <p>
+                BOCPD with Gaussian-process emissions (RBF default). Optional <code>deep_kernel</code> callable accepts
+                a learned NN feature embedding for Wilson et al. 2016-style upgrades.
+              </p>
+              <p class="small text-tertiary">Saatçi-Turner-Rasmussen 2010</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Promotion gates -->
+      <section class="stack-12">
+        <h2>Promotion gates · two complementary mechanisms</h2>
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="card-header">Hansen MCS (fixed-window)</div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>release_gate(require_mcs_membership=True)</code></p>
+              <p>
+                Stationary block-bootstrap with recentered null. v1.2 adds the T<sub>SQ</sub> statistic so high-power
+                detection of marginally-tied alternatives is reachable.
+              </p>
+              <div class="row">
+                <span class="pill info sm">T_R</span>
+                <span class="pill info sm">T_SQ</span>
+                <span class="pill sm">block bootstrap</span>
+              </div>
+              <p class="small text-tertiary">Hansen-Lunde-Nason 2011</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">Sequential e-value safe-test</div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>release_gate(promotion_method="e_values")</code></p>
+              <p>
+                Anytime-valid: stop sampling whenever the cumulative e-value crosses 1/α. The candidate is promoted on
+                cumulative evidence, not on a fixed-window p-value.
+              </p>
+              <div class="row">
+                <span class="pill info sm">EValueLogScore</span>
+                <span class="pill info sm">SafeTestPromotion</span>
+                <span class="pill sm">anytime-valid</span>
+              </div>
+              <p class="small text-tertiary">Howard-Ramdas 2021 · Grünwald-de Heide-Koolen 2024</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <hr class="divider" />
+
+      <!-- Surfaces -->
+      <section class="stack-12">
+        <h2>Output surfaces · how the engine is consumed</h2>
+        <div class="grid grid-3">
+          <div class="card">
+            <div class="card-header">CLI</div>
+            <div class="card-body stack">
+              <p class="small text-secondary">41 subcommands · JSON-log option</p>
+              <p>
+                bootstrap-sample, materialize-asof-features, audit-vintage --enforce, score-regime, train-baseline,
+                validate, calibrate-probabilities, nowcast, conformal-conditional, e-value-test, release-gate,
+                model-run, verify-run, bench, …
+              </p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">API</div>
+            <div class="card-body stack">
+              <p class="small text-secondary">legacy /api + hardened /v1</p>
+              <p>
+                Versioned routes, <code>X-API-Key</code> auth via <code>hmac.compare_digest</code>,
+                <code>/v1/metrics</code> auth-gated, lock-protected TTL cache, <code>/v1/health</code> gate-aware.
+                Soft-degrades when prometheus_client is absent.
+              </p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">Streamlit dashboard</div>
+            <div class="card-body stack">
+              <p class="small text-secondary">cached reads · Plotly regime ribbon</p>
+              <p>
+                <code>@st.cache_data(ttl=120)</code> over the warehouse; release-gate banner; per-bucket conformal
+                coverage; analogs / drift / invalidation / promotion all visible in one screen.
+              </p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">Institutional report</div>
+            <div class="card-body stack">
+              <p class="small text-secondary">v0.4 + v0.5 + v0.6 + v0.7 + v0.8 sections</p>
+              <p>
+                Markdown report stitched by <code>report_writer</code> + v2..v5 shims. Exec snapshot · model outputs ·
+                analogs · drivers · governance · vintage / as-of audit · v1.2 nowcast and conditional coverage rows.
+              </p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">DuckDB / Parquet lake</div>
+            <div class="card-body stack">
+              <p class="small text-secondary"><code>export_sqlite_to_lake</code> + <code>build_duckdb_database</code></p>
+              <p>
+                Every warehouse table exported to Parquet (or CSV fallback) plus an optional DuckDB database. Manifest
+                written to <code>data/lake/manifest.csv</code> for downstream BI.
+              </p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">Observability</div>
+            <div class="card-body stack">
+              <p class="small text-secondary">Prometheus summary text</p>
+              <p>
+                In-process counter + histogram registry exposed as Prometheus summary text — v1.1 fix records true
+                p50/p95/p99 instead of collapsing all percentiles to the mean.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Provenance -->
+      <footer class="stack">
+        <hr class="divider" />
+        <h3>Provenance</h3>
+        <p class="text-secondary small">
+          Built on the v1.2 commit (<code>904d058</code> on <code>v1.1-fixes</code>) on top of the v1.1 fix bundle
+          (<code>79249df</code>) and the initial commit (<code>741e51a</code>). Acceptance criteria for v1.2: 162 tests
+          pass, ruff clean across 100 files, mypy 35 errors (was 38), end-to-end smoke <code>verify-run</code> reports
+          <code>approved: true</code>. Reference docs: <code>docs/V1_2_FRONTIER.md</code> ·
+          <code>docs/V1_1_FIXES.md</code> · <code>docs/ARCHITECTURE.md</code> · <code>docs/MODEL_RISK.md</code>.
+        </p>
+        <p class="text-tertiary small">
+          Static export of the Cursor canvas at <code>~/.cursor/projects/empty-window/canvases/market-regime-engine.canvas.tsx</code>.
+        </p>
+      </footer>
+    </main>
+  </body>
+</html>

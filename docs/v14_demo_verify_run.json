@@ -1,0 +1,21 @@
+{
+  "approved": false,
+  "differences": {
+    "extra:engine_version": {
+      "current": null,
+      "stored": "1.4.0-demo"
+    },
+    "extra:purpose": {
+      "current": null,
+      "stored": "v1.4 fail-closed verify-run demo"
+    },
+    "training_mode_drift": {
+      "expected": "point_in_time",
+      "stored_mode": "fail_closed"
+    }
+  },
+  "lockfile_present": true,
+  "missing_envelope": false,
+  "run_id": "77dc706788a13373",
+  "warnings": []
+}

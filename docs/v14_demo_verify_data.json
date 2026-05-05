@@ -1,0 +1,48 @@
+{
+  "approved": false,
+  "current_payloads": {
+    "feature_payload": "503c5b95f29df78d53b18cf3a4210e233c58a2a8e43fa498f0f8cef43441b2d0",
+    "output_payload": "ddab92487838abcbd4dfb8e93aeede348c95414237fab184c68b8bdb39d8fe3b",
+    "vintage_payload": "0c72fd05eba69045130316e8e484720bd5a75cc06838411ad4d6a94afddd8026"
+  },
+  "differences": {
+    "feature_payload": {
+      "changed_rows": [
+        {
+          "date": "2020-01-01",
+          "domain": "labor",
+          "feature_name": "f1",
+          "metadata_json": "{}",
+          "value": 999.989990234375
+        }
+      ],
+      "current": "503c5b95f29df78d53b18cf3a4210e233c58a2a8e43fa498f0f8cef43441b2d0",
+      "current_rows": 1,
+      "stored": "2afada22bfe30d84c66938be675cb0a00dbf91b087290790d344a819fbf7bd65"
+    },
+    "output_payload": {
+      "changed_rows": [
+        {
+          "date": "2020-01-01",
+          "horizon": "3m",
+          "metadata_json": "{}",
+          "model_name": "logreg",
+          "target": "rec",
+          "value": 0.10000000149011612
+        }
+      ],
+      "current": "ddab92487838abcbd4dfb8e93aeede348c95414237fab184c68b8bdb39d8fe3b",
+      "current_rows": 1,
+      "stored": "e489835bcf16dae50a04eaec0b583de98fedcd5fd62abe823398d66e077520cd"
+    }
+  },
+  "missing_envelope": false,
+  "missing_run": false,
+  "run_id": "9bc31f71d64ecf82",
+  "stored_payloads": {
+    "feature_payload": "2afada22bfe30d84c66938be675cb0a00dbf91b087290790d344a819fbf7bd65",
+    "output_payload": "e489835bcf16dae50a04eaec0b583de98fedcd5fd62abe823398d66e077520cd",
+    "vintage_payload": "0c72fd05eba69045130316e8e484720bd5a75cc06838411ad4d6a94afddd8026"
+  },
+  "warnings": []
+}

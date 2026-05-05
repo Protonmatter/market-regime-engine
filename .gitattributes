@@ -1,0 +1,21 @@
+# Normalise line endings across operating systems so the reproducibility
+# envelope (lockfile sha + golden trace fixture) stays deterministic.
+* text=auto eol=lf
+
+# Forbid CRLF rewrites for binary blobs.
+*.png binary
+*.parquet binary
+
+# Be explicit about CSV / SQL / YAML / TOML / Python so Windows checkouts do
+# not silently inflate hashes after `git checkout`.
+*.csv  text
+*.json text
+*.lock text
+*.md   text
+*.py   text
+*.rs   text
+*.sql  text
+*.toml text
+*.txt  text
+*.yaml text
+*.yml  text

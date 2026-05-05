@@ -1,0 +1,642 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, v1.1-fixes]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master, v1.1-fixes]
+  workflow_dispatch:
+
+jobs:
+  version-sanity:
+    name: Version sanity (pyproject ↔ __init__ ↔ tag ↔ mre --version)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package for CLI version check (v1.3 item H)
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install -e .
+      - name: Compare versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYPROJECT_VERSION=$(python -c "import re,sys; t=open('pyproject.toml',encoding='utf-8').read(); m=re.search(r'^\[project\][\s\S]*?^version\s*=\s*\"([^\"]+)\"', t, re.MULTILINE); print(m.group(1) if m else '')")
+          INIT_VERSION=$(python -c "import re; t=open('src/market_regime_engine/__init__.py',encoding='utf-8').read(); m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', t); print(m.group(1) if m else '')")
+          CLI_VERSION=$(mre --version | head -n1)
+          README_VERSION=$(python -c "import re; t=open('README.md',encoding='utf-8').read(); m=re.search(r'^# Market Regime Engine v(\d+\.\d+\.\d+)\b', t, re.MULTILINE); print(m.group(1) if m else '')")
+          echo "pyproject:     ${PYPROJECT_VERSION}"
+          echo "__init__:      ${INIT_VERSION}"
+          echo "mre --version: ${CLI_VERSION}"
+          echo "README H1:     ${README_VERSION}"
+          if [ "${PYPROJECT_VERSION}" != "${INIT_VERSION}" ]; then
+            echo "FAIL: pyproject version != __init__.__version__" >&2
+            exit 1
+          fi
+          # ``mre --version`` prints exactly the version (we strip the
+          # short flag form's "market-regime-engine X.Y.Z" prefix in
+          # main()). v1.3 added the flag; the assertion below is the
+          # gate for criterion H.4.
+          if [ "${CLI_VERSION}" != "${PYPROJECT_VERSION}" ]; then
+            echo "FAIL: 'mre --version' (${CLI_VERSION}) != pyproject ${PYPROJECT_VERSION}" >&2
+            exit 1
+          fi
+          # v1.4.1 (item B): README H1 must also agree. v1.4.0 shipped
+          # with README at v1.2.1 while pyproject was at 1.4.0; the
+          # wheel METADATA Description first line drifted as a result.
+          if [ -z "${README_VERSION}" ]; then
+            echo "FAIL: README.md H1 is missing or unparseable (expected '# Market Regime Engine vX.Y.Z')" >&2
+            exit 1
+          fi
+          if [ "${README_VERSION}" != "${PYPROJECT_VERSION}" ]; then
+            echo "FAIL: README H1 (${README_VERSION}) != pyproject ${PYPROJECT_VERSION}" >&2
+            exit 1
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+            echo "tag:       ${TAG}"
+            STRIPPED="${TAG#v}"
+            if [ "${STRIPPED}" != "${PYPROJECT_VERSION}" ]; then
+              echo "FAIL: tag ${TAG} (stripped: ${STRIPPED}) != pyproject ${PYPROJECT_VERSION}" >&2
+              exit 1
+            fi
+          fi
+      - name: Run README + version sanity tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install pytest
+          pytest tests/test_version_sanity.py tests/test_readme_version_sanity.py -q
+
+  lockfile-sanity:
+    name: Lockfile sanity (no editable installs, no local paths)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid editable / local-path lines in every lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          # v1.4.1 (item G): ``requirements-lock.txt`` is the canonical
+          # core lockfile + four platform lockfiles ride alongside it.
+          LOCKS=(
+            requirements-lock.txt
+            requirements-lock.core.txt
+            requirements-lock.frontier-cpu-linux.txt
+            requirements-lock.bayesian-cpu-linux.txt
+            requirements-lock.dashboard.txt
+          )
+          BAD=0
+          for f in "${LOCKS[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "FAIL: $f missing" >&2
+              BAD=1
+              continue
+            fi
+            # Strip the comment header so the documentation block does
+            # not self-trip the check (header deliberately mentions the
+            # forbidden tokens).
+            NONCOMMENT=$(grep -v '^[[:space:]]*#' "$f")
+            if echo "${NONCOMMENT}" | grep -nE '^-e ' >/dev/null; then
+              echo "FAIL: editable install line found in $f" >&2
+              echo "${NONCOMMENT}" | grep -nE '^-e ' >&2
+              BAD=1
+            fi
+            if echo "${NONCOMMENT}" | grep -niE '(^|[^[:alnum:]])(c:\\|/Users/|/home/|file://)' >/dev/null; then
+              echo "FAIL: local-path leak found in $f" >&2
+              echo "${NONCOMMENT}" | grep -niE '(^|[^[:alnum:]])(c:\\|/Users/|/home/|file://)' >&2
+              BAD=1
+            fi
+          done
+          exit "${BAD}"
+
+  lockfile-platform-sanity:
+    name: Lockfile platform sanity (v1.4.1 item G — extras lockfiles vs hash files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify each platform lockfile matches its committed hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Each lockfile ships with a sibling .hash file in
+          # ``sha256sum``-format. The CI gate verifies the lockfile bytes
+          # have not drifted from the committed hash without the
+          # operator regenerating the .hash file too.
+          declare -a LOCKS=(
+            "requirements-lock.core"
+            "requirements-lock.frontier-cpu-linux"
+            "requirements-lock.bayesian-cpu-linux"
+            "requirements-lock.dashboard"
+          )
+          BAD=0
+          for stem in "${LOCKS[@]}"; do
+            txt="${stem}.txt"
+            hash="${stem}.hash"
+            if [ ! -f "$txt" ]; then
+              echo "FAIL: $txt missing" >&2
+              BAD=1
+              continue
+            fi
+            if [ ! -f "$hash" ]; then
+              echo "FAIL: $hash missing (every lockfile must ship a sibling .hash file)" >&2
+              BAD=1
+              continue
+            fi
+            EXPECTED=$(cut -d' ' -f1 "$hash")
+            ACTUAL=$(sha256sum "$txt" | cut -d' ' -f1)
+            if [ "$EXPECTED" != "$ACTUAL" ]; then
+              echo "FAIL: $txt sha256 drifted." >&2
+              echo "  expected (committed in $hash): $EXPECTED" >&2
+              echo "  actual   (current bytes):      $ACTUAL" >&2
+              echo "Regenerate via:  pip-compile pyproject.toml --extra ${stem##*-cpu-linux}" >&2
+              echo "Then refresh the .hash file via:  sha256sum $txt > $hash" >&2
+              BAD=1
+            else
+              echo "OK: $txt sha256 matches $hash"
+            fi
+          done
+          # Sanity: requirements-lock.txt must be byte-identical to the
+          # canonical core lockfile so the legacy alias and the new
+          # canonical name agree.
+          if ! diff -q requirements-lock.txt requirements-lock.core.txt >/dev/null; then
+            echo "FAIL: requirements-lock.txt differs from requirements-lock.core.txt" >&2
+            diff requirements-lock.txt requirements-lock.core.txt | head -50 >&2
+            BAD=1
+          else
+            echo "OK: requirements-lock.txt == requirements-lock.core.txt (byte-identical)"
+          fi
+          exit "${BAD}"
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install "ruff>=0.4"
+      - name: ruff check (fail + JSON for build-status block)
+        shell: bash
+        run: |
+          mkdir -p .ci-artifacts
+          ruff check src tests --output-format=json > .ci-artifacts/ruff-results.json || RUFF_EXIT=$?
+          ruff check src tests
+          ruff format --check src tests
+      - name: Upload ruff JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-results
+          path: .ci-artifacts/ruff-results.json
+          retention-days: 14
+
+  test:
+    name: Test (Python ${{ matrix.python-version }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          pip install -e ".[dev,analytics]"
+          pip install pytest-xdist hypothesis
+      - name: Test (with junit + coverage XML)
+        shell: bash
+        run: |
+          mkdir -p .ci-artifacts
+          pytest tests/ -q -n auto --maxfail=5 --durations=10 \
+            -m "not slow" \
+            --junitxml=.ci-artifacts/test-results.xml \
+            --cov=src/market_regime_engine \
+            --cov-report=xml:.ci-artifacts/coverage.xml
+        env:
+          PYTHONHASHSEED: "0"
+      - name: Upload junit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .ci-artifacts/test-results.xml
+          retention-days: 14
+      - name: Upload coverage XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .ci-artifacts/coverage.xml
+          retention-days: 14
+
+  mypy:
+    name: Mypy (governance + structural)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Run mypy (text + JSON)
+        shell: bash
+        run: |
+          mkdir -p .ci-artifacts
+          # mypy supports --output json on >= 1.11; tolerate older builds
+          # by falling back to text capture. ``|| true`` so the type-error
+          # count itself does not fail the workflow — the artifact is the
+          # signal, not the exit code.
+          mypy src/market_regime_engine --output json \
+            > .ci-artifacts/mypy-results.json 2> .ci-artifacts/mypy-results.txt \
+            || cp .ci-artifacts/mypy-results.txt .ci-artifacts/mypy-results.json
+      - name: Upload mypy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mypy-results
+          path: |
+            .ci-artifacts/mypy-results.json
+            .ci-artifacts/mypy-results.txt
+          retention-days: 14
+
+  smoke:
+    name: Smoke (sample → audit → score → verify-run)
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[analytics]"
+      - name: End-to-end smoke
+        shell: bash
+        run: |
+          mkdir -p data
+          mre bootstrap-sample --db data/mre.db
+          mre seed-vintage-from-observations --db data/mre.db
+          mre materialize-asof-features --db data/mre.db --write-features
+          mre audit-vintage --db data/mre.db --enforce
+          mre build-features --db data/mre.db
+          mre score-regime --db data/mre.db
+          mre label-recessions --db data/mre.db
+          mre train-baseline --db data/mre.db
+          mre validate --db data/mre.db --out data/validation --min-train 60 --step 6
+          mre calibrate-probabilities --db data/mre.db --validation-dir data/validation
+          mre score-confidence --db data/mre.db --validation-dir data/validation
+          mre release-gate --db data/mre.db --validation-dir data/validation
+          mre model-run --db data/mre.db --purpose "v1.2.1 CI smoke"
+          mre verify-run --db data/mre.db
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-db
+          path: data/mre.db
+          retention-days: 7
+
+  bench:
+    name: Bench (BOCPD/WFST/PSI)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[analytics]"
+      - name: Run bench
+        shell: bash
+        run: |
+          mkdir -p .ci-artifacts
+          # mre bench is best-effort — it skips Rust kernels gracefully
+          # when the maturin build is absent, but it should always emit
+          # a CSV.
+          mre bench --out .ci-artifacts/bench.csv || echo "bench skipped: $?"
+      - name: Upload bench artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: .ci-artifacts/bench.csv
+          retention-days: 14
+          if-no-files-found: warn
+
+  golden-trace:
+    name: Golden trace regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,analytics]"
+      - run: pytest tests/test_golden_trace.py -q
+        env:
+          PYTHONHASHSEED: "0"
+
+  package-sanity:
+    name: Package sanity (wheel install round-trip + audit zip size)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build the wheel + sdist
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          ls -al dist
+      - name: Build the audit zip (v1.3 item A)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_audit_zip.py
+          ls -al dist
+      - name: Audit zip size budget assertion (≤ 5 MB)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # v1.3 (item A): the audit zip ballooned to 41 MB in v1.2.1
+          # because the smoke-run warehouse, build caches, and the
+          # unpacked .git/pack/ all leaked in. This gate keeps the
+          # archive small so it stays usable as a forensic attachment.
+          ZIP=$(ls dist/market-regime-engine-*-source.zip | head -n1)
+          BYTES=$(wc -c < "${ZIP}")
+          MB=$((BYTES / 1024 / 1024))
+          echo "Audit zip ${ZIP} = ${BYTES} bytes (${MB} MB)"
+          if [ "${BYTES}" -gt $((5 * 1024 * 1024)) ]; then
+            echo "FAIL: audit zip exceeds 5 MB budget (got ${MB} MB)" >&2
+            exit 1
+          fi
+      - name: Install the wheel into a clean venv
+        shell: bash
+        run: |
+          python -m venv .smoke-venv
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            VENV_PY=".smoke-venv/Scripts/python.exe"
+          else
+            VENV_PY=".smoke-venv/bin/python"
+          fi
+          "${VENV_PY}" -m pip install --upgrade pip
+          "${VENV_PY}" -m pip install dist/market_regime_engine-*.whl
+          "${VENV_PY}" -m pip install pytest pytest-xdist hypothesis
+      - name: Run package-metadata tests against the installed wheel
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            VENV_PY=".smoke-venv/Scripts/python.exe"
+          else
+            VENV_PY=".smoke-venv/bin/python"
+          fi
+          # Run from a directory OUTSIDE the source tree so the test
+          # exercises the installed package, not the editable source.
+          mkdir -p "${RUNNER_TEMP:-/tmp}/pkg-sanity"
+          TARGET="${RUNNER_TEMP:-/tmp}/pkg-sanity"
+          cp -R tests "${TARGET}/tests"
+          cd "${TARGET}"
+          "${VENV_PY}" -m pytest tests/test_package_metadata.py -q
+      - name: Wheel METADATA sanity (v1.4.1 item C — Version + Description first line vs README H1)
+        shell: bash
+        env:
+          MRE_WHEEL_METADATA_TEST: "1"
+        run: |
+          set -euo pipefail
+          # The wheel sanity test inspects the wheel that was built in
+          # the earlier step; it lives in ./dist relative to the repo
+          # root. It also re-reads README.md from the source tree so
+          # the test must run in the source-checkout directory.
+          python -m pip install --upgrade pip pytest build
+          pytest tests/test_wheel_metadata_sanity.py -q
+
+  sbom:
+    name: SBOM (CycloneDX, v1.3 item H)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package + cyclonedx
+        shell: bash
+        run: |
+          pip install -e .
+          pip install "cyclonedx-bom>=4.0"
+      - name: Generate SBOM (CycloneDX)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-artifacts
+          # ``cyclonedx-py environment`` uses the active Python's
+          # installed packages; pinning a single subcommand keeps the
+          # SBOM deterministic.
+          cyclonedx-py environment -o .ci-artifacts/sbom.json
+          head -n 30 .ci-artifacts/sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: .ci-artifacts/sbom.json
+          retention-days: 30
+
+  license-audit:
+    name: License audit (pip-licenses, v1.3 item H)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package + pip-licenses
+        shell: bash
+        run: |
+          pip install -e .
+          pip install "pip-licenses>=4.0"
+      - name: Run pip-licenses
+        shell: bash
+        env:
+          # Default deny list. Operators can add more licenses via the
+          # repository workflow secret with the same name.
+          LICENSE_DENY_LIST: "GPL,GPL-2.0,GPL-3.0,LGPL,LGPL-2.1,LGPL-3.0,AGPL,AGPL-3.0"
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-artifacts
+          pip-licenses --format=json > .ci-artifacts/licenses.json
+          python - <<'PY'
+          import json, os, sys
+          deny = {x.strip() for x in os.environ.get('LICENSE_DENY_LIST', '').split(',') if x.strip()}
+          data = json.load(open('.ci-artifacts/licenses.json', 'r', encoding='utf-8'))
+          violators = []
+          for pkg in data:
+              lic = (pkg.get('License') or '').strip()
+              for token in lic.replace(';', ',').split(','):
+                  if token.strip() in deny:
+                      violators.append((pkg.get('Name'), lic))
+                      break
+          if violators:
+              print('FAIL: license deny-list violations:', file=sys.stderr)
+              for name, lic in violators:
+                  print(f'  {name}: {lic}', file=sys.stderr)
+              sys.exit(1)
+          print(f'license-audit OK: scanned {len(data)} packages, no deny-list hits')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: license-audit
+          path: .ci-artifacts/licenses.json
+          retention-days: 30
+
+  bandit-scan:
+    name: Bandit static security scan (v1.3 item H)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install bandit
+        run: pip install "bandit>=1.7"
+      - name: Run bandit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-artifacts
+          # ``--severity-level high`` so the CI gate fires only on
+          # HIGH-severity findings; medium/low findings still appear in
+          # the JSON artifact for review but do not block CI.
+          bandit -r src/market_regime_engine -f json -o .ci-artifacts/bandit.json --severity-level high || RC=$?
+          # Fail the job iff there is at least one HIGH-severity finding.
+          python - <<'PY'
+          import json, sys
+          data = json.load(open('.ci-artifacts/bandit.json', 'r', encoding='utf-8'))
+          highs = [r for r in data.get('results', []) if r.get('issue_severity', '').upper() == 'HIGH']
+          if highs:
+              print(f'FAIL: {len(highs)} HIGH-severity bandit findings:', file=sys.stderr)
+              for r in highs[:10]:
+                  print(f"  {r.get('filename')}:{r.get('line_number')}: {r.get('test_id')} {r.get('issue_text')}", file=sys.stderr)
+              sys.exit(1)
+          print('bandit OK: no HIGH-severity findings')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bandit
+          path: .ci-artifacts/bandit.json
+          retention-days: 30
+
+  rust-wheels:
+    name: Rust extension wheel (${{ matrix.os }} cp${{ matrix.python-version }}, v1.3 item J)
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install maturin
+        run: pip install "maturin>=1.5"
+      - name: Build the Rust wheel (manylinux on Linux, native on Windows/macOS)
+        shell: bash
+        working-directory: rust_ext
+        run: |
+          set -euo pipefail
+          maturin build --release --out ../dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rust-wheel-${{ matrix.os }}-cp${{ matrix.python-version }}
+          path: dist/mre_rust_ext-*.whl
+          retention-days: 30
+          if-no-files-found: warn
+
+  release-artifacts:
+    name: Release artifacts (wheel + sdist + audit zip)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: [version-sanity, lockfile-sanity, lint, test, package-sanity]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --upgrade pip build
+      - run: python scripts/build_release.py --clean
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            dist/market_regime_engine-*.whl
+            dist/market-regime-engine-*.tar.gz
+            dist/market-regime-engine-*-source.zip
+          retention-days: 30
+
+  refresh-build-status:
+    name: Refresh README build-status block
+    runs-on: ubuntu-latest
+    needs: [test, lint, mypy, bench]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Pull artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: .ci-artifacts-raw
+      - name: Flatten artifacts
+        shell: bash
+        run: |
+          mkdir -p .ci-artifacts
+          # The downloads land under per-job subdirectories; pluck the
+          # canonical filenames from any of them.
+          find .ci-artifacts-raw -name 'test-results.xml' -exec cp {} .ci-artifacts/test-results.xml \; -quit || true
+          find .ci-artifacts-raw -name 'ruff-results.json' -exec cp {} .ci-artifacts/ruff-results.json \; -quit || true
+          find .ci-artifacts-raw -name 'mypy-results.json' -exec cp {} .ci-artifacts/mypy-results.json \; -quit || true
+          find .ci-artifacts-raw -name 'bench.csv' -exec cp {} .ci-artifacts/bench.csv \; -quit || true
+          ls -al .ci-artifacts || true
+      - name: Refresh README block
+        run: python scripts/refresh_build_status.py --artifacts-dir .ci-artifacts
+      - name: Commit refreshed README (if changed)
+        shell: bash
+        run: |
+          if git diff --quiet README.md; then
+            echo "No README changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "ci: refresh README build-status block from CI artifacts"
+          git push origin HEAD:main

@@ -1,0 +1,36 @@
+agency: census
+generated_at_utc: '2026-05-01T00:00:00Z'
+notes: |
+  Hand-curated v1.4 seed for Census Bureau Economic Indicators
+  (housing starts / building permits / new home sales). The standard
+  release window is the 17th business day of the following month at
+  08:30 ET (12:30 UTC).
+entries:
+  - agency: census
+    series_id: HOUST
+    observation_date: '2026-01-01'
+    release_timestamp_utc: '2026-02-19T13:30:00Z'
+    source_url: https://www.census.gov/economic-indicators/calendar.html
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-houst-2026-02
+  - agency: census
+    series_id: HOUST
+    observation_date: '2026-02-01'
+    release_timestamp_utc: '2026-03-18T12:30:00Z'
+    source_url: https://www.census.gov/economic-indicators/calendar.html
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-houst-2026-03
+  - agency: census
+    series_id: PERMIT
+    observation_date: '2026-01-01'
+    release_timestamp_utc: '2026-02-19T13:30:00Z'
+    source_url: https://www.census.gov/economic-indicators/calendar.html
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-permit-2026-02
+  - agency: census
+    series_id: PERMIT
+    observation_date: '2026-02-01'
+    release_timestamp_utc: '2026-03-18T12:30:00Z'
+    source_url: https://www.census.gov/economic-indicators/calendar.html
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-permit-2026-03

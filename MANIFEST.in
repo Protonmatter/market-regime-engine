@@ -1,0 +1,34 @@
+# Files included in the source distribution beyond the importable package.
+# The wheel ships LICENSE automatically because pyproject declares
+# license = { text = "Apache-2.0" }; we still list it here so the sdist is
+# explicit and so older sdist builders see it.
+
+include LICENSE
+include README.md
+include MANIFEST.in
+include requirements-lock.txt
+include pyproject.toml
+
+# Packaged docs and configuration.
+recursive-include config *.yaml *.yml *.json
+recursive-include docs *.md
+
+# Hand-curated scripts shipped with the source distribution (build helpers,
+# release tooling). Pytest is left out — tests do not need to ship with
+# end-user installs.
+recursive-include scripts *.py *.md
+
+# Belt-and-suspenders: any new top-level docs added later still ship.
+include CHANGELOG.md
+include NOTICE
+
+# Exclude transient artifacts that should never end up in the sdist.
+prune .venv
+prune .pytest_cache
+prune .ruff_cache
+prune .mypy_cache
+prune .hypothesis
+prune dist
+prune build
+prune data
+global-exclude *.pyc *.pyo *.pyd *.so *.db *.duckdb *.parquet

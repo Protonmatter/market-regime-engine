@@ -1,0 +1,93 @@
+agency: bls
+generated_at_utc: '2026-05-01T00:00:00Z'
+notes: |
+  Hand-curated v1.4 seed for BLS-published series referenced in
+  config/series_catalog.yaml. Release timestamps follow the BLS
+  schedule (https://www.bls.gov/schedule/news_release/) — Employment
+  Situation typically lands the first Friday of the following month at
+  08:30 ET (12:30 UTC), CPI on the second Wednesday at 08:30 ET. Run
+  ``mre refresh-release-calendars --agency bls`` to refresh from the
+  live page.
+entries:
+  # PAYEMS — Nonfarm payrolls, Employment Situation release.
+  - agency: bls
+    series_id: PAYEMS
+    observation_date: '2026-01-01'
+    release_timestamp_utc: '2026-02-06T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/empsit.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-payems-2026-02
+  - agency: bls
+    series_id: PAYEMS
+    observation_date: '2026-02-01'
+    release_timestamp_utc: '2026-03-06T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/empsit.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-payems-2026-03
+  - agency: bls
+    series_id: PAYEMS
+    observation_date: '2026-03-01'
+    release_timestamp_utc: '2026-04-03T12:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/empsit.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-payems-2026-04
+  # UNRATE — Unemployment rate (same release as PAYEMS).
+  - agency: bls
+    series_id: UNRATE
+    observation_date: '2026-01-01'
+    release_timestamp_utc: '2026-02-06T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/empsit.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-unrate-2026-02
+  - agency: bls
+    series_id: UNRATE
+    observation_date: '2026-02-01'
+    release_timestamp_utc: '2026-03-06T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/empsit.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-unrate-2026-03
+  # U6RATE — alternative measure (released with UNRATE).
+  - agency: bls
+    series_id: U6RATE
+    observation_date: '2026-01-01'
+    release_timestamp_utc: '2026-02-06T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/empsit.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-u6rate-2026-02
+  # CPIAUCSL — CPI All Urban (~14 days lag, second Wednesday rule).
+  - agency: bls
+    series_id: CPIAUCSL
+    observation_date: '2026-01-01'
+    release_timestamp_utc: '2026-02-11T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/cpi.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-cpi-2026-02
+  - agency: bls
+    series_id: CPIAUCSL
+    observation_date: '2026-02-01'
+    release_timestamp_utc: '2026-03-11T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/cpi.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-cpi-2026-03
+  - agency: bls
+    series_id: CPIAUCSL
+    observation_date: '2026-03-01'
+    release_timestamp_utc: '2026-04-15T12:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/cpi.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-cpi-2026-04
+  # CPILFESL — Core CPI (released alongside headline CPI).
+  - agency: bls
+    series_id: CPILFESL
+    observation_date: '2026-01-01'
+    release_timestamp_utc: '2026-02-11T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/cpi.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-cpilfesl-2026-02
+  - agency: bls
+    series_id: CPILFESL
+    observation_date: '2026-02-01'
+    release_timestamp_utc: '2026-03-11T13:30:00Z'
+    source_url: https://www.bls.gov/schedule/news_release/cpi.htm
+    fetched_at_utc: '2026-05-01T00:00:00Z'
+    raw_payload_hash: seed-cpilfesl-2026-03
