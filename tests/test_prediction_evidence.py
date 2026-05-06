@@ -66,7 +66,10 @@ def test_quantile_evidence_scores_interval_coverage() -> None:
             "q50": y,
         }
     )
-    metrics, checks, tails = quantile_forecast_evidence(frame, thresholds=EvidenceThresholds(min_interval_coverage=0.90))
+    metrics, checks, tails = quantile_forecast_evidence(
+        frame,
+        thresholds=EvidenceThresholds(min_interval_coverage=0.90),
+    )
     assert metrics
     assert tails
     assert all(c.passed for c in checks if c.severity == "blocker"), [c for c in checks if not c.passed]
