@@ -100,9 +100,9 @@ class SnapshotVerificationReport:
             lines.append("| Path | Check | Expected | Actual | Message |")
             lines.append("|---|---|---|---|---|")
             for issue in self.issues:
+                message = _markdown_cell(issue.message)
                 lines.append(
-                    f"| {issue.path} | {issue.check} | {issue.expected} | {issue.actual} | "
-                    f"{issue.message.replace('|', '\\|')} |"
+                    f"| {issue.path} | {issue.check} | {issue.expected} | {issue.actual} | {message} |"
                 )
         return "\n".join(lines).rstrip() + "\n"
 
@@ -138,7 +138,10 @@ def load_snapshot_manifest(path: str | Path) -> SnapshotManifest:
 
     p = Path(path)
     data = json.loads(p.read_text(encoding="utf-8"))
-    files = tuple(SnapshotFile(path=str(f["path"]), size_bytes=int(f["size_bytes"]), sha256=str(f["sha256"])) for f in data["files"])
+    files = tuple(
+        SnapshotFile(path=str(f["path"]), size_bytes=int(f["size_bytes"]), sha256=str(f["sha256"]))
+        for f in data["files"]
+    )
     return SnapshotManifest(
         schema_version=str(data["schema_version"]),
         snapshot_id=str(data["snapshot_id"]),
@@ -239,6 +242,10 @@ def _snapshot_file(root: Path, path: Path) -> SnapshotFile:
 def _manifest_hash(files: tuple[SnapshotFile, ...]) -> str:
     payload = json.dumps([asdict(f) for f in files], sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _markdown_cell(value: object) -> str:
+    return str(value).replace("|", "\\|").replace("\n", " ")
 
 
 __all__ = [
