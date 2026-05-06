@@ -173,8 +173,9 @@ def verify_snapshot_manifest(path: str | Path) -> SnapshotVerificationReport:
             )
         )
 
+    single_file_manifest = len(manifest.files) == 1 and root.name == manifest.files[0].path
     for entry in manifest.files:
-        file_path = root / entry.path
+        file_path = root if single_file_manifest else root / entry.path
         if not file_path.exists():
             issues.append(
                 SnapshotVerificationIssue(
