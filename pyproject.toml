@@ -82,7 +82,7 @@ dev = [
 ]
 
 [project.scripts]
-mre = "market_regime_engine.cli:main"
+mre = "market_regime_engine.cli_dispatch:main"
 mre-prediction-evidence = "market_regime_engine.prediction_evidence_cli:main"
 
 [tool.setuptools.packages.find]
