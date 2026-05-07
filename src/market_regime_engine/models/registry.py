@@ -6,10 +6,15 @@ from __future__ import annotations
 from typing import Any
 
 from market_regime_engine.models.base import ForecastModel
+from market_regime_engine.models.baselines import ElasticNetLogisticClassifier, RollingBaseRateClassifier
 from market_regime_engine.models.classification import (
     LogisticRegressionClassifier,
     PersistenceClassifier,
     RandomForestClassifierModel,
+)
+from market_regime_engine.models.gradient_boosting import (
+    HistGradientBoostingProbabilityModel,
+    HistGradientBoostingQuantileRegressor,
 )
 from market_regime_engine.models.regression import (
     HistoricalQuantileRegressor,
@@ -18,18 +23,29 @@ from market_regime_engine.models.regression import (
 
 _MODEL_REGISTRY: dict[str, type[ForecastModel]] = {
     "persistence": PersistenceClassifier,
+    "rolling_base_rate": RollingBaseRateClassifier,
     "logistic_regression": LogisticRegressionClassifier,
+    "elastic_net_logistic": ElasticNetLogisticClassifier,
     "random_forest": RandomForestClassifierModel,
     "historical_quantile": HistoricalQuantileRegressor,
     "random_forest_quantile": RandomForestQuantileRegressor,
+    "hist_gradient_boosting_probability": HistGradientBoostingProbabilityModel,
+    "hist_gradient_boosting_quantile": HistGradientBoostingQuantileRegressor,
 }
 
 _ALIASES: dict[str, str] = {
     "prior": "persistence",
+    "base_rate": "rolling_base_rate",
+    "rolling_prior": "rolling_base_rate",
     "lr": "logistic_regression",
+    "elastic_logistic": "elastic_net_logistic",
+    "enet_logistic": "elastic_net_logistic",
     "rf": "random_forest",
     "hist_quantile": "historical_quantile",
     "rf_quantile": "random_forest_quantile",
+    "hgb_probability": "hist_gradient_boosting_probability",
+    "hgb_classifier": "hist_gradient_boosting_probability",
+    "hgb_quantile": "hist_gradient_boosting_quantile",
 }
 
 
