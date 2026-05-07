@@ -12,6 +12,7 @@ from market_regime_engine.models.gradient_boosting import (
     HistGradientBoostingProbabilityModel,
     HistGradientBoostingQuantileRegressor,
 )
+from market_regime_engine.models.linear_quantile import LinearQuantileRegressor
 from market_regime_engine.models.registry import (
     available_models,
     get_model_class,
@@ -30,6 +31,7 @@ __all__ = [
     "HistGradientBoostingProbabilityModel",
     "HistGradientBoostingQuantileRegressor",
     "HistoricalQuantileRegressor",
+    "LinearQuantileRegressor",
     "LogisticRegressionClassifier",
     "ModelCard",
     "PersistenceClassifier",
