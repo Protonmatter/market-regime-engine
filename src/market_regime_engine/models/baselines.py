@@ -8,8 +8,17 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-from market_regime_engine.models.base import ModelCard, binary_prediction_frame, check_is_fitted
+from market_regime_engine.models.base import (
+    ModelCard,
+    binary_prediction_frame,
+    check_is_fitted,
+    numeric_feature_frame,
+)
 from market_regime_engine.models.classification import (
     LogisticRegressionClassifier,
     PersistenceClassifier,
@@ -21,10 +30,7 @@ from market_regime_engine.models.classification import (
 
 @dataclass
 class RollingBaseRateClassifier:
-    """Smoothed rolling base-rate model.
-
-    Walk-forward callers should refit at each origin for a true rolling path.
-    """
+    """Smoothed rolling base-rate model."""
 
     window: int = 60
     alpha: float = 1.0
@@ -56,7 +62,12 @@ class RollingBaseRateClassifier:
         )
 
     def get_params(self) -> dict[str, Any]:
-        return {"window": self.window, "alpha": self.alpha}
+        return {
+            "window": self.window,
+            "alpha": self.alpha,
+            "default_target": self.default_target,
+            "default_horizon": self.default_horizon,
+        }
 
     def model_card(self) -> dict[str, Any]:
         return ModelCard(
@@ -69,31 +80,79 @@ class RollingBaseRateClassifier:
 
 
 @dataclass
-class ElasticNetLogisticClassifier(LogisticRegressionClassifier):
-    """Elastic-net logistic model using scikit-learn's saga solver."""
+class ElasticNetLogisticClassifier:
+    """Elastic-net logistic probability model."""
 
+    C: float = 1.0
     l1_ratio: float = 0.5
+    max_iter: int = 1000
+    class_weight: str | dict[int, float] | None = None
+    random_state: int | None = 0
+    default_target: str = "target"
+    default_horizon: str = "1m"
     model_name: str = "elastic_net_logistic"
+    output_type: str = "binary"
 
-    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray, **kwargs: Any) -> ElasticNetLogisticClassifier:
-        super().fit(X, y, **kwargs)
-        if self.pipeline_ is not None:
-            model = self.pipeline_.named_steps["model"]
-            model.set_params(penalty="elasticnet", solver="saga", l1_ratio=self.l1_ratio)
-            model.fit(self.pipeline_.named_steps["scaler"].transform(self.pipeline_.named_steps["imputer"].transform(X.drop(columns=[c for c in ("date", "target", "horizon", "regime", "y") if c in X.columns], errors="ignore"))), _binary_target(y))
+    def fit(self, X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray, **_: Any) -> ElasticNetLogisticClassifier:
+        target = _binary_target(y)
+        features = numeric_feature_frame(X)
+        self.feature_columns_ = list(features.columns)
+        self.constant_probability_ = _smooth_rate(target, alpha=1.0)
+        self.pipeline_ = None
+        if np.unique(target).size >= 2:
+            self.pipeline_ = Pipeline(
+                steps=[
+                    ("imputer", SimpleImputer(strategy="median")),
+                    ("scaler", StandardScaler()),
+                    (
+                        "model",
+                        LogisticRegression(
+                            C=self.C,
+                            class_weight=self.class_weight,
+                            l1_ratio=self.l1_ratio,
+                            max_iter=self.max_iter,
+                            penalty="elasticnet",
+                            random_state=self.random_state,
+                            solver="saga",
+                        ),
+                    ),
+                ]
+            )
+            self.pipeline_.fit(features, target)
+        self.is_fitted_ = True
         return self
 
+    def predict(self, X: pd.DataFrame | np.ndarray, **_: Any) -> pd.DataFrame:
+        check_is_fitted(self)
+        if self.pipeline_ is None:
+            p = np.full(len(X), self.constant_probability_, dtype=float)
+        else:
+            p = self.pipeline_.predict_proba(numeric_feature_frame(X))[:, 1]
+        return binary_prediction_frame(
+            X,
+            p,
+            model_name=self.model_name,
+            default_target=self.default_target,
+            default_horizon=self.default_horizon,
+        )
+
     def get_params(self) -> dict[str, Any]:
-        params = super().get_params()
-        params["l1_ratio"] = self.l1_ratio
-        return params
+        return {
+            "C": self.C,
+            "l1_ratio": self.l1_ratio,
+            "max_iter": self.max_iter,
+            "class_weight": self.class_weight,
+            "random_state": self.random_state,
+            "default_target": self.default_target,
+            "default_horizon": self.default_horizon,
+        }
 
     def model_card(self) -> dict[str, Any]:
         return ModelCard(
             model_name=self.model_name,
             output_type=self.output_type,
             family="linear",
-            description="Elastic-net logistic probability model.",
+            description="Median-imputed standardized elastic-net logistic probability model.",
             params=self.get_params(),
             dependencies=("scikit-learn",),
         ).to_dict()
