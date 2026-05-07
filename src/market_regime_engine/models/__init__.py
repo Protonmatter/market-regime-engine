@@ -2,10 +2,15 @@
 """Forecast model zoo exports."""
 
 from market_regime_engine.models.base import ForecastModel, ModelCard
+from market_regime_engine.models.baselines import ElasticNetLogisticClassifier, RollingBaseRateClassifier
 from market_regime_engine.models.classification import (
     LogisticRegressionClassifier,
     PersistenceClassifier,
     RandomForestClassifierModel,
+)
+from market_regime_engine.models.gradient_boosting import (
+    HistGradientBoostingProbabilityModel,
+    HistGradientBoostingQuantileRegressor,
 )
 from market_regime_engine.models.registry import (
     available_models,
@@ -20,13 +25,17 @@ from market_regime_engine.models.regression import (
 )
 
 __all__ = [
+    "ElasticNetLogisticClassifier",
     "ForecastModel",
+    "HistGradientBoostingProbabilityModel",
+    "HistGradientBoostingQuantileRegressor",
     "HistoricalQuantileRegressor",
     "LogisticRegressionClassifier",
     "ModelCard",
     "PersistenceClassifier",
     "RandomForestClassifierModel",
     "RandomForestQuantileRegressor",
+    "RollingBaseRateClassifier",
     "available_models",
     "get_model_class",
     "make_model",
