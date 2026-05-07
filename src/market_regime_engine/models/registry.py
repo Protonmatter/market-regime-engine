@@ -16,6 +16,7 @@ from market_regime_engine.models.gradient_boosting import (
     HistGradientBoostingProbabilityModel,
     HistGradientBoostingQuantileRegressor,
 )
+from market_regime_engine.models.linear_quantile import LinearQuantileRegressor
 from market_regime_engine.models.regression import (
     HistoricalQuantileRegressor,
     RandomForestQuantileRegressor,
@@ -28,6 +29,7 @@ _MODEL_REGISTRY: dict[str, type[ForecastModel]] = {
     "elastic_net_logistic": ElasticNetLogisticClassifier,
     "random_forest": RandomForestClassifierModel,
     "historical_quantile": HistoricalQuantileRegressor,
+    "linear_quantile": LinearQuantileRegressor,
     "random_forest_quantile": RandomForestQuantileRegressor,
     "hist_gradient_boosting_probability": HistGradientBoostingProbabilityModel,
     "hist_gradient_boosting_quantile": HistGradientBoostingQuantileRegressor,
@@ -42,6 +44,8 @@ _ALIASES: dict[str, str] = {
     "enet_logistic": "elastic_net_logistic",
     "rf": "random_forest",
     "hist_quantile": "historical_quantile",
+    "linear_qr": "linear_quantile",
+    "quantile_regression": "linear_quantile",
     "rf_quantile": "random_forest_quantile",
     "hgb_probability": "hist_gradient_boosting_probability",
     "hgb_classifier": "hist_gradient_boosting_probability",
