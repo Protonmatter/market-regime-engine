@@ -1,8 +1,8 @@
-# Product identity: Governed Macro Regime Signal Layer
+# Product identity: Governed Macro Regime Signal Layer v1.5.0
 
 ## Narrowed identity
 
-Market Regime Engine is not a broker, backtester, execution engine, or portfolio optimizer.
+Market Regime Engine v1.5.0 is not a broker, backtester, execution engine, or portfolio optimizer.
 
 It is a **governed macro regime signal layer**:
 
