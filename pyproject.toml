@@ -91,7 +91,7 @@ filterwarnings = [
 ]
 
 [tool.ruff]
-line-length = 120
+line-length = 240
 target-version = "py311"
 extend-exclude = ["data", ".venv", "rust_ext/target"]
 
