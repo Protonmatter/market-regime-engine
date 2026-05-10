@@ -1,6 +1,16 @@
-# v1.5 governed signal layer build notes
+# v1.5.0 governed signal layer build notes
 
-This branch narrows Market Regime Engine from a broad "market prediction app" into a governed macro regime signal layer.
+This branch narrows Market Regime Engine from a broad "market prediction app" into a governed macro regime signal layer and bumps the build identity to **1.5.0**.
+
+## Version identity
+
+| File | Version |
+|---|---:|
+| `pyproject.toml` | `1.5.0` |
+| `src/market_regime_engine/__init__.py` | `__version__ = "1.5.0"` |
+| `README.md` | `Market Regime Engine v1.5.0` |
+
+Historical release docs such as `V1_4_1_FIXES.md`, `V1_4_RELEASE.md`, and earlier are intentionally left as historical records rather than rewritten into fake history. Even software deserves an honest paper trail, depressing as that is.
 
 ## Implemented changes
 
