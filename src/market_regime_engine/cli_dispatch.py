@@ -2,8 +2,9 @@
 """CLI dispatch wrapper for focused validation commands.
 
 This module intercepts point-in-time validation commands and delegates all
-existing commands to the legacy CLI. Yes, it is a tiny router. No, it should not
-become a second command framework wearing a trench coat.
+existing commands to the legacy CLI. Version flags are handled before importing
+legacy modules so packaging/version sanity checks do not trip on optional or
+transitional CLI dependencies.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from market_regime_engine import __version__
 from market_regime_engine.leakage_checks import audit_pit_paths
 from market_regime_engine.snapshot_manifest import (
     build_snapshot_manifest,
@@ -21,12 +23,16 @@ from market_regime_engine.snapshot_manifest import (
 )
 
 CUSTOM_COMMANDS = {"pit-audit", "snapshot-build", "snapshot-verify"}
+VERSION_FLAGS = {"--version", "-V"}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch new PIT commands or delegate to the existing CLI."""
 
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in VERSION_FLAGS:
+        print(__version__)
+        return 0
     if args and args[0] in CUSTOM_COMMANDS:
         return _run_custom(args)
     return _delegate_to_legacy_cli(args, argv_was_none=argv is None)
