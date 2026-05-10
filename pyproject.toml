@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "market-regime-engine"
-version = "1.4.1"
-description = "Python-first, Rust-ready macro/market regime intelligence engine"
+version = "1.6.0"
+description = "Governed macro regime signal layer with PIT lineage, production guardrails, adapter exports, tamper-evident validation packs, anti-overfit controls, and online conformal calibration"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 classifiers = [
-  "Development Status :: 5 - Production/Stable",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Financial and Insurance Industry",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: Apache Software License",
@@ -39,27 +39,18 @@ nowcast = ["statsmodels>=0.14", "scipy>=1.10"]
 frontier = ["statsmodels>=0.14", "ngboost>=0.5", "torch>=2.0"]
 explain = ["shap>=0.44"]
 observability = ["prometheus-client>=0.20", "structlog>=24.1"]
-# v1.3 supply-chain hardening: SBOM, license audit, and static
-# security scan tooling. Pinned to broad ranges so the CI matrix
-# can refresh without bumping pyproject every minor.
 security = [
   "cyclonedx-bom>=4.0",
   "pip-licenses>=4.0",
   "bandit>=1.7",
 ]
-# v1.3 shared API cache. Optional because Redis is environment-conditional;
-# the local TTL cache is the default and remains zero-dependency.
 redis = ["redis>=5.0"]
-# v1.4 (item A) Bayesian NumPyro MS-VAR. Platform-conditional like
-# ``[frontier]`` because JAX wheels split CUDA/CPU/Apple-silicon.
-# ``jax[cpu]`` is the lockable variant; CUDA / TPU stays
-# operator-installed.
 bayesian = ["numpyro>=0.13", "jax[cpu]>=0.4", "arviz>=0.17"]
-# v1.4 (item D) live release calendar fetchers. Pulled in only when
-# the operator runs ``mre refresh-release-calendars``; the engine
-# ships hand-curated YAML so the import is gated behind the optional
-# extra.
 scraping = ["beautifulsoup4>=4.12", "lxml>=5.0"]
+adapter-vectorbt = ["vectorbt>=0.26"]
+adapter-pyportfolioopt = ["PyPortfolioOpt>=1.5"]
+adapter-openbb = ["openbb>=4.0"]
+adapters = ["vectorbt>=0.26", "PyPortfolioOpt>=1.5", "openbb>=4.0"]
 dev = [
   "pytest>=8.0",
   "pytest-xdist>=3.5",
@@ -71,10 +62,6 @@ dev = [
   "build>=1.2",
   "types-requests",
   "types-PyYAML",
-  # v1.3: vcrpy records ALFRED HTTP fixtures so the PIT ingestion path
-  # can be exercised in CI without network access; fakeredis backs the
-  # /v1 API Redis cache parametrized tests; responses + requests-mock
-  # back the alert-sink HTTP transports.
   "vcrpy>=6.0",
   "fakeredis>=2.20",
   "responses>=0.25",
@@ -84,6 +71,7 @@ dev = [
 [project.scripts]
 mre = "market_regime_engine.cli_dispatch:main"
 mre-prediction-evidence = "market_regime_engine.prediction_evidence_cli:main"
+mre-validation-pack = "market_regime_engine.validation_pack_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -109,25 +97,22 @@ extend-exclude = ["data", ".venv", "rust_ext/target"]
 
 [tool.ruff.lint]
 select = [
-  "E", "F", "W",   # pycodestyle / pyflakes
-  "I",             # isort
-  "B",             # flake8-bugbear
-  "UP",            # pyupgrade
-  "SIM",           # flake8-simplify
-  "C4",            # comprehensions
-  "RET",           # return
-  "PERF",          # perflint
+  "E", "F", "W",
+  "I",
+  "B",
+  "UP",
+  "SIM",
+  "C4",
+  "RET",
+  "PERF",
   "RUF",
 ]
 ignore = [
-  "E501",          # handled by formatter
-  "B008",          # function-call-in-default-argument (used by FastAPI/dataclasses)
-  "SIM108",        # ternary-style
-  "RUF002",        # ambiguous-unicode in docstrings (we use γ, σ, etc. on purpose)
-  "PERF401",       # manual-list-comprehension — readability beats perf for our N
-  # TrainingMode inherits from (str, Enum) as a stable v1.0 public type.
-  # Switching to StrEnum is a Python 3.11+ API change that we keep
-  # explicit-deferred until the next major bump.
+  "E501",
+  "B008",
+  "SIM108",
+  "RUF002",
+  "PERF401",
   "UP042",
 ]
 
