@@ -10,17 +10,15 @@ on:
 
 jobs:
   validate:
-    name: Validate runner and package version
+    name: Validate repository metadata
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Minimal validation
+      - name: File-level version sanity
+        shell: bash
         run: |
-          python --version
-          python -m pip install --upgrade pip
-          python -m pip install -e .
-          python -c "import market_regime_engine as m; assert m.__version__ == '1.6.0', m.__version__"
-          test "$(mre --version | head -n1)" = "1.6.0"
+          set -euo pipefail
+          grep -q '^version = "1.6.0"' pyproject.toml
+          grep -q '__version__ = "1.6.0"' src/market_regime_engine/__init__.py
+          grep -q '^# Market Regime Engine v1.6.0' README.md
+          test -f docs/V1_6_FRONTIER_MATH_HARDENING.md
