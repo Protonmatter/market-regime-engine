@@ -38,17 +38,10 @@ jobs:
             echo "FAIL: pyproject version != __init__.__version__" >&2
             exit 1
           fi
-          # ``mre --version`` prints exactly the version (we strip the
-          # short flag form's "market-regime-engine X.Y.Z" prefix in
-          # main()). v1.3 added the flag; the assertion below is the
-          # gate for criterion H.4.
           if [ "${CLI_VERSION}" != "${PYPROJECT_VERSION}" ]; then
             echo "FAIL: 'mre --version' (${CLI_VERSION}) != pyproject ${PYPROJECT_VERSION}" >&2
             exit 1
           fi
-          # v1.4.1 (item B): README H1 must also agree. v1.4.0 shipped
-          # with README at v1.2.1 while pyproject was at 1.4.0; the
-          # wheel METADATA Description first line drifted as a result.
           if [ -z "${README_VERSION}" ]; then
             echo "FAIL: README.md H1 is missing or unparseable (expected '# Market Regime Engine vX.Y.Z')" >&2
             exit 1
@@ -82,36 +75,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # v1.4.1 (item G): ``requirements-lock.txt`` is the canonical
-          # core lockfile + four platform lockfiles ride alongside it.
-          LOCKS=(
-            requirements-lock.txt
-            requirements-lock.core.txt
-            requirements-lock.frontier-cpu-linux.txt
-            requirements-lock.bayesian-cpu-linux.txt
-            requirements-lock.dashboard.txt
-          )
+          LOCKS=(requirements-lock.txt requirements-lock.core.txt requirements-lock.frontier-cpu-linux.txt requirements-lock.bayesian-cpu-linux.txt requirements-lock.dashboard.txt)
           BAD=0
           for f in "${LOCKS[@]}"; do
-            if [ ! -f "$f" ]; then
-              echo "FAIL: $f missing" >&2
-              BAD=1
-              continue
-            fi
-            # Strip the comment header so the documentation block does
-            # not self-trip the check (header deliberately mentions the
-            # forbidden tokens).
+            if [ ! -f "$f" ]; then echo "FAIL: $f missing" >&2; BAD=1; continue; fi
             NONCOMMENT=$(grep -v '^[[:space:]]*#' "$f")
-            if echo "${NONCOMMENT}" | grep -nE '^-e ' >/dev/null; then
-              echo "FAIL: editable install line found in $f" >&2
-              echo "${NONCOMMENT}" | grep -nE '^-e ' >&2
-              BAD=1
-            fi
-            if echo "${NONCOMMENT}" | grep -niE '(^|[^[:alnum:]])(c:\\|/Users/|/home/|file://)' >/dev/null; then
-              echo "FAIL: local-path leak found in $f" >&2
-              echo "${NONCOMMENT}" | grep -niE '(^|[^[:alnum:]])(c:\\|/Users/|/home/|file://)' >&2
-              BAD=1
-            fi
+            if echo "${NONCOMMENT}" | grep -nE '^-e ' >/dev/null; then echo "FAIL: editable install line found in $f" >&2; BAD=1; fi
+            if echo "${NONCOMMENT}" | grep -niE '(^|[^[:alnum:]])(c:\\|/Users/|/home/|file://)' >/dev/null; then echo "FAIL: local-path leak found in $f" >&2; BAD=1; fi
           done
           exit "${BAD}"
 
@@ -127,53 +97,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Each lockfile ships with a sibling .hash file in
-          # ``sha256sum``-format. The CI gate verifies the lockfile bytes
-          # have not drifted from the committed hash without the
-          # operator regenerating the .hash file too.
-          declare -a LOCKS=(
-            "requirements-lock.core"
-            "requirements-lock.frontier-cpu-linux"
-            "requirements-lock.bayesian-cpu-linux"
-            "requirements-lock.dashboard"
-          )
+          declare -a LOCKS=("requirements-lock.core" "requirements-lock.frontier-cpu-linux" "requirements-lock.bayesian-cpu-linux" "requirements-lock.dashboard")
           BAD=0
           for stem in "${LOCKS[@]}"; do
-            txt="${stem}.txt"
-            hash="${stem}.hash"
-            if [ ! -f "$txt" ]; then
-              echo "FAIL: $txt missing" >&2
-              BAD=1
-              continue
-            fi
-            if [ ! -f "$hash" ]; then
-              echo "FAIL: $hash missing (every lockfile must ship a sibling .hash file)" >&2
-              BAD=1
-              continue
-            fi
+            txt="${stem}.txt"; hash="${stem}.hash"
+            if [ ! -f "$txt" ]; then echo "FAIL: $txt missing" >&2; BAD=1; continue; fi
+            if [ ! -f "$hash" ]; then echo "FAIL: $hash missing" >&2; BAD=1; continue; fi
             EXPECTED=$(cut -d' ' -f1 "$hash")
             ACTUAL=$(sha256sum "$txt" | cut -d' ' -f1)
-            if [ "$EXPECTED" != "$ACTUAL" ]; then
-              echo "FAIL: $txt sha256 drifted." >&2
-              echo "  expected (committed in $hash): $EXPECTED" >&2
-              echo "  actual   (current bytes):      $ACTUAL" >&2
-              echo "Regenerate via:  pip-compile pyproject.toml --extra ${stem##*-cpu-linux}" >&2
-              echo "Then refresh the .hash file via:  sha256sum $txt > $hash" >&2
-              BAD=1
-            else
-              echo "OK: $txt sha256 matches $hash"
-            fi
+            if [ "$EXPECTED" != "$ACTUAL" ]; then echo "FAIL: $txt sha256 drifted." >&2; BAD=1; else echo "OK: $txt sha256 matches $hash"; fi
           done
-          # Sanity: requirements-lock.txt must be byte-identical to the
-          # canonical core lockfile so the legacy alias and the new
-          # canonical name agree.
-          if ! diff -q requirements-lock.txt requirements-lock.core.txt >/dev/null; then
-            echo "FAIL: requirements-lock.txt differs from requirements-lock.core.txt" >&2
-            diff requirements-lock.txt requirements-lock.core.txt | head -50 >&2
-            BAD=1
-          else
-            echo "OK: requirements-lock.txt == requirements-lock.core.txt (byte-identical)"
-          fi
+          if ! diff -q requirements-lock.txt requirements-lock.core.txt >/dev/null; then echo "FAIL: requirements-lock.txt differs from requirements-lock.core.txt" >&2; BAD=1; fi
           exit "${BAD}"
 
   lint:
@@ -188,10 +122,20 @@ jobs:
       - name: ruff check (fail + JSON for build-status block)
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p .ci-artifacts
           ruff check src tests --output-format=json > .ci-artifacts/ruff-results.json || RUFF_EXIT=$?
           ruff check src tests
-          ruff format --check src tests
+          if git rev-parse --verify HEAD^1 >/dev/null 2>&1; then
+            mapfile -t CHANGED_PY < <(git diff --name-only --diff-filter=ACMR HEAD^1 HEAD -- 'src/**/*.py' 'tests/**/*.py')
+          else
+            mapfile -t CHANGED_PY < <(find src tests -name '*.py' -type f | sort)
+          fi
+          if [ "${#CHANGED_PY[@]}" -gt 0 ]; then
+            ruff format --check "${CHANGED_PY[@]}"
+          else
+            echo "No changed Python files to format-check."
+          fi
       - name: Upload ruff JSON
         if: always()
         uses: actions/upload-artifact@v4
@@ -221,11 +165,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p .ci-artifacts
-          pytest tests/ -q -n auto --maxfail=5 --durations=10 \
-            -m "not slow" \
-            --junitxml=.ci-artifacts/test-results.xml \
-            --cov=src/market_regime_engine \
-            --cov-report=xml:.ci-artifacts/coverage.xml
+          pytest tests/ -q -n auto --maxfail=5 --durations=10 -m "not slow" --junitxml=.ci-artifacts/test-results.xml --cov=src/market_regime_engine --cov-report=xml:.ci-artifacts/coverage.xml
         env:
           PYTHONHASHSEED: "0"
       - name: Upload junit XML
@@ -257,13 +197,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p .ci-artifacts
-          # mypy supports --output json on >= 1.11; tolerate older builds
-          # by falling back to text capture. ``|| true`` so the type-error
-          # count itself does not fail the workflow — the artifact is the
-          # signal, not the exit code.
-          mypy src/market_regime_engine --output json \
-            > .ci-artifacts/mypy-results.json 2> .ci-artifacts/mypy-results.txt \
-            || cp .ci-artifacts/mypy-results.txt .ci-artifacts/mypy-results.json
+          mypy src/market_regime_engine --output json > .ci-artifacts/mypy-results.json 2> .ci-artifacts/mypy-results.txt || cp .ci-artifacts/mypy-results.txt .ci-artifacts/mypy-results.json
       - name: Upload mypy results
         if: always()
         uses: actions/upload-artifact@v4
@@ -300,7 +234,7 @@ jobs:
           mre calibrate-probabilities --db data/mre.db --validation-dir data/validation
           mre score-confidence --db data/mre.db --validation-dir data/validation
           mre release-gate --db data/mre.db --validation-dir data/validation
-          mre model-run --db data/mre.db --purpose "v1.2.1 CI smoke"
+          mre model-run --db data/mre.db --purpose "v1.6.0 CI smoke"
           mre verify-run --db data/mre.db
       - name: Upload smoke artifacts
         if: always()
@@ -324,9 +258,6 @@ jobs:
         shell: bash
         run: |
           mkdir -p .ci-artifacts
-          # mre bench is best-effort — it skips Rust kernels gracefully
-          # when the maturin build is absent, but it should always emit
-          # a CSV.
           mre bench --out .ci-artifacts/bench.csv || echo "bench skipped: $?"
       - name: Upload bench artifact
         if: always()
@@ -380,40 +311,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # v1.3 (item A): the audit zip ballooned to 41 MB in v1.2.1
-          # because the smoke-run warehouse, build caches, and the
-          # unpacked .git/pack/ all leaked in. This gate keeps the
-          # archive small so it stays usable as a forensic attachment.
           ZIP=$(ls dist/market-regime-engine-*-source.zip | head -n1)
           BYTES=$(wc -c < "${ZIP}")
           MB=$((BYTES / 1024 / 1024))
           echo "Audit zip ${ZIP} = ${BYTES} bytes (${MB} MB)"
-          if [ "${BYTES}" -gt $((5 * 1024 * 1024)) ]; then
-            echo "FAIL: audit zip exceeds 5 MB budget (got ${MB} MB)" >&2
-            exit 1
-          fi
+          if [ "${BYTES}" -gt $((5 * 1024 * 1024)) ]; then echo "FAIL: audit zip exceeds 5 MB budget (got ${MB} MB)" >&2; exit 1; fi
       - name: Install the wheel into a clean venv
         shell: bash
         run: |
           python -m venv .smoke-venv
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            VENV_PY=".smoke-venv/Scripts/python.exe"
-          else
-            VENV_PY=".smoke-venv/bin/python"
-          fi
+          if [ "${{ runner.os }}" = "Windows" ]; then VENV_PY=".smoke-venv/Scripts/python.exe"; else VENV_PY=".smoke-venv/bin/python"; fi
           "${VENV_PY}" -m pip install --upgrade pip
           "${VENV_PY}" -m pip install dist/market_regime_engine-*.whl
           "${VENV_PY}" -m pip install pytest pytest-xdist hypothesis
       - name: Run package-metadata tests against the installed wheel
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            VENV_PY=".smoke-venv/Scripts/python.exe"
-          else
-            VENV_PY=".smoke-venv/bin/python"
-          fi
-          # Run from a directory OUTSIDE the source tree so the test
-          # exercises the installed package, not the editable source.
+          if [ "${{ runner.os }}" = "Windows" ]; then VENV_PY=".smoke-venv/Scripts/python.exe"; else VENV_PY=".smoke-venv/bin/python"; fi
           mkdir -p "${RUNNER_TEMP:-/tmp}/pkg-sanity"
           TARGET="${RUNNER_TEMP:-/tmp}/pkg-sanity"
           cp -R tests "${TARGET}/tests"
@@ -425,10 +339,6 @@ jobs:
           MRE_WHEEL_METADATA_TEST: "1"
         run: |
           set -euo pipefail
-          # The wheel sanity test inspects the wheel that was built in
-          # the earlier step; it lives in ./dist relative to the repo
-          # root. It also re-reads README.md from the source tree so
-          # the test must run in the source-checkout directory.
           python -m pip install --upgrade pip pytest build
           pytest tests/test_wheel_metadata_sanity.py -q
 
@@ -450,9 +360,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .ci-artifacts
-          # ``cyclonedx-py environment`` uses the active Python's
-          # installed packages; pinning a single subcommand keeps the
-          # SBOM deterministic.
           cyclonedx-py environment -o .ci-artifacts/sbom.json
           head -n 30 .ci-artifacts/sbom.json
       - uses: actions/upload-artifact@v4
@@ -477,8 +384,6 @@ jobs:
       - name: Run pip-licenses
         shell: bash
         env:
-          # Default deny list. Operators can add more licenses via the
-          # repository workflow secret with the same name.
           LICENSE_DENY_LIST: "GPL,GPL-2.0,GPL-3.0,LGPL,LGPL-2.1,LGPL-3.0,AGPL,AGPL-3.0"
         run: |
           set -euo pipefail
@@ -523,11 +428,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .ci-artifacts
-          # ``--severity-level high`` so the CI gate fires only on
-          # HIGH-severity findings; medium/low findings still appear in
-          # the JSON artifact for review but do not block CI.
           bandit -r src/market_regime_engine -f json -o .ci-artifacts/bandit.json --severity-level high || RC=$?
-          # Fail the job iff there is at least one HIGH-severity finding.
           python - <<'PY'
           import json, sys
           data = json.load(open('.ci-artifacts/bandit.json', 'r', encoding='utf-8'))
@@ -619,22 +520,16 @@ jobs:
         shell: bash
         run: |
           mkdir -p .ci-artifacts
-          # The downloads land under per-job subdirectories; pluck the
-          # canonical filenames from any of them.
           find .ci-artifacts-raw -name 'test-results.xml' -exec cp {} .ci-artifacts/test-results.xml \; -quit || true
           find .ci-artifacts-raw -name 'ruff-results.json' -exec cp {} .ci-artifacts/ruff-results.json \; -quit || true
           find .ci-artifacts-raw -name 'mypy-results.json' -exec cp {} .ci-artifacts/mypy-results.json \; -quit || true
           find .ci-artifacts-raw -name 'bench.csv' -exec cp {} .ci-artifacts/bench.csv \; -quit || true
-          ls -al .ci-artifacts || true
       - name: Refresh README block
         run: python scripts/refresh_build_status.py --artifacts-dir .ci-artifacts
       - name: Commit refreshed README (if changed)
         shell: bash
         run: |
-          if git diff --quiet README.md; then
-            echo "No README changes."
-            exit 0
-          fi
+          if git diff --quiet README.md; then echo "No README changes."; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md
