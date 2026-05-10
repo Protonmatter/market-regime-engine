@@ -2,13 +2,15 @@
 """Backward-compatible model names used by the legacy backtest CLI.
 
 The v1.6 model zoo introduced evidence-frame oriented model classes. Older
-backtest paths still expect ``ProbabilityModel.predict_proba`` and a
-``QuantileReturnModel`` that emits q05/q10/q25/q50/q75/q90/q95 columns. These
-wrappers preserve that public surface while delegating to scikit-learn models.
+backtest paths still expect ``ProbabilityModel.predict_proba``, a
+``QuantileReturnModel`` that emits q05/q10/q25/q50/q75/q90/q95 columns, and a
+``train_latest_outputs`` helper. These wrappers preserve that public surface
+while delegating to scikit-learn models.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -128,4 +130,37 @@ class QuantileReturnModel:
         return pd.DataFrame(repaired, index=index, columns=self.columns)
 
 
-__all__ = ["ProbabilityModel", "QuantileReturnModel"]
+def train_latest_outputs(X: pd.DataFrame, targets: pd.DataFrame) -> pd.DataFrame:
+    """Legacy helper used by the pre-model-zoo CLI training path."""
+
+    latest_X = X.tail(1)
+    outputs: list[dict[str, object]] = []
+    for h in (3, 6, 12):
+        prob = ProbabilityModel().fit(X, targets[f"dd10_{h}m"]).predict_proba(latest_X)[0]
+        outputs.append(
+            {
+                "model_name": "baseline_logistic",
+                "date": latest_X.index[-1],
+                "horizon": f"{h}m",
+                "target": "drawdown_gt_10pct",
+                "value": float(prob),
+                "metadata_json": json.dumps({"calibration": "not_yet_calibrated"}),
+            }
+        )
+
+        q = QuantileReturnModel().fit(X, targets[f"ret_{h}m"]).predict(latest_X).iloc[0]
+        for qname, value in q.items():
+            outputs.append(
+                {
+                    "model_name": "baseline_quantile_hgbt",
+                    "date": latest_X.index[-1],
+                    "horizon": f"{h}m",
+                    "target": f"forward_return_{qname}",
+                    "value": float(value),
+                    "metadata_json": json.dumps({"return_type": "log_return", "non_crossing": True}),
+                }
+            )
+    return pd.DataFrame(outputs)
+
+
+__all__ = ["ProbabilityModel", "QuantileReturnModel", "train_latest_outputs"]
