@@ -12,7 +12,7 @@ from market_regime_engine.models.gradient_boosting import (
     HistGradientBoostingProbabilityModel,
     HistGradientBoostingQuantileRegressor,
 )
-from market_regime_engine.models.legacy import ProbabilityModel, QuantileReturnModel
+from market_regime_engine.models.legacy import ProbabilityModel, QuantileReturnModel, train_latest_outputs
 from market_regime_engine.models.linear_quantile import LinearQuantileRegressor
 from market_regime_engine.models.registry import (
     available_models,
@@ -43,4 +43,5 @@ __all__ = [
     "make_model",
     "model_cards",
     "normalize_model_name",
+    "train_latest_outputs",
 ]
