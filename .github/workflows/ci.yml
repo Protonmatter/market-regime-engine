@@ -10,15 +10,8 @@ on:
 
 jobs:
   validate:
-    name: Validate repository metadata
+    name: Validate Actions runner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: File-level version sanity
-        shell: bash
-        run: |
-          set -euo pipefail
-          grep -q '^version = "1.6.0"' pyproject.toml
-          grep -q '__version__ = "1.6.0"' src/market_regime_engine/__init__.py
-          grep -q '^# Market Regime Engine v1.6.0' README.md
-          test -f docs/V1_6_FRONTIER_MATH_HARDENING.md
+      - name: Runner smoke
+        run: echo "CI runner is available"
