@@ -233,8 +233,9 @@ jobs:
       - name: Wheel install and metadata tests
         shell: bash
         run: |
+          ROOT="$PWD"
           python -m venv .smoke-venv
-          if [ "${{ runner.os }}" = "Windows" ]; then VENV_PY=".smoke-venv/Scripts/python.exe"; else VENV_PY=".smoke-venv/bin/python"; fi
+          if [ "${{ runner.os }}" = "Windows" ]; then VENV_PY="${ROOT}/.smoke-venv/Scripts/python.exe"; else VENV_PY="${ROOT}/.smoke-venv/bin/python"; fi
           "${VENV_PY}" -m pip install --upgrade pip
           "${VENV_PY}" -m pip install dist/market_regime_engine-*.whl
           "${VENV_PY}" -m pip install pytest
