@@ -54,6 +54,11 @@ def test_evidence_pack_requires_signature_when_requested(tmp_path) -> None:
 def test_evidence_pack_redacts_absolute_source_paths_by_default(tmp_path) -> None:
     artifact = tmp_path / "validation.json"
     artifact.write_text("{}\n", encoding="utf-8")
-    pack = build_evidence_pack(includes=[artifact], out_dir=tmp_path / "pack", hmac_key="secret")
+    pack = build_evidence_pack(
+        includes=[artifact],
+        out_dir=tmp_path / "pack",
+        hmac_key="secret",
+        command_line=["mre-validation-pack", "--include", str(artifact)],
+    )
     manifest = Path(pack.manifest_path).read_text(encoding="utf-8")
     assert str(tmp_path) not in manifest

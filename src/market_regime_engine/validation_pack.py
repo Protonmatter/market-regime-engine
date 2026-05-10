@@ -133,6 +133,24 @@ def _observed_payload_files(pack_dir: Path) -> set[str]:
     return observed
 
 
+def _redact_command_line(command_line: Sequence[str], *, absolute_source_map: bool) -> list[str]:
+    if absolute_source_map:
+        return [str(arg) for arg in command_line]
+    redacted: list[str] = []
+    for arg in command_line:
+        text = str(arg)
+        try:
+            candidate = Path(text).expanduser()
+        except Exception:
+            redacted.append(text)
+            continue
+        if candidate.is_absolute() or candidate.exists():
+            redacted.append(candidate.name or "<path>")
+        else:
+            redacted.append(text)
+    return redacted
+
+
 def build_evidence_pack(
     *,
     includes: Iterable[str | Path],
@@ -172,6 +190,7 @@ def build_evidence_pack(
             }
         )
 
+    raw_command_line = list(command_line) if command_line is not None else sys.argv
     manifest = {
         "schema": "mre.validation_evidence_pack.v2",
         "created_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -184,7 +203,8 @@ def build_evidence_pack(
             "platform": platform.platform(),
             "machine": platform.machine(),
             "processor": platform.processor(),
-            "command_line": list(command_line) if command_line is not None else sys.argv,
+            "command_line": _redact_command_line(raw_command_line, absolute_source_map=absolute_source_map),
+            "command_line_redacted": not absolute_source_map,
         },
         "lockfile_hashes": _lockfile_hashes(lockfiles),
         "file_count": len(file_entries),

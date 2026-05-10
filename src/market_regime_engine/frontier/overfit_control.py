@@ -62,33 +62,48 @@ def deflated_sharpe_ratio(
     n_trials: int = 1,
     periods_per_year: int = 252,
 ) -> DeflatedSharpeResult:
-    """Approximate Bailey-Lopez de Prado deflated Sharpe ratio."""
+    """Approximate Bailey-Lopez de Prado deflated Sharpe ratio.
+
+    ``sharpe`` and ``expected_max_sharpe`` are reported annualized for operator
+    readability. The deflated Sharpe statistic is computed on the per-period
+    Sharpe scale so units stay consistent inside the hypothesis test.
+    """
 
     arr = np.asarray(returns, dtype=float)
     arr = arr[np.isfinite(arr)]
     n = int(arr.size)
     if n < 4:
         return DeflatedSharpeResult(float("nan"), float("nan"), float("nan"), float("nan"), n, n_trials, float("nan"), float("nan"))
-    sr = _sharpe(arr, periods_per_year=periods_per_year)
+    sd = float(arr.std(ddof=1))
+    raw_sr = 0.0 if sd <= 1e-12 else float(arr.mean() / sd)
+    annualized_sr = raw_sr * math.sqrt(periods_per_year)
     demeaned = arr - arr.mean()
-    sd = arr.std(ddof=1)
-    z = demeaned / max(float(sd), 1e-12)
+    z = demeaned / max(sd, 1e-12)
     skew = float(np.mean(z**3))
     kurt = float(np.mean(z**4))
     n_trials = max(int(n_trials), 1)
     normal = NormalDist()
     if n_trials <= 1:
-        expected_max_sr = 0.0
+        expected_max_raw_sr = 0.0
     else:
         gamma = 0.5772156649015329
-        expected_max_sr = math.sqrt(1.0 / max(n - 1, 1)) * (
+        expected_max_raw_sr = math.sqrt(1.0 / max(n - 1, 1)) * (
             (1 - gamma) * normal.inv_cdf(1 - 1 / n_trials)
             + gamma * normal.inv_cdf(1 - 1 / (math.e * n_trials))
         )
-    denom = math.sqrt(max(1e-12, 1 - skew * sr + ((kurt - 1) / 4.0) * sr * sr))
-    dsr_stat = (sr - expected_max_sr) * math.sqrt(n - 1) / denom
+    denom = math.sqrt(max(1e-12, 1 - skew * raw_sr + ((kurt - 1) / 4.0) * raw_sr * raw_sr))
+    dsr_stat = (raw_sr - expected_max_raw_sr) * math.sqrt(n - 1) / denom
     pvalue = 1.0 - normal.cdf(dsr_stat)
-    return DeflatedSharpeResult(sr, float(dsr_stat), float(pvalue), float(expected_max_sr), n, n_trials, skew, kurt)
+    return DeflatedSharpeResult(
+        float(annualized_sr),
+        float(dsr_stat),
+        float(pvalue),
+        float(expected_max_raw_sr * math.sqrt(periods_per_year)),
+        n,
+        n_trials,
+        skew,
+        kurt,
+    )
 
 
 def probability_of_backtest_overfitting(
