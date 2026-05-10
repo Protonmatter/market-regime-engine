@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--metadata-json", help="Optional JSON file with run/model metadata to embed.")
     b.add_argument("--force", action="store_true", help="Replace an existing evidence-pack directory.")
     b.add_argument("--hmac-key", help="Optional HMAC key. If omitted, MRE_EVIDENCE_HMAC_KEY is used when set.")
-    b.add_argument("--require-signed", action="store_true", help="Fail if no HMAC key/signature is available.")
+    b.add_argument("--require-signed", action="store_true", default=None, help="Fail if no HMAC key/signature is available.")
     b.add_argument("--absolute-source-map", action="store_true", help="Store absolute source paths in source_map.")
     b.add_argument("--lockfile", action="append", help="Specific lockfile to hash. Repeat as needed.")
 

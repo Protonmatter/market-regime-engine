@@ -1,10 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Anti-overfit controls for model tournaments and strategy-like outputs.
-
-The goal is not to make backtests true. The goal is to quantify how likely the
-selection process is to be fooling itself, which is a noble task given humans'
-long-running conflict with p-values.
-"""
+"""Anti-overfit controls for model tournaments and strategy-like outputs."""
 
 from __future__ import annotations
 
@@ -15,7 +10,7 @@ from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
 from statistics import NormalDist
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -67,11 +62,7 @@ def deflated_sharpe_ratio(
     n_trials: int = 1,
     periods_per_year: int = 252,
 ) -> DeflatedSharpeResult:
-    """Approximate Bailey-Lopez de Prado deflated Sharpe ratio.
-
-    Returns a one-sided probability that the observed Sharpe exceeds the
-    expected maximum Sharpe after multiple testing and non-normality effects.
-    """
+    """Approximate Bailey-Lopez de Prado deflated Sharpe ratio."""
 
     arr = np.asarray(returns, dtype=float)
     arr = arr[np.isfinite(arr)]
@@ -106,16 +97,12 @@ def probability_of_backtest_overfitting(
     n_folds: int = 8,
     periods_per_year: int = 252,
 ) -> PBOResult:
-    """Estimate PBO with a CSCV-style train/test fold tournament.
-
-    The input columns are candidate models and rows are chronological returns or
-    utility scores. For each half-split of folds, select the best in-sample
-    model and rank it out-of-sample. PBO is the share of trials whose selected
-    model lands below the median OOS rank.
-    """
+    """Estimate PBO with a CSCV-style train/test fold tournament."""
 
     if returns_by_model is None or returns_by_model.empty:
         return PBOResult(float("nan"), 0, [], [])
+    if n_folds < 2 or n_folds % 2 != 0:
+        raise ValueError("n_folds must be an even integer >= 2")
     frame = returns_by_model.dropna(how="any")
     if frame.shape[0] < n_folds * 2 or frame.shape[1] < 2:
         return PBOResult(float("nan"), 0, [], [])
@@ -123,7 +110,6 @@ def probability_of_backtest_overfitting(
     k = n_folds // 2
     logits: list[float] = []
     selected_models: list[str] = []
-    names = list(frame.columns)
     for train_fold_ids in combinations(range(n_folds), k):
         train_idx = np.concatenate([folds[i] for i in train_fold_ids])
         test_idx = np.concatenate([folds[i] for i in range(n_folds) if i not in train_fold_ids])
@@ -197,6 +183,18 @@ def freeze_model_tournament(
     return TournamentManifest(str(path), digest, tuple(candidates), tuple(benchmarks), primary_metric)
 
 
+def verify_model_tournament_manifest(path: str | Path) -> dict:
+    """Verify a frozen model tournament manifest hash."""
+
+    manifest_path = Path(path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = manifest.get("manifest_hash")
+    payload = dict(manifest)
+    payload.pop("manifest_hash", None)
+    actual = hashlib.sha256(_canonical_json(payload)).hexdigest()
+    return {"approved": expected == actual, "expected": expected, "actual": actual, "path": str(manifest_path)}
+
+
 __all__ = [
     "DeflatedSharpeResult",
     "PBOResult",
@@ -205,4 +203,5 @@ __all__ = [
     "freeze_model_tournament",
     "minimum_track_record_length",
     "probability_of_backtest_overfitting",
+    "verify_model_tournament_manifest",
 ]

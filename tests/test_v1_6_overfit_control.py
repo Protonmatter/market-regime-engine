@@ -4,12 +4,14 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from market_regime_engine.frontier.overfit_control import (
     deflated_sharpe_ratio,
     freeze_model_tournament,
     minimum_track_record_length,
     probability_of_backtest_overfitting,
+    verify_model_tournament_manifest,
 )
 
 
@@ -37,12 +39,17 @@ def test_probability_of_backtest_overfitting_shape() -> None:
     assert out.selected_models
 
 
+def test_probability_of_backtest_overfitting_requires_even_folds() -> None:
+    with pytest.raises(ValueError):
+        probability_of_backtest_overfitting(pd.DataFrame({"a": range(20), "b": range(20)}), n_folds=3)
+
+
 def test_minimum_track_record_length() -> None:
     assert minimum_track_record_length(observed_sharpe=1.0, benchmark_sharpe=0.0) > 1
     assert minimum_track_record_length(observed_sharpe=0.0, benchmark_sharpe=1.0) == float("inf")
 
 
-def test_freeze_model_tournament_manifest(tmp_path) -> None:
+def test_freeze_and_verify_model_tournament_manifest(tmp_path) -> None:
     result = freeze_model_tournament(
         out_path=tmp_path / "manifest.json",
         candidates=["candidate_a"],
@@ -55,3 +62,8 @@ def test_freeze_model_tournament_manifest(tmp_path) -> None:
     payload = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert payload["manifest_hash"] == result.manifest_hash
     assert payload["primary_metric"] == "crps"
+    assert verify_model_tournament_manifest(tmp_path / "manifest.json")["approved"] is True
+
+    payload["primary_metric"] = "brier"
+    (tmp_path / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+    assert verify_model_tournament_manifest(tmp_path / "manifest.json")["approved"] is False

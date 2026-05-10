@@ -27,7 +27,7 @@ def to_vectorbt_signals(
     risk_off_regimes: tuple[str, ...] = ("contraction", "crisis", "recession", "bear", "risk_off"),
     min_confidence: float = 0.60,
     max_change_point_prob: float = 0.50,
-    entry_threshold: float = 0.65,
+    entry_threshold: float = 0.50,
     exit_threshold: float = 0.40,
     max_drawdown_prob: float = 0.60,
     require_release_gate: bool = True,

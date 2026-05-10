@@ -22,6 +22,7 @@ from market_regime_engine.production import is_production_env
 MANIFEST_NAME = "manifest.json"
 MANIFEST_HASH_NAME = "manifest.sha256"
 MANIFEST_HMAC_NAME = "manifest.hmac.sha256"
+_CONTROL_FILES = {MANIFEST_NAME, MANIFEST_HASH_NAME, MANIFEST_HMAC_NAME}
 
 
 @dataclass(frozen=True)
@@ -99,7 +100,7 @@ def _copy_inputs(includes: Iterable[str | Path], pack_dir: Path, *, absolute_sou
                 dest = artifacts_dir / f"{src.stem}.{hashlib.sha256(str(src).encode()).hexdigest()[:8]}{src.suffix}"
             shutil.copy2(src, dest)
             source = str(src) if absolute_source_map else src.name
-            copied.append({"source": source, "path": str(dest.relative_to(pack_dir))})
+            copied.append({"source": source, "path": str(dest.relative_to(pack_dir)).replace(os.sep, "/")})
         else:
             root_dest = artifacts_dir / src.name
             for file_path in _iter_files(src):
@@ -108,7 +109,7 @@ def _copy_inputs(includes: Iterable[str | Path], pack_dir: Path, *, absolute_sou
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(file_path, dest)
                 source = str(file_path) if absolute_source_map else str(Path(src.name) / rel)
-                copied.append({"source": source, "path": str(dest.relative_to(pack_dir))})
+                copied.append({"source": source, "path": str(dest.relative_to(pack_dir)).replace(os.sep, "/")})
     return copied
 
 
@@ -120,6 +121,16 @@ def _lockfile_hashes(lockfiles: Sequence[str | Path] | None = None) -> dict[str,
         if path.exists() and path.is_file():
             out[str(path.name)] = _sha256_file(path.resolve())
     return out
+
+
+def _observed_payload_files(pack_dir: Path) -> set[str]:
+    observed: set[str] = set()
+    for file_path in _iter_files(pack_dir):
+        rel = str(file_path.relative_to(pack_dir)).replace(os.sep, "/")
+        if rel in _CONTROL_FILES:
+            continue
+        observed.add(rel)
+    return observed
 
 
 def build_evidence_pack(
@@ -204,7 +215,7 @@ def build_evidence_pack(
 
 
 def verify_evidence_pack(path: str | Path, *, hmac_key: str | None = None, require_signed: bool = False) -> dict:
-    """Verify an evidence pack's manifest hash, file hashes, and optional HMAC."""
+    """Verify an evidence pack's manifest hash, file hashes, optional HMAC, and extra-file state."""
 
     pack_dir = Path(path).expanduser().resolve()
     manifest_path = pack_dir / MANIFEST_NAME
@@ -223,8 +234,9 @@ def verify_evidence_pack(path: str | Path, *, hmac_key: str | None = None, requi
         differences["manifest_hash"] = {"expected": expected_manifest_hash, "actual": actual_manifest_hash}
 
     declared_files = manifest.get("files", [])
+    declared_paths = {str(entry["path"]).replace(os.sep, "/") for entry in declared_files}
     for entry in declared_files:
-        rel = str(entry["path"])
+        rel = str(entry["path"]).replace(os.sep, "/")
         file_path = pack_dir / rel
         if not file_path.exists():
             differences[f"missing:{rel}"] = {"expected_sha256": entry.get("sha256")}
@@ -235,6 +247,10 @@ def verify_evidence_pack(path: str | Path, *, hmac_key: str | None = None, requi
         size = file_path.stat().st_size
         if size != int(entry.get("size_bytes", -1)):
             differences[f"size:{rel}"] = {"expected": entry.get("size_bytes"), "actual": size}
+
+    observed_paths = _observed_payload_files(pack_dir)
+    for rel in sorted(observed_paths - declared_paths):
+        differences[f"extra:{rel}"] = {"actual_sha256": _sha256_file(pack_dir / rel)}
 
     if int(manifest.get("file_count", -1)) != len(declared_files):
         differences["file_count"] = {"expected": manifest.get("file_count"), "actual": len(declared_files)}
