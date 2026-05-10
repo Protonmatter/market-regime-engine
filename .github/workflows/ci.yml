@@ -241,7 +241,10 @@ jobs:
           "${VENV_PY}" -m pip install pytest
           mkdir -p "${RUNNER_TEMP:-/tmp}/pkg-sanity"
           TARGET="${RUNNER_TEMP:-/tmp}/pkg-sanity"
+          rm -rf "${TARGET}/tests" "${TARGET}/dist"
           cp -R tests "${TARGET}/tests"
+          cp pyproject.toml README.md "${TARGET}/"
+          cp -R dist "${TARGET}/dist"
           cd "${TARGET}"
           "${VENV_PY}" -m pytest tests/test_package_metadata.py tests/test_wheel_metadata_sanity.py -q
 
