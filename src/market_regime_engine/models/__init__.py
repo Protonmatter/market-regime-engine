@@ -12,6 +12,7 @@ from market_regime_engine.models.gradient_boosting import (
     HistGradientBoostingProbabilityModel,
     HistGradientBoostingQuantileRegressor,
 )
+from market_regime_engine.models.legacy import ProbabilityModel, QuantileReturnModel
 from market_regime_engine.models.linear_quantile import LinearQuantileRegressor
 from market_regime_engine.models.registry import (
     available_models,
@@ -20,10 +21,7 @@ from market_regime_engine.models.registry import (
     model_cards,
     normalize_model_name,
 )
-from market_regime_engine.models.regression import (
-    HistoricalQuantileRegressor,
-    RandomForestQuantileRegressor,
-)
+from market_regime_engine.models.regression import HistoricalQuantileRegressor, RandomForestQuantileRegressor
 
 __all__ = [
     "ElasticNetLogisticClassifier",
@@ -35,6 +33,8 @@ __all__ = [
     "LogisticRegressionClassifier",
     "ModelCard",
     "PersistenceClassifier",
+    "ProbabilityModel",
+    "QuantileReturnModel",
     "RandomForestClassifierModel",
     "RandomForestQuantileRegressor",
     "RollingBaseRateClassifier",
