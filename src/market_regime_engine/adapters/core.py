@@ -25,6 +25,9 @@ GOVERNED_SIGNAL_COLUMNS: tuple[str, ...] = (
     "metadata_json",
 )
 
+_TRUE_VALUES = {"true", "1", "yes", "y", "approved", "release"}
+_FALSE_VALUES = {"false", "0", "no", "n", "", "none", "null", "nan", "hold", "blocked", "rejected"}
+
 
 @dataclass(frozen=True)
 class GovernedSignalExport:
@@ -40,7 +43,32 @@ def _first_existing(frame: pd.DataFrame, names: tuple[str, ...], default: object
     for name in names:
         if name in frame:
             return frame[name]
+    if isinstance(default, pd.Series):
+        return default.reindex(frame.index)
+    if isinstance(default, pd.Index) or (hasattr(default, "__len__") and not isinstance(default, str)):
+        try:
+            if len(default) == len(frame):  # type: ignore[arg-type]
+                return pd.Series(default, index=frame.index)
+        except TypeError:
+            pass
     return pd.Series([default] * len(frame), index=frame.index)
+
+
+def parse_bool_series(values: pd.Series, *, default: bool = False) -> pd.Series:
+    """Parse external boolean-like values without Python truthiness traps.
+
+    ``astype(bool)`` treats every non-empty string as True, so the string
+    ``"False"`` becomes ``True``. That is unacceptable for release-gate signals.
+    """
+
+    if values.empty:
+        return pd.Series([], dtype=bool, index=values.index)
+    normalized = values.fillna(str(default)).astype(str).str.strip().str.lower()
+    valid = _TRUE_VALUES | _FALSE_VALUES
+    bad = normalized[~normalized.isin(valid)]
+    if not bad.empty:
+        raise ValueError(f"invalid boolean values: {sorted(bad.unique())}")
+    return normalized.isin(_TRUE_VALUES)
 
 
 def normalize_governed_signals(
@@ -48,22 +76,15 @@ def normalize_governed_signals(
     *,
     default_release_gate_decision: str = "unknown",
 ) -> pd.DataFrame:
-    """Normalize regime/model output frames into the external signal contract.
-
-    The function is deliberately conservative: adapters should not infer a
-    trading instruction. They export the engine's governed signal surface and
-    leave strategy-specific interpretation to LEAN, vectorbt, PyPortfolioOpt,
-    OpenBB, or the consuming system.
-    """
+    """Normalize regime/model output frames into the external signal contract."""
 
     if frame is None or frame.empty:
         return pd.DataFrame(columns=GOVERNED_SIGNAL_COLUMNS)
 
     src = frame.copy()
     out = pd.DataFrame(index=src.index)
-    out["date"] = pd.to_datetime(_first_existing(src, ("date", "as_of_date", "timestamp"), src.index)).dt.strftime(
-        "%Y-%m-%d"
-    )
+    dates = _first_existing(src, ("date", "as_of_date", "timestamp"), src.index)
+    out["date"] = pd.to_datetime(dates, errors="coerce").dt.strftime("%Y-%m-%d")
     out["regime_state"] = _first_existing(
         src,
         ("regime_state", "decoded_regime", "regime", "msvar_regime", "state"),
@@ -94,8 +115,11 @@ def normalize_governed_signals(
         ("release_gate_decision", "decision"),
         default_release_gate_decision,
     ).astype(str)
-    approved = _first_existing(src, ("release_gate_approved", "approved"), False)
-    out["release_gate_approved"] = approved.astype(bool) if hasattr(approved, "astype") else bool(approved)
+    if "release_gate_approved" in src or "approved" in src:
+        approved = _first_existing(src, ("release_gate_approved", "approved"), False)
+        out["release_gate_approved"] = parse_bool_series(approved)
+    else:
+        out["release_gate_approved"] = parse_bool_series(out["release_gate_decision"])
     out["model_run_id"] = _first_existing(src, ("model_run_id", "run_id"), "").astype(str)
     out["artifact_hash"] = _first_existing(src, ("artifact_hash",), "").astype(str)
 
@@ -173,4 +197,5 @@ __all__ = [
     "assert_governed_signal_contract",
     "export_governed_signals",
     "normalize_governed_signals",
+    "parse_bool_series",
 ]

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "market-regime-engine"
-version = "1.5.0"
-description = "Governed macro regime signal layer with PIT lineage, production guardrails, adapter exports, and tamper-evident validation packs"
+version = "1.6.0"
+description = "Governed macro regime signal layer with PIT lineage, production guardrails, adapter exports, tamper-evident validation packs, anti-overfit controls, and online conformal calibration"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
@@ -47,6 +47,10 @@ security = [
 redis = ["redis>=5.0"]
 bayesian = ["numpyro>=0.13", "jax[cpu]>=0.4", "arviz>=0.17"]
 scraping = ["beautifulsoup4>=4.12", "lxml>=5.0"]
+adapter-vectorbt = ["vectorbt>=0.26"]
+adapter-pyportfolioopt = ["PyPortfolioOpt>=1.5"]
+adapter-openbb = ["openbb>=4.0"]
+adapters = ["vectorbt>=0.26", "PyPortfolioOpt>=1.5", "openbb>=4.0"]
 dev = [
   "pytest>=8.0",
   "pytest-xdist>=3.5",
