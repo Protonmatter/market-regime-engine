@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from market_regime_engine.adapters.core import GovernedSignalExport, assert_governed_signal_contract, normalize_governed_signals
+from market_regime_engine.adapters.core import (
+    GovernedSignalExport,
+    assert_governed_signal_contract,
+    normalize_governed_signals,
+)
 
 
 def to_openbb_records(frame: pd.DataFrame) -> list[dict]:
@@ -28,12 +32,7 @@ def to_openbb_obbject_like(frame: pd.DataFrame, *, provider: str = "market_regim
         "provider": provider,
         "warnings": None,
         "chart": None,
-        "extra": {
-            "metadata": {
-                "contract": "governed_macro_regime_signal_v1",
-                "rows": len(records),
-            }
-        },
+        "extra": {"metadata": {"contract": "governed_macro_regime_signal_v1", "rows": len(records)}},
     }
 
 
@@ -46,7 +45,7 @@ def export_openbb_json(frame: pd.DataFrame, out_path: str | Path) -> GovernedSig
         path=str(path),
         rows=len(obj["results"]),
         format="json",
-        columns=tuple(obj["results"][0].keys()) if obj["results"] else tuple(),
+        columns=tuple(obj["results"][0].keys()) if obj["results"] else (),
     )
 
 

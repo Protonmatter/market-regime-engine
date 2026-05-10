@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from market_regime_engine.adapters.core import GovernedSignalExport, assert_governed_signal_contract, normalize_governed_signals
+from market_regime_engine.adapters.core import (
+    GovernedSignalExport,
+    assert_governed_signal_contract,
+    normalize_governed_signals,
+)
 
 
 def to_lean_custom_data_csv(

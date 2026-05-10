@@ -3,10 +3,17 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from market_regime_engine.adapters.core import export_governed_signals, normalize_governed_signals, parse_bool_series
+from market_regime_engine.adapters.core import (
+    export_governed_signals,
+    normalize_governed_signals,
+    parse_bool_series,
+)
 from market_regime_engine.adapters.lean import lean_python_custom_data_stub, to_lean_custom_data_csv
 from market_regime_engine.adapters.openbb import to_openbb_obbject_like
-from market_regime_engine.adapters.pyportfolioopt import build_regime_conditioned_inputs, regime_condition_expected_returns
+from market_regime_engine.adapters.pyportfolioopt import (
+    build_regime_conditioned_inputs,
+    regime_condition_expected_returns,
+)
 from market_regime_engine.adapters.vectorbt import to_vectorbt_signals
 
 
@@ -55,7 +62,7 @@ def test_normalize_governed_signals_contract() -> None:
     out = normalize_governed_signals(_sample())
     assert list(out["regime_state"]) == ["expansion", "crisis"]
     assert out["release_gate_approved"].tolist() == [True, False]
-    assert set(["date", "artifact_hash", "metadata_json"]).issubset(out.columns)
+    assert {"date", "artifact_hash", "metadata_json"}.issubset(out.columns)
 
 
 def test_export_governed_signals_csv(tmp_path) -> None:
