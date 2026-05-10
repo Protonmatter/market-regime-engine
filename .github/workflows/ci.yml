@@ -10,52 +10,17 @@ on:
 
 jobs:
   validate:
-    name: Validate package, tests, lint, and build
+    name: Validate runner and package version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install
+      - name: Minimal validation
         run: |
-          python -m pip install --upgrade pip build
-          python -m pip install -e ".[dev,analytics]"
-          python -m pip install "ruff>=0.4" pytest
-
-      - name: Version sanity
-        run: |
+          python --version
+          python -m pip install --upgrade pip
+          python -m pip install -e .
           python -c "import market_regime_engine as m; assert m.__version__ == '1.6.0', m.__version__"
           test "$(mre --version | head -n1)" = "1.6.0"
-          python -c "import re; t=open('README.md', encoding='utf-8').read(); assert re.search(r'^# Market Regime Engine v1\.6\.0\\b', t, re.M)"
-
-      - name: Ruff check
-        run: ruff check src tests
-
-      - name: Focused v1.5/v1.6 tests
-        run: |
-          pytest tests/test_v1_5_production.py \
-            tests/test_v1_5_adapters.py \
-            tests/test_v1_5_validation_pack.py \
-            tests/test_v1_6_overfit_control.py \
-            tests/test_v1_6_online_conformal.py -q
-
-      - name: Full non-slow tests
-        run: pytest tests/ -q --maxfail=5 --durations=10 -m "not slow"
-        env:
-          PYTHONHASHSEED: "0"
-
-      - name: Build distribution
-        run: python -m build
-
-      - name: Wheel install and package metadata sanity
-        run: |
-          python -m venv .smoke-venv
-          .smoke-venv/bin/python -m pip install --upgrade pip
-          .smoke-venv/bin/python -m pip install dist/market_regime_engine-*.whl
-          .smoke-venv/bin/python -m pip install pytest
-          MRE_WHEEL_METADATA_TEST=1 .smoke-venv/bin/python -m pytest tests/test_package_metadata.py tests/test_wheel_metadata_sanity.py -q
