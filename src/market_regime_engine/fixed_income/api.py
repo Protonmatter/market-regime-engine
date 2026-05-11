@@ -34,11 +34,12 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -61,6 +62,11 @@ from market_regime_engine.fixed_income.schemas import (
     ExecutionConfidenceRequest,
     ExecutionConfidenceResponse,
     LiquidityStressOutput,
+    TcaRegimeSegment,
+)
+from market_regime_engine.fixed_income.tca_segmentation import (
+    DIMENSION_COLUMNS,
+    latest_tca_regime_segments,
 )
 
 log = logging.getLogger(__name__)
@@ -90,6 +96,7 @@ __all__ = [
     "credit_regime_output_to_dict",
     "execution_confidence_response_to_dict",
     "liquidity_stress_output_to_dict",
+    "tca_regime_segment_to_dict",
 ]
 
 
@@ -132,7 +139,9 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
+            raise ValueError(
+                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
+            )
         return v
 
     @field_validator("cusip")
@@ -222,6 +231,19 @@ def execution_confidence_response_to_dict(
 ) -> dict[str, Any]:
     """JSON-serialisable dict form of :class:`ExecutionConfidenceResponse`."""
     return asdict(response)
+
+
+def tca_regime_segment_to_dict(segment: TcaRegimeSegment) -> dict[str, Any]:
+    """JSON-serialisable dict form of :class:`TcaRegimeSegment`.
+
+    The dataclass already round-trips through ``asdict``; this wrapper
+    coerces the ``timestamp`` to an ISO-8601 string with the Z suffix
+    (mirrors the other FI output converters).
+    """
+    out = asdict(segment)
+    ts = segment.timestamp
+    out["timestamp"] = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+    return out
 
 
 def _resolve_rate_limit_spec() -> str:
@@ -360,9 +382,13 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+                latest = latest_liquidity_stress_score(
+                    wh, scope_type=scope_type, scope_id=scope_id
+                )
             except Exception as exc:
-                log.exception("liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc)
+                log.exception(
+                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
+                )
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
                     detail={"detail": "no_data", "release_gate": False},
@@ -430,7 +456,9 @@ def build_router(
                     },
                 ) from exc
             try:
-                write_execution_confidence_prediction(wh, response, request_id=body.request_id)
+                write_execution_confidence_prediction(
+                    wh, response, request_id=body.request_id
+                )
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",
@@ -456,8 +484,67 @@ def build_router(
         router.post("/execution_confidence", status_code=200)(_execution_confidence_handler)
 
     @router.get("/tca/regime-segments/latest")
-    async def tca_regime_segments_latest() -> JSONResponse:
-        return _stub_response("GET /v1/tca/regime-segments/latest")
+    async def tca_regime_segments_latest(
+        dimensions: str | None = None,
+        limit: int = 100,
+    ) -> JSONResponse:
+        """Return the most recent N ``tca_regime_segments`` rows.
+
+        Query params:
+
+        - ``dimensions`` — optional comma-separated list of segmentation
+          dimensions (subset of ``DIMENSION_COLUMNS``). When supplied,
+          a row qualifies only when every listed dimension column is
+          non-sentinel for that row. When omitted, all rows qualify.
+        - ``limit`` — max rows to return (default 100, clamped to
+          ``[1, 1000]``).
+
+        Returns 200 with ``{"segments": [...], "count": N}``; 503 with
+        ``{"detail": "no_data"}`` when no rows match.
+        """
+        clamped_limit = max(1, min(1000, int(limit)))
+
+        dim_list: list[str] | None = None
+        if dimensions:
+            dim_list = [d.strip() for d in dimensions.split(",") if d.strip()]
+            invalid = [d for d in dim_list if d not in DIMENSION_COLUMNS]
+            if invalid:
+                return JSONResponse(
+                    {
+                        "detail": "invalid_dimensions",
+                        "invalid_dimensions": invalid,
+                        "valid_dimensions": sorted(DIMENSION_COLUMNS),
+                    },
+                    status_code=_HTTP_BAD_REQUEST,
+                )
+
+        wh = factory()
+        try:
+            try:
+                segments = latest_tca_regime_segments(
+                    wh, dimensions=dim_list, limit=clamped_limit
+                )
+            except Exception as exc:
+                log.exception("tca/regime-segments/latest read failed: %s", exc)
+                raise HTTPException(
+                    status_code=_HTTP_SERVICE_UNAVAILABLE,
+                    detail={"detail": "no_data"},
+                ) from exc
+        finally:
+            close = getattr(wh, "close", None)
+            if callable(close):
+                close()
+        if not segments:
+            return JSONResponse(
+                {"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE
+            )
+        return JSONResponse(
+            {
+                "segments": [tca_regime_segment_to_dict(s) for s in segments],
+                "count": len(segments),
+            },
+            status_code=200,
+        )
 
     @router.get("/evidence-pack/{model_run_id}")
     async def evidence_pack_get(model_run_id: str) -> JSONResponse:
