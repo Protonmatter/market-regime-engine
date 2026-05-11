@@ -121,7 +121,9 @@ def metadata_frame(
     return out
 
 
-def observed_y(X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None = None, *, n: int | None = None) -> np.ndarray:
+def observed_y(
+    X: pd.DataFrame | np.ndarray, y: pd.Series | np.ndarray | None = None, *, n: int | None = None
+) -> np.ndarray:
     """Extract observed outcomes for evidence frames, or return NaN placeholders."""
 
     if y is not None:
@@ -182,8 +184,8 @@ def quantile_prediction_frame(
 
 
 __all__ = [
-    "ForecastModel",
     "METADATA_COLUMNS",
+    "ForecastModel",
     "ModelCard",
     "OptionalDependencyError",
     "as_frame",

@@ -13,12 +13,12 @@ from typing import Any
 import pandas as pd
 
 from market_regime_engine.data_contracts import (
-    ContractIssue,
-    ContractReport,
     FEATURE_DATETIME_COLUMNS,
     LABEL_DATETIME_COLUMNS,
     REQUIRED_FEATURE_COLUMNS,
     REQUIRED_LABEL_COLUMNS,
+    ContractIssue,
+    ContractReport,
     coerce_datetime_columns,
     null_datetime_issues,
     require_columns,
@@ -53,7 +53,9 @@ def validate_feature_schema(features: pd.DataFrame) -> tuple[pd.DataFrame, Contr
 
     frame = coerce_datetime_columns(features, FEATURE_DATETIME_COLUMNS)
     issues = list(base.issues)
-    issues.extend(null_datetime_issues(frame, ("forecast_origin", "observed_at", "available_at", "as_of"), table="features"))
+    issues.extend(
+        null_datetime_issues(frame, ("forecast_origin", "observed_at", "available_at", "as_of"), table="features")
+    )
 
     issues.extend(
         _pairwise_time_check(
@@ -105,7 +107,7 @@ def validate_feature_schema(features: pd.DataFrame) -> tuple[pd.DataFrame, Contr
 
     return frame, ContractReport(
         table="features",
-        rows=int(len(frame)),
+        rows=len(frame),
         required_columns=REQUIRED_FEATURE_COLUMNS,
         missing_columns=base.missing_columns,
         issues=tuple(issues),
@@ -162,14 +164,16 @@ def validate_label_schema(labels: pd.DataFrame) -> tuple[pd.DataFrame, ContractR
 
     return frame, ContractReport(
         table="labels",
-        rows=int(len(frame)),
+        rows=len(frame),
         required_columns=REQUIRED_LABEL_COLUMNS,
         missing_columns=base.missing_columns,
         issues=tuple(issues),
     )
 
 
-def validate_pit_schema(features: pd.DataFrame, labels: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, PITSchemaReport]:
+def validate_pit_schema(
+    features: pd.DataFrame, labels: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame, PITSchemaReport]:
     """Validate both feature and label PIT contracts."""
 
     fframe, freport = validate_feature_schema(features)

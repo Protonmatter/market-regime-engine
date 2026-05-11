@@ -131,9 +131,7 @@ class EvidenceReport:
             lines.append("|---|---:|---:|---:|---|")
             for check in self.checks:
                 icon = "PASS" if check.passed else "FAIL"
-                lines.append(
-                    f"| {check.name} | {icon} | {check.value} | {check.threshold} | {check.severity} |"
-                )
+                lines.append(f"| {check.name} | {icon} | {check.value} | {check.threshold} | {check.severity} |")
         else:
             lines.append("_No checks generated._")
         lines.extend(["", "## Binary forecast metrics", ""])
@@ -234,7 +232,7 @@ def binary_forecast_evidence(
     for keys, group in frame.dropna(subset=["y", "p"]).groupby(group_cols, observed=True):
         target, horizon, model_name = (str(x) for x in keys)
         y, p = _finite_pair(group["y"], group["p"])
-        n = int(len(y))
+        n = len(y)
         if n == 0:
             continue
         brier = brier_score(y, p)
@@ -312,7 +310,7 @@ def binary_forecast_evidence(
                         "horizon": horizon,
                         "model_name": model_name,
                         "regime": str(regime),
-                        "observations": int(len(ry)),
+                        "observations": len(ry),
                         "event_rate": _fmt_float(np.mean(ry)),
                         "ece": _fmt_float(rg_ece),
                         "brier": _fmt_float(brier_score(ry, rp)),
@@ -397,7 +395,7 @@ def quantile_forecast_evidence(
             "horizon": horizon,
             "model_name": model_name,
             "interval": f"{lo_col}/{hi_col}",
-            "observations": int(len(y)),
+            "observations": len(y),
             "coverage": _fmt_float(coverage),
             "mean_width": _fmt_float(width),
             "tail_miss_rate": _fmt_float(1.0 - coverage),
@@ -426,7 +424,7 @@ def quantile_forecast_evidence(
                 EvidenceCheck(
                     f"{target}/{horizon}/{model_name}: interval observations",
                     len(y) >= thresholds.min_observations,
-                    int(len(y)),
+                    len(y),
                     thresholds.min_observations,
                     severity="blocker",
                 ),
@@ -454,7 +452,7 @@ def quantile_forecast_evidence(
                 "horizon": horizon,
                 "model_name": model_name,
                 "slice": "interval_misses",
-                "observations": int(len(y)),
+                "observations": len(y),
                 "lower_tail_miss": _fmt_float(lower_miss),
                 "upper_tail_miss": _fmt_float(upper_miss),
             }
