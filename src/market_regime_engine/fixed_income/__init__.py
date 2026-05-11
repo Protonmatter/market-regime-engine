@@ -51,6 +51,7 @@ from market_regime_engine.fixed_income.schemas import (
     LiquidityStressOutput,
     RegimeLabel,
 )
+from market_regime_engine.fixed_income.timestamps import assert_utc, iso8601_z, to_utc
 
 # v1.5 (PR-2 task B): register the 13 FI warehouse tables with the
 # storage registry on package import. ``register_tables`` is idempotent
@@ -76,9 +77,12 @@ __all__ = [
     "TradingCalendar",
     "assert_pit_safe",
     "assert_trading_day",
+    "assert_utc",
     "canonical_sha256",
     "is_trading_day",
+    "iso8601_z",
     "next_trading_day",
     "previous_trading_day",
+    "to_utc",
     "trading_days_between",
 ]
