@@ -32,6 +32,7 @@ from market_regime_engine.fixed_income.posterior_mode import (
     PosteriorMode,
     SmoothedPosterior,
 )
+from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES, register as _register_fi_schema
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
     ExecutionConfidenceRequest,
@@ -43,7 +44,16 @@ from market_regime_engine.fixed_income.schemas import (
     RegimeLabel,
 )
 
+# v1.5 (PR-2 task B): register the 13 FI warehouse tables with the
+# storage registry on package import. ``register_tables`` is idempotent
+# on name so a re-import is a no-op; the resulting warehouse therefore
+# carries all 34 core + 13 FI tables (47 total) whenever
+# ``market_regime_engine.fixed_income`` is imported before
+# ``Warehouse(...)`` is instantiated.
+_register_fi_schema()
+
 __all__ = [
+    "FI_TABLE_NAMES",
     "CreditRegimeOutput",
     "ExecutionConfidenceRequest",
     "ExecutionConfidenceResponse",
