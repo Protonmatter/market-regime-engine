@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
+
+import pandas as pd
 
 # ---------------------------------------------------------------------------
 # Label enums
@@ -243,6 +245,93 @@ class ExecutionConfidenceResponse:
 
 
 @dataclass(frozen=True)
+class TradeRecord:
+    """A single trade record for TCA tagging (PR-6 §A.2).
+
+    The minimal payload needed to tag a trade with prevailing regime /
+    liquidity / execution-confidence context. ``timestamp`` is the
+    *decision* timestamp; ``arrival_price`` and ``execution_price`` are
+    optional so a trade can be tagged before the fill is observed
+    (the per-trade TCA metrics gracefully degrade to ``None`` for
+    fill-dependent fields). All numeric fields are ``float`` at the
+    dataclass boundary; downstream :mod:`bps_precision` helpers coerce
+    to :class:`decimal.Decimal` for the bps arithmetic.
+    """
+
+    request_id: str
+    timestamp: pd.Timestamp
+    cusip: str
+    side: Literal["buy", "sell"]
+    notional: float
+    protocol: str
+    arrival_price: float | None = None
+    execution_price: float | None = None
+    filled_quantity: float | None = None
+    time_to_fill_seconds: float | None = None
+    dealer_response_count: int | None = None
+    sector: str | None = None
+    rating: str | None = None
+    maturity_years: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TaggedTrade:
+    """A :class:`TradeRecord` with regime / liquidity / execution context.
+
+    Per PR-6 §A.2 and INSTRUCTIONS.md §6.4: every TCA segment row
+    derives from a tagged trade. ``regime_soft_weights`` maps regime
+    label → ``[0, 1]`` probability inferred from ``regime_score`` and
+    the adjacent label boundaries via triangular weighting; the dict
+    sums to 1.0. ``regime_label`` is the *hard* label after hysteresis
+    (if enabled).
+    """
+
+    trade: TradeRecord
+    regime_label: str
+    regime_score: float
+    regime_soft_weights: dict[str, float]
+    liquidity_label: str
+    liquidity_index: float
+    execution_confidence_bucket: str  # "high" / "medium" / "low" / "unavailable"
+    execution_confidence_score: float | None
+    sector_bucket: str
+    rating_bucket: str
+    maturity_bucket: str  # "0-2y" / "2-5y" / "5-10y" / "10y+"
+    notional_bucket: str  # "<1M" / "1-5M" / "5-25M" / "25M+"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TcaRegimeSegment:
+    """A single TCA aggregation row.
+
+    One row per ``(dimension-combo) × metric`` per PR-6 §A.2 and the
+    ``tca_regime_segments`` warehouse table. The 9 dimension fields
+    are nullable (``None``) when not used in the grouping; the
+    warehouse persists ``None`` as a string sentinel (``"__all__"``)
+    so the composite primary key remains stable across runs that
+    aggregate over different dimension combinations.
+    """
+
+    timestamp: pd.Timestamp
+    regime_label: str | None
+    liquidity_label: str | None
+    execution_confidence_bucket: str | None
+    protocol: str | None
+    side: str | None
+    sector: str | None
+    rating: str | None
+    maturity_bucket: str | None
+    notional_bucket: str | None
+    metric_name: str
+    metric_value: float
+    sample_count: int
+    model_run_id: str
+    metadata_json: str
+
+
+@dataclass(frozen=True)
 class FixedIncomeEvidencePack:
     """Tamper-evident reproducible record per signal.
 
@@ -280,6 +369,9 @@ __all__ = [
     "LiquidityLabel",
     "LiquidityStressOutput",
     "RegimeLabel",
+    "TaggedTrade",
+    "TcaRegimeSegment",
+    "TradeRecord",
     "liquidity_label_from_score",
     "regime_label_from_score",
 ]
