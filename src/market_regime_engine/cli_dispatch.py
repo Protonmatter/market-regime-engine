@@ -4,6 +4,14 @@
 This module intercepts point-in-time validation commands and delegates all
 existing commands to the legacy CLI. Yes, it is a tiny router. No, it should not
 become a second command framework wearing a trench coat.
+
+v1.5 (PR-1, section B.1): the fast-path command set is extended with seven
+``fi-*`` Fixed-Income commands (``fi-build-features``, ``fi-score-credit-regime``,
+``fi-score-liquidity``, ``fi-score-execution-confidence``, ``fi-tca-segment``,
+``fi-evidence-pack``, ``fi-report``). Each routes to
+:mod:`market_regime_engine.fixed_income.cli` via lazy import so the legacy
+CLI users do not pay the FI-import cost. PR-1 ships stubs that emit
+``not_yet_implemented`` JSON; PR-3..PR-7 swap in the real handlers.
 """
 
 from __future__ import annotations
@@ -20,16 +28,52 @@ from market_regime_engine.snapshot_manifest import (
     write_snapshot_manifest,
 )
 
-CUSTOM_COMMANDS = {"pit-audit", "snapshot-build", "snapshot-verify"}
+_FI_COMMANDS: frozenset[str] = frozenset(
+    {
+        "fi-build-features",
+        "fi-score-credit-regime",
+        "fi-score-liquidity",
+        "fi-score-execution-confidence",
+        "fi-tca-segment",
+        "fi-evidence-pack",
+        "fi-report",
+    }
+)
+
+CUSTOM_COMMANDS = frozenset(
+    {"pit-audit", "snapshot-build", "snapshot-verify"} | _FI_COMMANDS
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Dispatch new PIT commands or delegate to the existing CLI."""
+    """Dispatch new PIT commands or delegate to the existing CLI.
+
+    Routing priority:
+
+    1. ``fi-*`` Fixed-Income commands → :func:`_run_fi` (lazy import of
+       :mod:`market_regime_engine.fixed_income.cli`).
+    2. ``pit-audit`` / ``snapshot-*`` commands → :func:`_run_custom`.
+    3. Anything else → legacy :func:`market_regime_engine.cli.main`.
+    """
 
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] in _FI_COMMANDS:
+        return _run_fi(args)
     if args and args[0] in CUSTOM_COMMANDS:
         return _run_custom(args)
     return _delegate_to_legacy_cli(args, argv_was_none=argv is None)
+
+
+def _run_fi(args: Sequence[str]) -> int:
+    """Lazy-load the FI CLI dispatcher.
+
+    Imported inside the function so a vanilla ``mre pit-audit ...`` call
+    does not pay the cost of importing the FI package (which pulls
+    pandas, FastAPI, and the schemas module at parse-time).
+    """
+    from market_regime_engine.fixed_income.cli import run as fi_run
+
+    return int(fi_run(list(args)))
 
 
 def _run_custom(args: Sequence[str]) -> int:
