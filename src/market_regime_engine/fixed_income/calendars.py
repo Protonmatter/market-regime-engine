@@ -156,7 +156,9 @@ def _load_from_pmc(calendar: TradingCalendar) -> _CalendarSnapshot | None:
         import pandas_market_calendars as pmc
     except ImportError:
         return None
-    pmc_name = "SIFMA_US" if calendar in (TradingCalendar.SIFMA_BOND, TradingCalendar.NYSE_BOND) else "us_federal_government"
+    pmc_name = (
+        "SIFMA_US" if calendar in (TradingCalendar.SIFMA_BOND, TradingCalendar.NYSE_BOND) else "us_federal_government"
+    )
     try:
         cal = pmc.get_calendar(pmc_name)
         holidays = pd.DatetimeIndex(cal.holidays().holidays)

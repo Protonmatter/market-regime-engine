@@ -12,7 +12,12 @@ from sklearn.linear_model import QuantileRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from market_regime_engine.models.base import ModelCard, check_is_fitted, numeric_feature_frame, quantile_prediction_frame
+from market_regime_engine.models.base import (
+    ModelCard,
+    check_is_fitted,
+    numeric_feature_frame,
+    quantile_prediction_frame,
+)
 from market_regime_engine.models.regression import _regression_target, _validate_quantiles
 
 
