@@ -77,9 +77,7 @@ def test_hierarchical_liquidity_fits_on_synthetic_panel() -> None:
         rating = ratings[(i // 2) % 2]
         for _ in range(5):
             value = float(rng.normal(loc=0.5 if sector == "financials" else 0.0, scale=0.3))
-            rows.append(
-                {"cusip": cusip, "sector": sector, "rating": rating, "liquidity_value": value}
-            )
+            rows.append({"cusip": cusip, "sector": sector, "rating": rating, "liquidity_value": value})
     panel = pd.DataFrame(rows)
     model = HierarchicalLiquidityModel(
         sectors=sectors,

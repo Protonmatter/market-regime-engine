@@ -218,9 +218,7 @@ class GPBOCPD:
                     "predictive_log_likelihood",
                 ]
             )
-        frame = clean_with_policy(
-            x, default_policy=nan_policy, column_policies=column_policies
-        ).astype(float)
+        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
         arr = frame.to_numpy(float)
         # v1.4: lazily build the deep-kernel adapter when auto-training
         # is requested. We construct on first ``score`` so the fit sees
@@ -245,9 +243,7 @@ class GPBOCPD:
                 arr = np.asarray(self.deep_kernel(arr), dtype=float)
         ls = _median_heuristic_lengthscale(arr)
         d = int(arr.shape[1]) if arr.ndim > 1 else 1
-        runs: list[_GPRun] = [
-            _GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)
-        ]
+        runs: list[_GPRun] = [_GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)]
         log_joint = np.array([0.0], dtype=float)
         h = float(self.hazard)
         log_h = math.log(max(h, self.min_prob))
@@ -271,9 +267,9 @@ class GPBOCPD:
             mean_run = float(np.sum(run_lengths * probs))
             map_run = int(np.argmax(probs))
             ll = float(_logsumexp(log_joint + pred_logs))
-            new_runs = [
-                _GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)
-            ] + [r.update(xt) for r in runs[: self.max_run]]
+            new_runs = [_GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)] + [
+                r.update(xt) for r in runs[: self.max_run]
+            ]
             new_runs = new_runs[: len(probs)]
             log_joint = np.log(np.maximum(probs, self.min_prob))
             runs = new_runs

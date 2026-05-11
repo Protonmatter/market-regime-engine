@@ -47,7 +47,6 @@ import pandas as pd
 from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
 from market_regime_engine.fixed_income.pit_guard import (
-    PitViolationError,
     assert_pit_safe,
 )
 from market_regime_engine.fixed_income.schemas import (

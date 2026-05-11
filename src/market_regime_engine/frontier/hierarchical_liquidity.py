@@ -135,9 +135,7 @@ class HierarchicalLiquidityModel:
         required = {"cusip", "sector", "rating", self.value_column}
         missing = required - set(panel.columns)
         if missing:
-            raise ValueError(
-                f"HierarchicalLiquidityModel.fit panel missing columns: {sorted(missing)!r}"
-            )
+            raise ValueError(f"HierarchicalLiquidityModel.fit panel missing columns: {sorted(missing)!r}")
 
         df = panel.copy()
         df["cusip"] = df["cusip"].astype(str)
@@ -181,11 +179,7 @@ class HierarchicalLiquidityModel:
                 "cusip_effect",
                 dist.Normal(0.0, sigma_cusip).expand([n_cusips]).to_event(1),
             )
-            mu = (
-                mu_global
-                + group_effect[sector_idx, rating_idx]
-                + cusip_effect[cusip_idx]
-            )
+            mu = mu_global + group_effect[sector_idx, rating_idx] + cusip_effect[cusip_idx]
             _numpyro.sample("obs", dist.Normal(mu, sigma_obs), obs=values_obs)
 
         nuts = infer["NUTS"](model)
@@ -265,9 +259,7 @@ class HierarchicalLiquidityModel:
             r = self._rating_to_idx.get(str(rating))
             if r is not None:
                 samples = mu_global + group[:, :, r].mean(axis=1)
-                n_obs = sum(
-                    1 for (_, rat_meta) in self._cusip_metadata.values() if rat_meta == rating
-                )
+                n_obs = sum(1 for (_, rat_meta) in self._cusip_metadata.values() if rat_meta == rating)
                 return _summarise(samples, n_obs=n_obs, level="rating")
 
         # Market path: just the global mean.
