@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from market_regime_engine.leakage_checks import audit_pit_paths
 from market_regime_engine.snapshot_manifest import (
@@ -40,9 +40,7 @@ _FI_COMMANDS: frozenset[str] = frozenset(
     }
 )
 
-CUSTOM_COMMANDS = frozenset(
-    {"pit-audit", "snapshot-build", "snapshot-verify"} | _FI_COMMANDS
-)
+CUSTOM_COMMANDS = frozenset({"pit-audit", "snapshot-build", "snapshot-verify"} | _FI_COMMANDS)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

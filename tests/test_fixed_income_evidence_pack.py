@@ -68,16 +68,17 @@ def test_canonical_sha256_matches_envelope_pattern() -> None:
     # And the canonical_json bytes are a structural match to envelope_to_json
     # (envelope_to_json uses sort_keys + default=str; the only difference is
     # the separator tuple). Strip whitespace to compare structure.
-    from market_regime_engine.model_runs import build_repro_envelope
+    import json
+
     import pandas as pd
+
+    from market_regime_engine.model_runs import build_repro_envelope
 
     env = build_repro_envelope(features=pd.DataFrame(), model_outputs=pd.DataFrame())
     by_envelope = envelope_to_json(env)
     by_canonical = canonical_json({"sentinel": "round-trip-check"})
     assert "sentinel" in by_canonical
     # Sanity: envelope JSON is non-empty and parses.
-    import json
-
     json.loads(by_envelope)
 
 

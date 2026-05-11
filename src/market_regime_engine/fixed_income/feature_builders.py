@@ -100,9 +100,7 @@ def build_execution_features(
     intraday-vol / recent-volume, RFQ stats, time-of-day, and the
     historical-performance prior. PR-1 stub.
     """
-    raise NotImplementedError(
-        "build_execution_features lands in PR-5 (execution confidence model)"
-    )
+    raise NotImplementedError("build_execution_features lands in PR-5 (execution confidence model)")
 
 
 __all__ = [

@@ -128,8 +128,7 @@ def _normalise_ts_column(series: pd.Series) -> pd.Series:
     resulting series is uniformly tz-aware UTC, suitable for direct
     ``Series > Series`` comparison.
     """
-    coerced = pd.to_datetime(series, errors="coerce", utc=True)
-    return coerced
+    return pd.to_datetime(series, errors="coerce", utc=True)
 
 
 def audit_pit_dataframe(
@@ -202,8 +201,8 @@ def audit_pit_dataframe(
         "vintage_after_decision": int(vintage_after.sum()),
     }
     return PitAuditReport(
-        rows=int(len(df)),
-        violation_count=int(len(offenders)),
+        rows=len(df),
+        violation_count=len(offenders),
         violations=offenders,
         details=details,
     )

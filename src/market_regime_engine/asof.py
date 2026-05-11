@@ -66,7 +66,7 @@ class Cadence(str, Enum):
     MIN_1 = "1min"
 
     @classmethod
-    def from_pandas_freq(cls, freq: str) -> "Cadence":
+    def from_pandas_freq(cls, freq: str) -> Cadence:
         """Coerce a pandas frequency alias into a :class:`Cadence` member.
 
         Accepts the canonical aliases (``"MS"``, ``"D"``, ``"h"``,

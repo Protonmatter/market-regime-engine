@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -68,7 +67,7 @@ class SmoothedPosterior:
     mode: PosteriorMode = PosteriorMode.SMOOTHED
 
 
-PosteriorLike = Union[FilteredPosterior, SmoothedPosterior]
+PosteriorLike = FilteredPosterior | SmoothedPosterior
 
 
 def require_filtered(post: PosteriorLike) -> FilteredPosterior:
@@ -82,8 +81,7 @@ def require_filtered(post: PosteriorLike) -> FilteredPosterior:
     """
     if isinstance(post, SmoothedPosterior) or getattr(post, "mode", None) == PosteriorMode.SMOOTHED:
         raise TypeError(
-            "smoothed posteriors must not be used for real-time decisioning "
-            "per AGENT.md non-negotiable constraint 6"
+            "smoothed posteriors must not be used for real-time decisioning per AGENT.md non-negotiable constraint 6"
         )
     if not isinstance(post, FilteredPosterior):
         raise TypeError(

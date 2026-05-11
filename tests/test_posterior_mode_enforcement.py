@@ -18,9 +18,7 @@ from market_regime_engine.fixed_income.posterior_mode import (
 
 def _toy_posterior() -> tuple[np.ndarray, pd.DatetimeIndex]:
     data = np.array([[0.6, 0.4], [0.3, 0.7], [0.5, 0.5]])
-    timestamps = pd.DatetimeIndex(
-        ["2026-05-10 09:30", "2026-05-10 09:31", "2026-05-10 09:32"], tz="UTC"
-    )
+    timestamps = pd.DatetimeIndex(["2026-05-10 09:30", "2026-05-10 09:31", "2026-05-10 09:32"], tz="UTC")
     return data, timestamps
 
 
