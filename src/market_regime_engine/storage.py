@@ -1928,6 +1928,332 @@ class Warehouse:
     def read_release_calendar_refreshes(self) -> pd.DataFrame:
         return self._backend.read_sql("SELECT * FROM release_calendar_refreshes ORDER BY fetched_at_utc DESC, agency")
 
+    # ----- v1.5 PR-2: Fixed-Income write helpers -----
+    #
+    # These thin shims accept a DataFrame, fill in any missing optional
+    # columns with safe defaults, and route through the standard
+    # ``_backend.upsert_frame`` path so the v1.4 DuckDB bulk-load fast
+    # path is preserved. Per the AGENT.md non-negotiable constraint 7,
+    # the governance writers (credit_regime_scores,
+    # liquidity_stress_scores, execution_confidence_predictions,
+    # fixed_income_evidence_packs) all require model_run_id / release_gate
+    # / artifact_hash on the input frame.
+
+    def _write_fi(
+        self,
+        table: str,
+        df: pd.DataFrame,
+        cols: list[str],
+        mode: str = "REPLACE",
+    ) -> int:
+        """Shared FI write path: defensive copy + bulk insert.
+
+        Distinct from the macro-side ``_write`` because the FI tables
+        do not need the ``YYYY-MM-DD`` ISO date coercion the v1.0 macro
+        path performs on ``date`` / ``vintage_date`` / ``as_of_date``:
+        FI timestamps are full ISO-8601 and survive on both backends
+        without normalisation.
+        """
+
+        if df is None or df.empty:
+            return 0
+        frame = df.copy()
+        if "metadata_json" in cols and "metadata_json" not in frame:
+            frame["metadata_json"] = "{}"
+        self._backend.upsert_frame(table, frame, cols, mode=mode)
+        self._backend.commit()
+        return len(frame)
+
+    def write_trace_trades(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "trace_trades",
+            df,
+            [
+                "trade_id",
+                "timestamp",
+                "cusip",
+                "price",
+                "yield_pct",
+                "size",
+                "side",
+                "protocol",
+                "venue",
+                "source",
+                "reported_at",
+                "metadata_json",
+            ],
+        )
+
+    def read_trace_trades(self) -> pd.DataFrame:
+        return self._backend.read_sql("SELECT * FROM trace_trades ORDER BY timestamp, trade_id")
+
+    def write_rfq_events(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "rfq_events",
+            df,
+            [
+                "rfq_id",
+                "timestamp",
+                "cusip",
+                "side",
+                "notional",
+                "protocol",
+                "status",
+                "dealers_requested",
+                "dealers_responded",
+                "time_to_first_response_ms",
+                "client_id",
+                "metadata_json",
+            ],
+        )
+
+    def read_rfq_events(self) -> pd.DataFrame:
+        return self._backend.read_sql("SELECT * FROM rfq_events ORDER BY timestamp, rfq_id")
+
+    def write_dealer_quotes(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "dealer_quotes",
+            df,
+            ["timestamp", "cusip", "dealer_id", "side", "price", "size", "expires_at", "metadata_json"],
+        )
+
+    def read_dealer_quotes(self) -> pd.DataFrame:
+        return self._backend.read_sql("SELECT * FROM dealer_quotes ORDER BY timestamp, cusip, dealer_id")
+
+    def write_dealer_response_stats(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "dealer_response_stats",
+            df,
+            ["dealer_id", "window_start", "window_end", "requests", "responses", "avg_response_ms", "metadata_json"],
+        )
+
+    def read_dealer_response_stats(self) -> pd.DataFrame:
+        return self._backend.read_sql(
+            "SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start"
+        )
+
+    def write_curve_snapshots(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "curve_snapshots",
+            df,
+            ["timestamp", "curve_type", "tenor", "rate", "source", "metadata_json"],
+        )
+
+    def read_curve_snapshots(self) -> pd.DataFrame:
+        return self._backend.read_sql("SELECT * FROM curve_snapshots ORDER BY timestamp, curve_type, tenor")
+
+    def write_cds_curve_snapshots(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "cds_curve_snapshots",
+            df,
+            ["timestamp", "reference_entity", "tenor", "spread_bps", "source", "metadata_json"],
+        )
+
+    def read_cds_curve_snapshots(self) -> pd.DataFrame:
+        return self._backend.read_sql(
+            "SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor"
+        )
+
+    def write_credit_regime_score(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "credit_regime_scores",
+            df,
+            [
+                "model_run_id",
+                "timestamp",
+                "regime_score",
+                "regime_label",
+                "confidence",
+                "drivers_json",
+                "component_scores_json",
+                "release_gate",
+                "artifact_hash",
+                "metadata_json",
+            ],
+        )
+
+    def read_credit_regime_scores(self) -> pd.DataFrame:
+        return self._backend.read_sql("SELECT * FROM credit_regime_scores ORDER BY timestamp, model_run_id")
+
+    def write_liquidity_stress_score(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "liquidity_stress_scores",
+            df,
+            [
+                "model_run_id",
+                "scope_type",
+                "scope_id",
+                "timestamp",
+                "liquidity_score",
+                "liquidity_label",
+                "confidence",
+                "drivers_json",
+                "release_gate",
+                "artifact_hash",
+                "metadata_json",
+            ],
+        )
+
+    def read_liquidity_stress_scores(self) -> pd.DataFrame:
+        return self._backend.read_sql(
+            "SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id"
+        )
+
+    def write_execution_confidence_prediction(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "execution_confidence_predictions",
+            df,
+            [
+                "request_id",
+                "timestamp",
+                "model_run_id",
+                "cusip",
+                "side",
+                "notional",
+                "protocol",
+                "confidence_score",
+                "expected_slippage_bps",
+                "confidence_interval_low",
+                "confidence_interval_high",
+                "recommended_action",
+                "human_review_required",
+                "release_gate",
+                "artifact_hash",
+                "metadata_json",
+            ],
+        )
+
+    def read_execution_confidence_predictions(self) -> pd.DataFrame:
+        return self._backend.read_sql(
+            "SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id"
+        )
+
+    def write_execution_outcome(self, df: pd.DataFrame) -> int:
+        """Persist execution outcomes; enforces ``observed_at > decision_timestamp``.
+
+        Q-2 (REVIEW.md §3.4): the inequality is enforced here in the
+        writer rather than as a DB CHECK constraint because DuckDB +
+        SQLite differ on CHECK semantics. Any row that violates the
+        constraint raises ``ValueError`` before the bulk insert runs.
+        """
+
+        if df is None or df.empty:
+            return 0
+        observed_at = pd.to_datetime(df["observed_at"], utc=True, errors="coerce")
+        decision_ts = pd.to_datetime(df["decision_timestamp"], utc=True, errors="coerce")
+        bad = (observed_at.isna() | decision_ts.isna()) | (observed_at <= decision_ts)
+        if bad.any():
+            offenders = df.loc[bad, "request_id"].tolist()
+            raise ValueError(
+                "execution_outcomes requires observed_at > decision_timestamp; "
+                f"offending request_ids: {offenders!r}"
+            )
+        return self._write_fi(
+            "execution_outcomes",
+            df,
+            [
+                "request_id",
+                "cusip",
+                "side",
+                "notional",
+                "filled_quantity",
+                "execution_price",
+                "observed_at",
+                "outcome_observation_lag",
+                "decision_timestamp",
+                "metadata_json",
+            ],
+        )
+
+    def read_execution_outcomes(self) -> pd.DataFrame:
+        return self._backend.read_sql("SELECT * FROM execution_outcomes ORDER BY request_id")
+
+    def write_tca_regime_segment(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "tca_regime_segments",
+            df,
+            [
+                "model_run_id",
+                "timestamp",
+                "regime_label",
+                "liquidity_label",
+                "execution_confidence_bucket",
+                "protocol",
+                "side",
+                "sector",
+                "rating",
+                "maturity_bucket",
+                "notional_bucket",
+                "metric_name",
+                "metric_value",
+                "sample_count",
+                "metadata_json",
+            ],
+        )
+
+    def read_tca_regime_segments(self) -> pd.DataFrame:
+        return self._backend.read_sql(
+            "SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name"
+        )
+
+    def write_evidence_pack(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "fixed_income_evidence_packs",
+            df,
+            [
+                "model_run_id",
+                "request_id",
+                "component_name",
+                "model_version",
+                "timestamp",
+                "code_sha",
+                "model_hash",
+                "input_features_hash",
+                "output_hash",
+                "data_vintages_json",
+                "validation_results_json",
+                "release_gate",
+                "random_seeds_json",
+                "python_version",
+                "lockfile_hash",
+                "hmac_signature",
+                "metadata_json",
+            ],
+        )
+
+    def read_evidence_packs(self) -> pd.DataFrame:
+        return self._backend.read_sql(
+            "SELECT * FROM fixed_income_evidence_packs ORDER BY timestamp, model_run_id, request_id"
+        )
+
+    def write_bond_reference(self, df: pd.DataFrame) -> int:
+        return self._write_fi(
+            "bond_reference",
+            df,
+            [
+                "cusip",
+                "valid_from",
+                "valid_to",
+                "ticker",
+                "issuer",
+                "sector",
+                "rating",
+                "issue_date",
+                "maturity",
+                "coupon",
+                "currency",
+                "country",
+                "duration",
+                "convexity",
+                "amount_outstanding",
+                "is_callable",
+                "call_schedule_json",
+                "default_date",
+                "delisted_date",
+                "metadata_json",
+            ],
+        )
+
 
 # ---------------------------------------------------------------------------
 # bond_reference temporal versioning helpers (PR-2 task C / Q-4)
