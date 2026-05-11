@@ -235,9 +235,19 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         high_invalidation_triggers INTEGER,
         active_trigger_names TEXT,
         reasons TEXT,
-        metadata_json TEXT DEFAULT '{}'
+        metadata_json TEXT DEFAULT '{}',
+        resolved_profile TEXT
     )
     """,
+    # v1.5 PR-1 ASK-7 / P2: nullable resolved_profile column added above so
+    # existing v1.4 rows round-trip without migration. The column carries
+    # whichever profile (production / default) drove the threshold
+    # selection per release_gates._resolve_profile. Note: the SQL comment
+    # is placed *outside* the CREATE TABLE statement because
+    # storage._extract_pk uses a naive parse that would mis-detect a
+    # parenthesised comment as the PRIMARY KEY column list
+    # (FLAG F-4 in REVIEW.md; the planned PR-2 register_tables refactor
+    # replaces the regex parse with an explicit pk_map).
     """
     CREATE TABLE IF NOT EXISTS alfred_ingestion_manifest (
         series_id TEXT NOT NULL,
@@ -578,9 +588,15 @@ class _SqliteBackend:
         self.conn.commit()
         # Idempotent backfill for the v1.1 release_gates.severe_drift column.
         cols = pd.read_sql_query("PRAGMA table_info(release_gates)", self.conn)
-        if "severe_drift" not in set(cols.get("name", [])):
+        col_names = set(cols.get("name", []))
+        if "severe_drift" not in col_names:
             with contextlib.suppress(Exception):
                 self.conn.execute("ALTER TABLE release_gates ADD COLUMN severe_drift INTEGER")
+                self.conn.commit()
+        # v1.5 (PR-1 ASK-7) idempotent backfill for resolved_profile.
+        if "resolved_profile" not in col_names:
+            with contextlib.suppress(Exception):
+                self.conn.execute("ALTER TABLE release_gates ADD COLUMN resolved_profile TEXT")
                 self.conn.commit()
 
     def upsert(
@@ -669,9 +685,14 @@ class _DuckDBBackend:
         cols = self.conn.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_name = 'release_gates'"
         ).fetchall()
-        if "severe_drift" not in {c[0] for c in cols}:
+        col_names = {c[0] for c in cols}
+        if "severe_drift" not in col_names:
             with contextlib.suppress(Exception):
                 self.conn.execute("ALTER TABLE release_gates ADD COLUMN severe_drift INTEGER")
+        # v1.5 (PR-1 ASK-7) idempotent backfill for resolved_profile.
+        if "resolved_profile" not in col_names:
+            with contextlib.suppress(Exception):
+                self.conn.execute("ALTER TABLE release_gates ADD COLUMN resolved_profile TEXT")
 
     @staticmethod
     def _build_upsert_sql(
@@ -1087,6 +1108,11 @@ class Warehouse:
             frame["approved"] = frame["approved"].astype(int)
             if "severe_drift" not in frame.columns:
                 frame["severe_drift"] = 0
+            # v1.5 (PR-1 ASK-7): resolved_profile is optional on the
+            # write path so v1.4 callers that have not been refreshed
+            # to emit the column continue to work.
+            if "resolved_profile" not in frame.columns:
+                frame["resolved_profile"] = None
         return self._write(
             "release_gates",
             frame,
@@ -1103,6 +1129,7 @@ class Warehouse:
                 "active_trigger_names",
                 "reasons",
                 "metadata_json",
+                "resolved_profile",
             ],
         )
 

@@ -238,9 +238,18 @@ def evaluate_release_gate(
     promoted = True
     mcs_evidence = "absent"
     if promotion is not None and not promotion.empty and "promoted" in promotion.columns:
-        promoted = bool(promotion["promoted"].astype(bool).any())
-        if "mcs_evidence" in promotion.columns:
-            evidence_values = promotion["mcs_evidence"].astype(str).tolist()
+        # v1.5 (PR-1 AF-7 / P2): filter to the latest date before
+        # checking ``.any()`` so a stale promoted=True row does not
+        # keep satisfying the gate forever. When a ``date`` column is
+        # absent we fall back to the legacy ``.any()`` behaviour so
+        # tests with no date column stay green.
+        promotion_latest = promotion
+        if "date" in promotion.columns and not promotion["date"].isna().all():
+            latest_date = promotion["date"].max()
+            promotion_latest = promotion.loc[promotion["date"] == latest_date]
+        promoted = bool(promotion_latest["promoted"].astype(bool).any())
+        if "mcs_evidence" in promotion_latest.columns:
+            evidence_values = promotion_latest["mcs_evidence"].astype(str).tolist()
             if "in_set" in evidence_values:
                 mcs_evidence = "in_set"
             elif "out_of_set" in evidence_values:
@@ -248,11 +257,25 @@ def evaluate_release_gate(
             else:
                 mcs_evidence = "absent"
 
+    # v1.5 (PR-1 AF-6 / P0): empty / all-NaN coverage_report no longer
+    # silently passes the gate. The pre-v1.5 code only set
+    # ``worst_coverage`` when the dropna() series was non-empty,
+    # which meant the gate skipped the coverage rail entirely. Now
+    # we append ``coverage_data_missing`` to reasons and emit
+    # worst_coverage=NaN so the operator can see the missing rail.
     worst_coverage: float | None = None
+    coverage_missing = False
     if coverage_report is not None and not coverage_report.empty and "coverage" in coverage_report.columns:
         cov_series = coverage_report["coverage"].astype(float).dropna()
-        if not cov_series.empty:
+        if cov_series.empty:
+            coverage_missing = True
+        else:
             worst_coverage = float(cov_series.min())
+    elif min_coverage is not None:
+        # An explicit ``min_coverage`` (or the production default) was
+        # requested but the caller supplied no coverage frame at all
+        # — treat as missing data so the rail fires.
+        coverage_missing = True
 
     reasons = []
     if conf_val < min_confidence:
@@ -277,10 +300,19 @@ def evaluate_release_gate(
         if e_value_log is not None and not e_value_log.empty and "e_value" in e_value_log.columns:
             evs = e_value_log.copy()
             evs["e_value"] = evs["e_value"].astype(float)
-            decisions = evs.get("decision", pd.Series(["promote"] * len(evs)))
+            # v1.5 (PR-1 AF-14 / P0): when promotion_method=="e_values"
+            # the ``decision`` column is mandatory. Pre-v1.5 silently
+            # defaulted to all "promote", which was permissive in a
+            # way that operators could not detect. Raise so the
+            # missing column surfaces immediately.
+            if "decision" not in evs.columns:
+                raise ValueError("e_value_log missing 'decision' column")
+            decisions = evs["decision"]
             passed = bool(((evs["e_value"] >= e_threshold) & (decisions.astype(str).str.lower() == "promote")).any())
         if not passed:
             reasons.append("e_value_gate_not_fired")
+    if coverage_missing:
+        reasons.append("coverage_data_missing")
     if min_coverage is not None and worst_coverage is not None:
         coverage_floor = (1.0 - coverage_alpha) - coverage_drop_pp
         if worst_coverage < min(min_coverage, coverage_floor):
@@ -303,6 +335,10 @@ def evaluate_release_gate(
                 "metadata_json": "{}",
                 "mcs_evidence": mcs_evidence,
                 "worst_coverage": worst_coverage if worst_coverage is not None else float("nan"),
+                # v1.5 (PR-1 ASK-7 / P2): surface which profile drove
+                # the threshold selection. Persisted into the
+                # release_gates warehouse table by storage.write_release_gates.
+                "resolved_profile": resolved_profile,
             }
         ]
     )
