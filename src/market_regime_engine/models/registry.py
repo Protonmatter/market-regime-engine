@@ -12,6 +12,11 @@ from market_regime_engine.models.classification import (
     PersistenceClassifier,
     RandomForestClassifierModel,
 )
+from market_regime_engine.models.fi_baselines import (
+    FiCreditRegimeBaseline,
+    FiExecutionConfidenceBaseline,
+    FiLiquidityStressBaseline,
+)
 from market_regime_engine.models.gradient_boosting import (
     HistGradientBoostingProbabilityModel,
     HistGradientBoostingQuantileRegressor,
@@ -33,6 +38,14 @@ _MODEL_REGISTRY: dict[str, type[ForecastModel]] = {
     "random_forest_quantile": RandomForestQuantileRegressor,
     "hist_gradient_boosting_probability": HistGradientBoostingProbabilityModel,
     "hist_gradient_boosting_quantile": HistGradientBoostingQuantileRegressor,
+    # v1.5 PR-7 §J / FLAG F-20: FI baselines registered as metadata-only
+    # entries so the existing promotion / release-gate machinery can
+    # discover them by canonical name. Live scoring goes through
+    # market_regime_engine.fixed_income; the registry shim raises if
+    # someone tries to fit/predict here.
+    "fi_credit_regime_baseline": FiCreditRegimeBaseline,  # type: ignore[dict-item]
+    "fi_liquidity_stress_baseline": FiLiquidityStressBaseline,  # type: ignore[dict-item]
+    "fi_execution_confidence_baseline": FiExecutionConfidenceBaseline,  # type: ignore[dict-item]
 }
 
 _ALIASES: dict[str, str] = {

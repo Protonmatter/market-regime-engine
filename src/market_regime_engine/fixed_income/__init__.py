@@ -120,6 +120,12 @@ from market_regime_engine.fixed_income.tca_segmentation import (
 # ``Warehouse(...)`` is instantiated.
 _register_fi_schema()
 
+# v1.5 PR-7 §E.3: pre-register the FI counters / histograms (legacy +
+# OTel-on-when-configured) at module load. The plan §7 §4.1 dashboard
+# contract requires ``fi_credit_regime_score_total`` and friends to
+# show up at a 0 baseline before any signal has been computed.
+import market_regime_engine.fixed_income.observability_ext  # noqa: F401, E402
+
 __all__ = [
     "CREDIT_REGIME_DEFAULT_WEIGHTS",
     "DIMENSION_COLUMNS",
