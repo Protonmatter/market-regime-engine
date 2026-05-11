@@ -45,11 +45,14 @@ from typing import Any
 import pandas as pd
 
 from market_regime_engine.fixed_income.hashing import canonical_sha256
+from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
 from market_regime_engine.fixed_income.pit_guard import (
+    PitViolationError,
     assert_pit_safe,
 )
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
+    RegimeLabel,
     regime_label_from_score,
 )
 from market_regime_engine.fixed_income.timestamps import iso8601_z, to_utc
@@ -60,6 +63,8 @@ log = logging.getLogger(__name__)
 __all__ = [
     "COMPONENT_FEATURES",
     "DEFAULT_WEIGHTS",
+    "HYSTERESIS_BANDS_CREDIT",
+    "classify_with_hysteresis",
     "latest_credit_regime_score",
     "score_credit_regime",
     "write_credit_regime_score",
@@ -92,8 +97,46 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "etf_dislocation": 0.10,
 }
 
+# v1.5 (PR-4 task C): asymmetric (enter, exit) hysteresis bands per
+# label so the regime label is "sticky" near a bucket boundary rather
+# than flipping on every tick. The first slot is the score *minimum*
+# required to keep the label from below; the second is the score at
+# which the label exits to the next-higher tier. ``None`` means an
+# unbounded edge.
+#
+# Cold start (no prev label) falls through to ``regime_label_from_score``
+# so PR-3 callers without ``prev_label=`` keep the v1.5 PR-3 contract
+# bit-for-bit.
+HYSTERESIS_BANDS_CREDIT: dict[RegimeLabel, tuple[float | None, float | None]] = {
+    RegimeLabel.RISK_ON_COMPRESSION: (None, 25.0),
+    RegimeLabel.NORMAL_LIQUIDITY: (20.0, 45.0),
+    RegimeLabel.WATCH_TRANSITION: (40.0, 65.0),
+    RegimeLabel.RISK_OFF_HIGH_RISK_AVERSION: (60.0, 85.0),
+    RegimeLabel.CRISIS_SEVERE_DISLOCATION: (80.0, None),
+}
+
 _NEUTRAL_SCORE: float = 50.0
 _DEFAULT_PERCENTILE: float = 50.0
+
+
+def classify_with_hysteresis(score: float, prev_label: RegimeLabel | None) -> RegimeLabel:
+    """Map ``score`` to a :class:`RegimeLabel` with asymmetric hysteresis.
+
+    ``prev_label is None`` → sharp-bucket fallback via
+    :func:`regime_label_from_score` (preserves the PR-3 contract for
+    cold-start callers).
+
+    ``prev_label`` is sticky inside its hysteresis band; outside the
+    band the score re-classifies via the sharp bucket mapping (so a
+    multi-tier move — e.g. CRISIS → NORMAL — does not require
+    intermediate steps).
+    """
+    return apply_hysteresis(
+        float(score),
+        prev_label=prev_label,
+        bands=HYSTERESIS_BANDS_CREDIT,
+        sharp_fallback=regime_label_from_score,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +385,7 @@ def score_credit_regime(
     profile: str = "production",
     weights: Mapping[str, float] | None = None,
     nan_policy_overrides: Mapping[str, NanPolicy] | None = None,
+    prev_label: RegimeLabel | None = None,
 ) -> CreditRegimeOutput:
     """Compute the credit-regime score from a long-form feature frame.
 
@@ -376,6 +420,11 @@ def score_credit_regime(
         cleaner. The default is taken from
         ``features.attrs["nan_policy"]`` (set by the builder) or
         :attr:`NanPolicy.NAN_FAILS_PIT_AUDIT` when missing.
+    prev_label:
+        Previous run's :class:`RegimeLabel` to apply asymmetric
+        hysteresis to the new label (PR-4 task C). ``None`` (default)
+        falls back to sharp-bucket mapping so PR-3 callers that did not
+        pass ``prev_label=`` keep the original behaviour bit-for-bit.
 
     Returns
     -------
@@ -446,7 +495,9 @@ def score_credit_regime(
         if not gate:
             confidence = min(confidence, 0.5)
 
-    regime_label = regime_label_from_score(regime_score).label
+    hysteresis_applied = prev_label is not None
+    regime_label_enum = classify_with_hysteresis(regime_score, prev_label)
+    regime_label = regime_label_enum.label
 
     metadata: dict[str, Any] = {
         "weights_used": weights_norm,
@@ -456,6 +507,8 @@ def score_credit_regime(
         "nan_policy": nan_policy.value,
         "profile": profile,
         "pit_audit_failed": pit_audit_failed,
+        "hysteresis_applied": hysteresis_applied,
+        "prev_label": prev_label.value if prev_label is not None else None,
     }
 
     timestamp_iso = iso8601_z(asof_utc)
