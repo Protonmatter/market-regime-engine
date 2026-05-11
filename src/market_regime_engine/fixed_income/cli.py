@@ -41,6 +41,7 @@ CLI_COMMANDS: tuple[str, ...] = (
     "fi-tca-segment",
     "fi-evidence-pack",
     "fi-report",
+    "fi-evidence-resign",
 )
 
 # Commands fully implemented in this PR. Stub-emitting commands fall
@@ -51,6 +52,19 @@ _LIVE_COMMANDS: frozenset[str] = frozenset(
         "fi-score-liquidity",
         "fi-score-execution-confidence",
         "fi-tca-segment",
+        "fi-evidence-pack",
+        "fi-report",
+        "fi-evidence-resign",
+    }
+)
+
+_VALID_EVIDENCE_COMPONENTS: frozenset[str] = frozenset(
+    {
+        "credit_regime",
+        "liquidity_stress",
+        "execution_confidence",
+        "tca_segmentation",
+        "other",
     }
 )
 
@@ -247,7 +261,8 @@ def _build_fi_tca_segment(sub: argparse._SubParsersAction) -> None:
     )
     parser.add_argument(
         "--use-hysteresis",
-        help="Apply asymmetric hysteresis to the regime label during tagging (default true).",
+        help="Apply asymmetric hysteresis to the regime label during tagging "
+        "(default true).",
         default="true",
         choices=["true", "false"],
     )
@@ -276,11 +291,42 @@ def _build_fi_tca_segment(sub: argparse._SubParsersAction) -> None:
 def _build_fi_evidence_pack(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser(
         "fi-evidence-pack",
-        help="Generate or fetch a Fixed-Income evidence pack (PR-7).",
+        help="Generate, sign, and persist a Fixed-Income evidence pack (PR-7).",
     )
     parser.add_argument("--db", help="DuckDB warehouse path.", default="data/mre.duckdb")
-    parser.add_argument("--model-run-id", help="Model run id to render the pack for.", required=False)
-    parser.add_argument("--out", help="Optional output path for the pack JSON.")
+    parser.add_argument(
+        "--model-run-id",
+        help="Model run id to render the pack for.",
+        required=True,
+    )
+    parser.add_argument(
+        "--component",
+        help="Component: credit_regime|liquidity_stress|execution_confidence|tca_segmentation|other.",
+        required=True,
+        choices=sorted(_VALID_EVIDENCE_COMPONENTS),
+    )
+    parser.add_argument(
+        "--request-id",
+        help="Composite-PK request id (PR-15). Auto-generated UUID4 if omitted.",
+        dest="request_id",
+    )
+    parser.add_argument(
+        "--sign",
+        help=(
+            "Sign with HMAC. 'auto' (default) signs when keys are configured "
+            "and follows production-mode requirements; 'true' forces a sign "
+            "(raises if no keys); 'false' refuses to sign."
+        ),
+        default="auto",
+        choices=["auto", "true", "false"],
+    )
+    parser.add_argument(
+        "--output-json",
+        help="Optional path to write the evidence pack JSON.",
+        dest="output_json",
+    )
+    # PR-1 alias kept for back-compat.
+    parser.add_argument("--out", help=argparse.SUPPRESS, dest="out_json_legacy")
 
 
 def _build_fi_report(sub: argparse._SubParsersAction) -> None:
@@ -289,8 +335,47 @@ def _build_fi_report(sub: argparse._SubParsersAction) -> None:
         help="Generate the Fixed-Income RCIE Markdown/HTML report (PR-7).",
     )
     parser.add_argument("--db", help="DuckDB warehouse path.", default="data/mre.duckdb")
-    parser.add_argument("--out", help="Output report path.", default="data/reports/fixed_income_rcie.md")
-    parser.add_argument("--format", help="Report format: 'markdown' or 'html'.", default="markdown")
+    parser.add_argument(
+        "--out",
+        help="Output report path.",
+        default="data/reports/fixed_income_rcie.md",
+    )
+    parser.add_argument(
+        "--format",
+        help="Report format: 'markdown' or 'html'.",
+        default="markdown",
+        choices=["markdown", "html"],
+    )
+    parser.add_argument(
+        "--asof",
+        help="Optional ISO-8601 as-of timestamp (defaults to now UTC).",
+    )
+
+
+def _build_fi_evidence_resign(sub: argparse._SubParsersAction) -> None:
+    parser = sub.add_parser(
+        "fi-evidence-resign",
+        help="Bulk re-sign FI evidence packs from one HMAC version to another (PR-7 §F).",
+    )
+    parser.add_argument("--db", help="DuckDB warehouse path.", default="data/mre.duckdb")
+    parser.add_argument(
+        "--from-key",
+        help="Existing key version that the packs are currently signed under.",
+        required=True,
+        dest="from_key",
+    )
+    parser.add_argument(
+        "--to-key",
+        help="Target key version to re-sign with.",
+        required=True,
+        dest="to_key",
+    )
+    parser.add_argument(
+        "--dry-run",
+        help="Print the count without writing.",
+        action="store_true",
+        dest="dry_run",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -303,6 +388,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _build_fi_tca_segment(sub)
     _build_fi_evidence_pack(sub)
     _build_fi_report(sub)
+    _build_fi_evidence_resign(sub)
     return parser
 
 
@@ -358,7 +444,9 @@ def _cmd_fi_score_credit_regime(ns: argparse.Namespace) -> int:
     wh = Warehouse(ns.db)
     try:
         try:
-            features = build_credit_features(wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504)))
+            features = build_credit_features(
+                wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504))
+            )
         except PitViolationError as exc:
             print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
             return 2
@@ -489,17 +577,23 @@ def _cmd_fi_score_liquidity(ns: argparse.Namespace) -> int:
         Literal["market", "sector", "rating", "cusip"], scope_type_raw
     )
     scope_id = getattr(ns, "scope_id", "ALL") or "ALL"
-    prev_from_wh = (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
+    prev_from_wh = (
+        (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
+    )
     use_hier = bool(getattr(ns, "use_hierarchical", False))
 
     wh = Warehouse(ns.db)
     prev_label: LiquidityLabel | None = None
     try:
         if prev_from_wh:
-            prev = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+            prev = latest_liquidity_stress_score(
+                wh, scope_type=scope_type, scope_id=scope_id
+            )
             if prev is not None and prev.liquidity_label:
                 try:
-                    prev_label = next(lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label)
+                    prev_label = next(
+                        lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label
+                    )
                 except StopIteration:
                     prev_label = None
         try:
@@ -580,7 +674,9 @@ def _envelope_from_execution_confidence(output: Any) -> dict[str, Any]:
         "protocol": output.protocol,
         "confidence_score": float(output.confidence_score),
         "expected_slippage_bps": (
-            float(output.expected_slippage_bps) if output.expected_slippage_bps is not None else None
+            float(output.expected_slippage_bps)
+            if output.expected_slippage_bps is not None
+            else None
         ),
         "confidence_interval": [
             output.confidence_interval_low,
@@ -625,7 +721,11 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
 
     input_path = getattr(ns, "input", None)
     if not input_path:
-        print(json.dumps({"status": "error", "detail": "--input is required"}, sort_keys=True))
+        print(
+            json.dumps(
+                {"status": "error", "detail": "--input is required"}, sort_keys=True
+            )
+        )
         return 2
     try:
         raw = Path(input_path).read_text(encoding="utf-8")
@@ -645,10 +745,16 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
     try:
         body = ExecutionConfidenceRequestModel(**payload)
     except Exception as exc:
-        print(json.dumps({"status": "validation_error", "detail": str(exc)}, sort_keys=True))
+        print(
+            json.dumps(
+                {"status": "validation_error", "detail": str(exc)}, sort_keys=True
+            )
+        )
         return 2
 
-    release_gate = (getattr(ns, "release_gate", "true") or "true").lower() != "false"
+    release_gate = (
+        (getattr(ns, "release_gate", "true") or "true").lower() != "false"
+    )
     profile = getattr(ns, "profile", "production")
 
     wh = Warehouse(ns.db)
@@ -662,19 +768,31 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
                 model_run_id=getattr(ns, "model_run_id", None),
             )
         except PitViolationError as exc:
-            print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"status": "pit_violation", "detail": str(exc)}, sort_keys=True
+                )
+            )
             return 2
         except PitAuditFailure as exc:
-            print(json.dumps({"status": "pit_audit_failed", "detail": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"status": "pit_audit_failed", "detail": str(exc)}, sort_keys=True
+                )
+            )
             return 2
-        write_execution_confidence_prediction(wh, output, request_id=body.request_id)
+        write_execution_confidence_prediction(
+            wh, output, request_id=body.request_id
+        )
     finally:
         wh.close()
 
     envelope = _envelope_from_execution_confidence(output)
     envelope["request_id"] = body.request_id
     print(json.dumps(envelope, sort_keys=True, default=str))
-    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
+    output_path = getattr(ns, "output_json", None) or getattr(
+        ns, "out_json_legacy", None
+    )
     if output_path:
         _write_optional_json(output_path, envelope)
     return 0
@@ -713,7 +831,9 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
             print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
             return 2
     else:
-        date_ts = previous_trading_day(pd.Timestamp.now(tz="UTC"), TradingCalendar.SIFMA_BOND)
+        date_ts = previous_trading_day(
+            pd.Timestamp.now(tz="UTC"), TradingCalendar.SIFMA_BOND
+        )
     if date_ts.tzinfo is None:
         date_ts = date_ts.tz_localize("UTC")
 
@@ -737,7 +857,9 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
         dim_list = ["regime_label", "liquidity_label"]
 
     soft_weighting = bool(getattr(ns, "soft_weighting", False))
-    use_hysteresis = (getattr(ns, "use_hysteresis", "true") or "true").lower() != "false"
+    use_hysteresis = (
+        (getattr(ns, "use_hysteresis", "true") or "true").lower() != "false"
+    )
     model_run_id = getattr(ns, "model_run_id", None)
 
     wh = Warehouse(ns.db)
@@ -751,7 +873,11 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
                 model_run_id=model_run_id,
             )
         except PitViolationError as exc:
-            print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"status": "pit_violation", "detail": str(exc)}, sort_keys=True
+                )
+            )
             return 2
     finally:
         wh.close()
@@ -765,22 +891,413 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
         "use_hysteresis": bool(use_hysteresis),
     }
     print(json.dumps(envelope, sort_keys=True))
-    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
+    output_path = getattr(ns, "output_json", None) or getattr(
+        ns, "out_json_legacy", None
+    )
     if output_path:
         _write_optional_json(output_path, envelope)
+    return 0
+
+
+def _resolve_component_artifacts(
+    warehouse: Any, component: str, model_run_id: str
+) -> dict[str, Any]:
+    """Resolve component-specific output rows for evidence pack assembly.
+
+    Returns a dict with keys:
+
+    - ``timestamp``: ISO-8601 UTC string of the underlying signal.
+    - ``output_hash``: ``"sha256:..."`` artifact hash of the row.
+    - ``release_gate``: bool.
+    - ``model_version``: best-effort version string.
+    - ``input_features_hash``: ``"sha256:..."`` over the row's drivers /
+      payload (best-effort; falls back to the component name when no
+      payload column exists).
+
+    Raises ``LookupError`` when ``model_run_id`` is unknown for the
+    requested component.
+    """
+    from market_regime_engine.fixed_income.hashing import canonical_sha256
+
+    component = component.lower()
+    if component == "credit_regime":
+        df = warehouse.read_credit_regime_scores()
+        sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
+        if sub.empty:
+            raise LookupError(
+                f"no credit_regime_scores rows for model_run_id={model_run_id!r}"
+            )
+        row = sub.iloc[-1]
+        return {
+            "timestamp": str(row["timestamp"]),
+            "output_hash": str(row["artifact_hash"]),
+            "release_gate": bool(int(row["release_gate"])),
+            "model_version": "credit_regime_baseline_v0",
+            "input_features_hash": canonical_sha256(
+                {"drivers": str(row.get("drivers_json", ""))}
+            ),
+        }
+    if component == "liquidity_stress":
+        df = warehouse.read_liquidity_stress_scores()
+        sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
+        if sub.empty:
+            raise LookupError(
+                f"no liquidity_stress_scores rows for model_run_id={model_run_id!r}"
+            )
+        row = sub.iloc[-1]
+        return {
+            "timestamp": str(row["timestamp"]),
+            "output_hash": str(row["artifact_hash"]),
+            "release_gate": bool(int(row["release_gate"])),
+            "model_version": "liquidity_stress_baseline_v0",
+            "input_features_hash": canonical_sha256(
+                {"drivers": str(row.get("drivers_json", ""))}
+            ),
+        }
+    if component == "execution_confidence":
+        df = warehouse.read_execution_confidence_predictions()
+        sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
+        if sub.empty:
+            raise LookupError(
+                f"no execution_confidence_predictions rows for "
+                f"model_run_id={model_run_id!r}"
+            )
+        row = sub.iloc[-1]
+        return {
+            "timestamp": str(row["timestamp"]),
+            "output_hash": str(row["artifact_hash"]),
+            "release_gate": bool(int(row["release_gate"])),
+            "model_version": "execution_confidence_baseline_v0",
+            "input_features_hash": canonical_sha256(
+                {
+                    "cusip": str(row.get("cusip", "")),
+                    "side": str(row.get("side", "")),
+                    "notional": float(row.get("notional", 0.0)),
+                }
+            ),
+        }
+    if component == "tca_segmentation":
+        df = warehouse.read_tca_regime_segments()
+        sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
+        if sub.empty:
+            raise LookupError(
+                f"no tca_regime_segments rows for model_run_id={model_run_id!r}"
+            )
+        row = sub.iloc[-1]
+        # TCA rows do not carry an artifact_hash column; derive from the
+        # canonical row payload so the pack is still tamper-evident.
+        row_hash = canonical_sha256(
+            {col: str(row.get(col, "")) for col in sub.columns if col != "metadata_json"}
+        )
+        return {
+            "timestamp": str(row["timestamp"]),
+            "output_hash": row_hash,
+            "release_gate": True,
+            "model_version": "tca_segmentation_baseline_v0",
+            "input_features_hash": canonical_sha256(
+                {"metric": str(row.get("metric_name", ""))}
+            ),
+        }
+    raise ValueError(f"unsupported component: {component!r}")
+
+
+def _cmd_fi_evidence_pack(ns: argparse.Namespace) -> int:
+    """Build, sign, and persist an FI evidence pack for ``model_run_id``.
+
+    Workflow per AGENT.md PR-7 §"Evidence pack" + INSTRUCTIONS.md §6.5:
+
+    1. Open the DuckDB warehouse.
+    2. Resolve the component output row for ``--model-run-id``.
+    3. Capture per-source vintages via ``capture_data_vintages``.
+    4. Build the ``FixedIncomeEvidencePack`` dataclass with the
+       canonical sha256 over the output row.
+    5. Sign with HMAC if keys are configured (or required by env).
+    6. Persist via ``write_evidence_pack`` (composite-PK
+       ``(model_run_id, request_id)``).
+    7. Print the pack JSON to stdout; optionally write to
+       ``--output-json`` / ``--out``.
+
+    Exit codes: 0 on success, 2 on lookup / signing failure, 3 on
+    governance errors (production mode without keys).
+    """
+    import uuid as _uuid
+
+    from market_regime_engine.fixed_income.evidence_pack import (
+        build_evidence_pack,
+        capture_data_vintages,
+        evidence_pack_to_dict,
+        require_production_hmac,
+        write_evidence_pack,
+    )
+    from market_regime_engine.fixed_income.hashing import canonical_sha256
+    from market_regime_engine.model_runs import _git_revision, _lockfile_hash
+    from market_regime_engine.storage import Warehouse
+
+    sign_arg = (getattr(ns, "sign", "auto") or "auto").lower()
+    sign_value: bool | None
+    if sign_arg == "auto":
+        sign_value = None
+    elif sign_arg == "true":
+        sign_value = True
+    elif sign_arg == "false":
+        sign_value = False
+    else:
+        print(
+            json.dumps(
+                {"status": "error", "detail": f"invalid --sign value: {sign_arg!r}"},
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    component = (getattr(ns, "component", "") or "").lower()
+    if component not in _VALID_EVIDENCE_COMPONENTS:
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "detail": (
+                        f"invalid --component {component!r}; "
+                        f"expected one of {sorted(_VALID_EVIDENCE_COMPONENTS)!r}"
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    model_run_id = getattr(ns, "model_run_id", None)
+    if not model_run_id:
+        print(json.dumps({"status": "error", "detail": "--model-run-id required"}, sort_keys=True))
+        return 2
+
+    request_id = getattr(ns, "request_id", None) or _uuid.uuid4().hex
+
+    wh = Warehouse(ns.db)
+    try:
+        try:
+            artifacts = _resolve_component_artifacts(wh, component, model_run_id)
+        except LookupError as exc:
+            print(json.dumps({"status": "not_found", "detail": str(exc)}, sort_keys=True))
+            return 2
+        except ValueError as exc:
+            print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
+            return 2
+
+        try:
+            asof_ts = pd.Timestamp(artifacts["timestamp"])
+        except Exception:
+            asof_ts = None
+
+        vintages = capture_data_vintages(wh, asof=asof_ts)
+        # The model_hash is canonical over the output_hash + component
+        # so a signed pack can be verified standalone.
+        model_hash = canonical_sha256(
+            {"component": component, "output_hash": artifacts["output_hash"]}
+        )
+        pack = build_evidence_pack(
+            model_run_id=model_run_id,
+            component_name=component,
+            model_version=str(artifacts["model_version"]),
+            code_sha=_git_revision(short=True),
+            model_hash=model_hash,
+            input_features_hash=str(artifacts["input_features_hash"]),
+            output_hash=str(artifacts["output_hash"]),
+            release_gate=bool(artifacts["release_gate"]),
+            data_vintages=vintages,
+            timestamp=str(artifacts["timestamp"]),
+            lockfile_hash=_lockfile_hash() or None,
+        )
+        try:
+            persisted = write_evidence_pack(
+                wh, pack, request_id=request_id, sign=sign_value
+            )
+        except RuntimeError as exc:
+            payload = {"status": "error", "detail": str(exc)}
+            if require_production_hmac():
+                payload["governance"] = "production_requires_hmac"
+                print(json.dumps(payload, sort_keys=True))
+                return 3
+            print(json.dumps(payload, sort_keys=True))
+            return 2
+    finally:
+        wh.close()
+
+    pack_dict = evidence_pack_to_dict(persisted)
+    pack_dict["request_id"] = request_id
+    print(json.dumps(pack_dict, sort_keys=True, default=str))
+
+    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
+    if output_path:
+        _write_optional_json(output_path, pack_dict)
+    return 0
+
+
+def _cmd_fi_report(ns: argparse.Namespace) -> int:
+    """Generate the FI RCIE report and write it to ``--out``."""
+    from market_regime_engine.fixed_income.report import generate_fi_report
+    from market_regime_engine.fixed_income.timestamps import to_utc
+    from market_regime_engine.storage import Warehouse
+
+    fmt_raw = (getattr(ns, "format", "markdown") or "markdown").lower()
+    if fmt_raw not in {"markdown", "html"}:
+        print(
+            json.dumps(
+                {"status": "error", "detail": f"invalid --format: {fmt_raw!r}"},
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    asof_arg = getattr(ns, "asof", None)
+    asof_ts = None
+    if asof_arg:
+        try:
+            asof_ts = to_utc(asof_arg)
+        except ValueError as exc:
+            print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
+            return 2
+
+    out_path = Path(
+        getattr(ns, "out", None) or "data/reports/fixed_income_rcie.md"
+    )
+    wh = Warehouse(ns.db)
+    try:
+        # mypy: format is validated above so the cast is safe.
+        from typing import Literal, cast
+
+        fmt: Literal["markdown", "html"] = cast(
+            Literal["markdown", "html"], fmt_raw
+        )
+        body = generate_fi_report(wh, asof=asof_ts, output_format=fmt)
+    finally:
+        wh.close()
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(body, encoding="utf-8")
+
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "path": str(out_path),
+                "format": fmt_raw,
+                "bytes": len(body.encode("utf-8")),
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
+    """Bulk re-sign FI evidence packs from one HMAC version to another."""
+    from market_regime_engine.fixed_income.evidence_pack import (
+        evidence_pack_to_row,
+        get_hmac_keys,
+        sign_pack,
+    )
+    from market_regime_engine.storage import Warehouse
+
+    keys = get_hmac_keys()
+    from_key = getattr(ns, "from_key", None)
+    to_key = getattr(ns, "to_key", None)
+    if not from_key or not to_key:
+        print(
+            json.dumps(
+                {"status": "error", "detail": "--from-key and --to-key are required"},
+                sort_keys=True,
+            )
+        )
+        return 2
+    if to_key not in keys:
+        print(
+            json.dumps(
+                {
+                    "status": "error",
+                    "detail": (
+                        f"--to-key {to_key!r} not in MRE_FI_HMAC_KEY_VERSIONS "
+                        f"{sorted(keys)!r}"
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    dry_run = bool(getattr(ns, "dry_run", False))
+
+    wh = Warehouse(ns.db)
+    matched_count = 0
+    resigned_count = 0
+    try:
+        df = wh.read_evidence_packs()
+        if df is None or df.empty:
+            print(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "from_key": from_key,
+                        "to_key": to_key,
+                        "dry_run": dry_run,
+                        "matched": 0,
+                        "resigned": 0,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        # Filter to packs whose hmac_signature is "<from_key>:..." (signed
+        # under from_key). Unsigned packs and packs signed under other
+        # versions are skipped.
+        sig_series = df["hmac_signature"].astype(str)
+        prefix = f"{from_key}:"
+        mask = sig_series.str.startswith(prefix)
+        matching = df[mask]
+        matched_count = int(len(matching))
+        if not dry_run and not matching.empty:
+            from dataclasses import replace as _dataclass_replace
+
+            from market_regime_engine.fixed_income.evidence_pack import _row_to_pack
+
+            rows: list[dict[str, Any]] = []
+            for _, row in matching.iterrows():
+                pack = _row_to_pack(row)
+                # Strip the existing signature so canonical_pack_payload
+                # doesn't re-include a stale value (defensive — the helper
+                # already drops hmac_signature before signing).
+                pack = _dataclass_replace(pack, hmac_signature=None)
+                signed = sign_pack(pack, key_version=to_key)
+                rows.append(evidence_pack_to_row(signed, request_id=str(row["request_id"])))
+                resigned_count += 1
+            wh.write_evidence_pack(pd.DataFrame(rows))
+    finally:
+        wh.close()
+
+    print(
+        json.dumps(
+            {
+                "status": "ok",
+                "from_key": from_key,
+                "to_key": to_key,
+                "dry_run": dry_run,
+                "matched": matched_count,
+                "resigned": int(resigned_count),
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
 def run(args: Sequence[str]) -> int:
     """Dispatch an ``fi-*`` subcommand.
 
-    Returns the subprocess exit code. Stub commands (PR-7)
-    return 0 + a ``not_yet_implemented`` JSON payload so downstream
-    automation can detect the placeholder state via ``status`` rather
-    than a non-zero exit. The PR-3 ``fi-score-credit-regime``, PR-4
-    ``fi-score-liquidity``, PR-5 ``fi-score-execution-confidence``,
-    and PR-6 ``fi-tca-segment`` commands run the real workflow and
-    return 0 on success, 2 on PIT or audit failure.
+    Returns the subprocess exit code. Stub commands return 0 + a
+    ``not_yet_implemented`` JSON payload so downstream automation can
+    detect the placeholder state via ``status`` rather than a non-zero
+    exit. PR-7 closes out ``fi-evidence-pack``, ``fi-report``, and
+    ``fi-evidence-resign``; the v1.5.0 release ships zero stubs.
     """
     parser = _build_parser()
     ns = parser.parse_args(list(args))
@@ -793,6 +1310,12 @@ def run(args: Sequence[str]) -> int:
         return _cmd_fi_score_execution_confidence(ns)
     if command == "fi-tca-segment":
         return _cmd_fi_tca_segment(ns)
+    if command == "fi-evidence-pack":
+        return _cmd_fi_evidence_pack(ns)
+    if command == "fi-report":
+        return _cmd_fi_report(ns)
+    if command == "fi-evidence-resign":
+        return _cmd_fi_evidence_resign(ns)
     if command in CLI_COMMANDS:
         return _emit_stub(command)
     parser.error(f"unsupported fi-* command: {command}")

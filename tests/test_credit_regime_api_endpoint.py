@@ -149,25 +149,48 @@ def test_fi_router_mounted_on_api_v1_app() -> None:
     assert "/v1/execution_confidence" in paths
 
 
-def test_other_fi_endpoints_still_return_501(populated_warehouse: Warehouse) -> None:
-    """After PR-6, only the PR-7 endpoints remain as 501 stubs.
+def test_all_fi_endpoints_live_in_pr7(tmp_path: Path) -> None:
+    """After PR-7, every FI router endpoint is live.
 
     PR-3 made ``/v1/regime_index/latest`` live; PR-4 made
-    ``/v1/liquidity_index/*`` live; PR-5 makes
-    ``POST /v1/execution_confidence`` live; PR-6 makes
-    ``/v1/tca/regime-segments/latest`` live (returns 503 when the
-    warehouse has no TCA rows, not 501). The evidence-pack endpoint
-    stays as a stub until PR-7 lands.
+    ``/v1/liquidity_index/*`` live; PR-5 made
+    ``POST /v1/execution_confidence`` live; PR-6 made
+    ``/v1/tca/regime-segments/latest`` live; PR-7 makes
+    ``GET /v1/evidence-pack/{model_run_id}`` live (returns 404 for an
+    unknown run_id, 200 with the pack JSON otherwise).
     """
-    client = TestClient(_app_with_warehouse(populated_warehouse))
-    # PR-7 evidence-pack remains a stub.
-    resp = client.get("/v1/evidence-pack/run-x")
-    assert resp.status_code == 501, resp.status_code
-    assert resp.json()["status"] == "not_yet_implemented"
+    db_path = tmp_path / "fi-pr7.duckdb"
+    out = score_credit_regime(_features(_ASOF), asof=_ASOF, model_run_id="run-pr7-1")
+    wh = Warehouse(str(db_path))
+    try:
+        write_credit_regime_score(wh, out)
+    finally:
+        wh.close()
+    # PR-7: GET /v1/evidence-pack/{run_id} is live; unknown run_id → 404.
+    wh1 = Warehouse(str(db_path))
+    try:
+        client = TestClient(_app_with_warehouse(wh1))
+        resp = client.get("/v1/evidence-pack/run-x")
+        assert resp.status_code == 404, resp.status_code
+        assert resp.json()["detail"] == "evidence_pack_not_found"
+    finally:
+        # Handler may have closed the warehouse already; tolerate it.
+        try:
+            wh1.close()
+        except Exception:
+            pass
     # PR-6: /v1/tca/regime-segments/latest is live; empty warehouse → 503.
-    resp = client.get("/v1/tca/regime-segments/latest")
-    assert resp.status_code == 503, resp.status_code
-    assert resp.json()["detail"] == "no_data"
+    wh2 = Warehouse(str(db_path))
+    try:
+        client = TestClient(_app_with_warehouse(wh2))
+        resp = client.get("/v1/tca/regime-segments/latest")
+        assert resp.status_code == 503, resp.status_code
+        assert resp.json()["detail"] == "no_data"
+    finally:
+        try:
+            wh2.close()
+        except Exception:
+            pass
     # PR-5: POST /v1/execution_confidence is live; an empty body should
     # 422 (Pydantic validation), not 501.
     resp = client.post("/v1/execution_confidence", json={})
