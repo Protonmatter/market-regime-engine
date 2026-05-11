@@ -20,7 +20,6 @@ the executemany fallback path.
 from __future__ import annotations
 
 import os
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -98,9 +97,7 @@ def test_bulk_load_5m_rows_in_chunks_correctness(tmp_path: Path) -> None:
         elapsed = time.perf_counter() - t0
 
         assert rows == n, f"expected {n} rows, wrote {rows}"
-        readback_count = wh._backend.read_sql(
-            "SELECT COUNT(*) AS n FROM trace_trades"
-        ).iloc[0]["n"]
+        readback_count = wh._backend.read_sql("SELECT COUNT(*) AS n FROM trace_trades").iloc[0]["n"]
         assert int(readback_count) == n
         assert elapsed < 60.0, f"bulk_load_chunked took {elapsed:.1f}s, exceeds 60s budget"
     finally:
@@ -152,9 +149,11 @@ def test_bulk_load_partial_failure_leaves_committed_chunks(tmp_path: Path) -> No
                 raise RuntimeError("simulated mid-flow crash")
             return original(table, frame, cols, mode=mode)
 
-        with patch.object(wh._backend, "upsert_frame", side_effect=_bomb_on_second):
-            with pytest.raises(RuntimeError, match="simulated mid-flow crash"):
-                wh.bulk_load_chunked("trace_trades", df, chunk_rows=1000)
+        with (
+            patch.object(wh._backend, "upsert_frame", side_effect=_bomb_on_second),
+            pytest.raises(RuntimeError, match="simulated mid-flow crash"),
+        ):
+            wh.bulk_load_chunked("trace_trades", df, chunk_rows=1000)
 
         count_row = wh._backend.read_sql("SELECT COUNT(*) AS n FROM trace_trades").iloc[0]
         assert int(count_row["n"]) == 1000

@@ -565,8 +565,7 @@ _FI_TABLES: tuple[TableSpec, ...] = (
         sqlite_create_sql=_BOND_REFERENCE_SQLITE,
         primary_key=("cusip", "valid_from"),
         index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_bond_reference_valid_window "
-            "ON bond_reference(valid_from, valid_to)",
+            "CREATE INDEX IF NOT EXISTS idx_bond_reference_valid_window ON bond_reference(valid_from, valid_to)",
         ),
     ),
     TableSpec(
@@ -574,30 +573,21 @@ _FI_TABLES: tuple[TableSpec, ...] = (
         create_sql=_TRACE_TRADES_DUCKDB,
         sqlite_create_sql=_TRACE_TRADES_SQLITE,
         primary_key=("trade_id", "cusip", "timestamp"),
-        index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_trace_trades_cusip_ts "
-            "ON trace_trades(cusip, timestamp)",
-        ),
+        index_sql=("CREATE INDEX IF NOT EXISTS idx_trace_trades_cusip_ts ON trace_trades(cusip, timestamp)",),
     ),
     TableSpec(
         name="rfq_events",
         create_sql=_RFQ_EVENTS_DUCKDB,
         sqlite_create_sql=_RFQ_EVENTS_SQLITE,
         primary_key=("rfq_id", "timestamp"),
-        index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_rfq_events_cusip_ts "
-            "ON rfq_events(cusip, timestamp)",
-        ),
+        index_sql=("CREATE INDEX IF NOT EXISTS idx_rfq_events_cusip_ts ON rfq_events(cusip, timestamp)",),
     ),
     TableSpec(
         name="dealer_quotes",
         create_sql=_DEALER_QUOTES_DUCKDB,
         sqlite_create_sql=_DEALER_QUOTES_SQLITE,
         primary_key=("cusip", "dealer_id", "timestamp", "side"),
-        index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_dealer_quotes_cusip_ts "
-            "ON dealer_quotes(cusip, timestamp)",
-        ),
+        index_sql=("CREATE INDEX IF NOT EXISTS idx_dealer_quotes_cusip_ts ON dealer_quotes(cusip, timestamp)",),
     ),
     TableSpec(
         name="dealer_response_stats",
@@ -648,10 +638,7 @@ _FI_TABLES: tuple[TableSpec, ...] = (
         create_sql=_EXECUTION_OUTCOMES_DUCKDB,
         sqlite_create_sql=_EXECUTION_OUTCOMES_SQLITE,
         primary_key=("request_id",),
-        index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_exec_outcomes_request_id "
-            "ON execution_outcomes(request_id)",
-        ),
+        index_sql=("CREATE INDEX IF NOT EXISTS idx_exec_outcomes_request_id ON execution_outcomes(request_id)",),
     ),
     TableSpec(
         name="tca_regime_segments",
@@ -678,8 +665,7 @@ _FI_TABLES: tuple[TableSpec, ...] = (
         sqlite_create_sql=_EVIDENCE_PACKS_SQLITE,
         primary_key=("model_run_id", "request_id"),
         index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_evidence_packs_run_id "
-            "ON fixed_income_evidence_packs(model_run_id)",
+            "CREATE INDEX IF NOT EXISTS idx_evidence_packs_run_id ON fixed_income_evidence_packs(model_run_id)",
         ),
     ),
 )

@@ -22,7 +22,6 @@ temporal versioning helpers from PR-2 task C.
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -52,15 +51,13 @@ def test_fi_indexes_exist_after_init_duckdb(tmp_path: Path) -> None:
     pytest.importorskip("duckdb")
     wh = Warehouse(str(tmp_path / "idx.duckdb"), backend="duckdb")
     try:
-        rows = wh._backend.conn.execute(
-            "SELECT index_name, table_name FROM duckdb_indexes()"
-        ).fetchall()
-        actual = {name: table for name, table in rows}
+        rows = wh._backend.conn.execute("SELECT index_name, table_name FROM duckdb_indexes()").fetchall()
+        actual = dict(rows)
         for idx_name, expected_table in _EXPECTED_INDEXES.items():
             assert idx_name in actual, f"missing index {idx_name}; have {sorted(actual)!r}"
-            assert (
-                actual[idx_name] == expected_table
-            ), f"index {idx_name!r} expected on {expected_table!r}, found on {actual[idx_name]!r}"
+            assert actual[idx_name] == expected_table, (
+                f"index {idx_name!r} expected on {expected_table!r}, found on {actual[idx_name]!r}"
+            )
     finally:
         wh.close()
 
@@ -71,15 +68,13 @@ def test_fi_indexes_exist_after_init_sqlite(tmp_path: Path) -> None:
 
     wh = Warehouse(str(tmp_path / "idx.db"), backend="sqlite")
     try:
-        rows = wh._backend.conn.execute(
-            "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'"
-        ).fetchall()
-        actual = {name: table for name, table in rows}
+        rows = wh._backend.conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index'").fetchall()
+        actual = dict(rows)
         for idx_name, expected_table in _EXPECTED_INDEXES.items():
             assert idx_name in actual, f"missing index {idx_name}; have {sorted(actual)!r}"
-            assert (
-                actual[idx_name] == expected_table
-            ), f"index {idx_name!r} expected on {expected_table!r}, found on {actual[idx_name]!r}"
+            assert actual[idx_name] == expected_table, (
+                f"index {idx_name!r} expected on {expected_table!r}, found on {actual[idx_name]!r}"
+            )
     finally:
         wh.close()
 

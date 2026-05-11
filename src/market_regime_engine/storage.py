@@ -2028,9 +2028,7 @@ class Warehouse:
         )
 
     def read_dealer_response_stats(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start"
-        )
+        return self._backend.read_sql("SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start")
 
     def write_curve_snapshots(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2050,9 +2048,7 @@ class Warehouse:
         )
 
     def read_cds_curve_snapshots(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor"
-        )
+        return self._backend.read_sql("SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor")
 
     def write_credit_regime_score(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2095,9 +2091,7 @@ class Warehouse:
         )
 
     def read_liquidity_stress_scores(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id"
-        )
+        return self._backend.read_sql("SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id")
 
     def write_execution_confidence_prediction(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2124,9 +2118,7 @@ class Warehouse:
         )
 
     def read_execution_confidence_predictions(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id"
-        )
+        return self._backend.read_sql("SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id")
 
     def write_execution_outcome(self, df: pd.DataFrame) -> int:
         """Persist execution outcomes; enforces ``observed_at > decision_timestamp``.
@@ -2145,8 +2137,7 @@ class Warehouse:
         if bad.any():
             offenders = df.loc[bad, "request_id"].tolist()
             raise ValueError(
-                "execution_outcomes requires observed_at > decision_timestamp; "
-                f"offending request_ids: {offenders!r}"
+                f"execution_outcomes requires observed_at > decision_timestamp; offending request_ids: {offenders!r}"
             )
         return self._write_fi(
             "execution_outcomes",
@@ -2192,9 +2183,7 @@ class Warehouse:
         )
 
     def read_tca_regime_segments(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name"
-        )
+        return self._backend.read_sql("SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name")
 
     def write_evidence_pack(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2286,9 +2275,7 @@ def read_bond_reference_asof(
     # DuckDB parses it as TIMESTAMP, SQLite compares it as TEXT against
     # the same ISO-8601 strings written by the writer.
     asof_str = asof_ts.isoformat()
-    sql_filter = (
-        "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
-    )
+    sql_filter = "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
     params: tuple[Any, ...] = (asof_str, asof_str)
     if not include_survivorship_failures:
         sql_filter += " AND default_date IS NULL AND delisted_date IS NULL"
@@ -2428,10 +2415,17 @@ def migrate_warehouse(
 
 
 __all__ = [
-    "SCHEMA_STATEMENTS",
     "TableSpec",
     "Warehouse",
     "migrate_warehouse",
+    "read_bond_reference_asof",
+    "read_bond_reference_history",
     "register_tables",
     "registered_tables",
 ]
+# Note: ``SCHEMA_STATEMENTS``, ``_TABLE_PKS``, and ``_TABLE_NAMES`` are
+# resolved dynamically via PEP 562 module __getattr__ (defined above)
+# so they continue to import from this module by name (e.g.
+# ``from market_regime_engine.storage import SCHEMA_STATEMENTS``) even
+# though they are not listed in ``__all__``. Listing them here would
+# trip Ruff's F822 because there is no top-level binding.
