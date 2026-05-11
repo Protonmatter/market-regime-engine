@@ -176,14 +176,18 @@ def test_score_credit_regime_release_gate_false_caps_confidence() -> None:
 
 
 def test_score_credit_regime_missing_features_triggers_pit_audit_failure() -> None:
-    """Latest-row NaN under NAN_FAILS_PIT_AUDIT flips release_gate=False."""
-    # Drop the spreads / CDS columns entirely so the latest pivot row
-    # has NaN on those features.
-    features = _synthetic_features(include=("ust_level", "ust_slope", "ust_curvature", "vix"))
+    """A column with zero non-NaN observations trips the audit.
+
+    Under ``NAN_FAILS_PIT_AUDIT`` (the FI default), a feature that has
+    no usable observation anywhere in the lookback window means an
+    input is genuinely missing; the gate flips and confidence is
+    capped at 0.5 per AGENT.md non-negotiable 8.
+    """
+    # Include VIX rows but null every one of them so the column exists
+    # in the pivot but has zero non-NaN entries.
+    features = _synthetic_features(include=("ust_level", "ust_slope", "ust_curvature", "cdx_ig_5y", "cdx_hy_5y", "vix"))
     features.attrs["nan_policy"] = NanPolicy.NAN_FAILS_PIT_AUDIT.value
-    # Inject a stray NaN in the latest VIX row so the audit fires.
-    last_idx = features[features["feature_name"] == "vix"].index[-1]
-    features.loc[last_idx, "value"] = float("nan")
+    features.loc[features["feature_name"] == "vix", "value"] = float("nan")
 
     out = score_credit_regime(features, asof=_ASOF, model_run_id="run-missing")
     assert out.release_gate is False
