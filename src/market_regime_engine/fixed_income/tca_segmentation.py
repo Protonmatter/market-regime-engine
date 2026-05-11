@@ -95,12 +95,14 @@ from market_regime_engine.fixed_income.tca_outcome_lag import (
     compute_execution_success_label,
 )
 from market_regime_engine.fixed_income.timestamps import iso8601_z
+from market_regime_engine.observability import metrics
 
 log = logging.getLogger(__name__)
 
 
 __all__ = [
     "DIMENSION_COLUMNS",
+    "DROPPED_ROWS_COUNTER",
     "EXECUTION_SUCCESS_DEFAULT_THRESHOLD_BPS",
     "TCA_METRICS",
     "aggregate_tca_by_regime",
@@ -146,6 +148,33 @@ DIMENSION_COLUMNS: tuple[str, ...] = (
     "notional_bucket",
 )
 """Supported segmentation dimensions (INSTRUCTIONS.md §6.4)."""
+
+
+DROPPED_ROWS_COUNTER: str = "fi_tca_dropped_rows_total"
+"""Observability counter for NaN-dropped TCA rows.
+
+Per ``REVIEW.md §3.6 PR-11``: aggregating with NaN poisons the mean
+(``NaN + 1 = NaN`` → bucket reports NaN even though most trades were
+clean). :func:`aggregate_tca_by_regime` drops at the aggregation
+boundary and emits this counter labelled by ``metric`` + the active
+grouping dimensions so dashboards can correlate drops with regime /
+liquidity buckets.
+"""
+
+
+def _register_counter() -> None:
+    """Idempotent registration of :data:`DROPPED_ROWS_COUNTER`.
+
+    The in-process registry registers on first ``incr``; the no-op
+    ``+0`` here pre-creates the counter family so a Prometheus scrape
+    immediately after module import returns the family with no samples
+    rather than 404. Re-imports are safe — the underlying
+    ``defaultdict(float)`` is idempotent on the (name, labels) key.
+    """
+    metrics().incr(DROPPED_ROWS_COUNTER, value=0.0)
+
+
+_register_counter()
 
 
 # ---------------------------------------------------------------------------
@@ -729,14 +758,18 @@ def _drop_nan_rows(
     trades: pd.DataFrame,
     *,
     metric: str,
+    dimensions: Sequence[str] = (),
 ) -> tuple[pd.DataFrame, int]:
     """Drop rows where ``metric`` is NaN at the aggregation boundary.
 
-    Returns ``(cleaned_frame, dropped_count)``. NaN-row dropping at the
-    boundary is the basic guard that prevents a single bad price from
-    poisoning the bucket mean; PR-6 task D extends this hook to emit an
-    observability counter so dashboards can pivot drops by metric and
-    regime / liquidity bucket.
+    Returns ``(cleaned_frame, dropped_count)``. PR-6 task D /
+    REVIEW.md §3.6 PR-11: aggregating with NaN poisons the mean. This
+    helper drops at the boundary and emits :data:`DROPPED_ROWS_COUNTER`
+    labelled by ``metric`` + the active grouping ``dimensions`` so
+    dashboards can pivot drops by regime / liquidity bucket. The label
+    values use ``"__all__"`` because at this point the drop is
+    pre-grouping (we have not yet split by bucket); a future enhancement
+    can split increments per group when the join can prove it is cheap.
     """
     if metric not in trades.columns:
         return trades.iloc[0:0], 0
@@ -745,6 +778,14 @@ def _drop_nan_rows(
     if n_dropped == 0:
         return trades, 0
     cleaned = trades.loc[~nan_mask].copy()
+    label_kwargs: dict[str, str] = {"metric": metric}
+    if "regime_label" in dimensions:
+        label_kwargs["regime_label"] = "__all__"
+    if "liquidity_label" in dimensions:
+        label_kwargs["liquidity_label"] = "__all__"
+    metrics().incr(
+        DROPPED_ROWS_COUNTER, value=float(n_dropped), **label_kwargs
+    )
     return cleaned, n_dropped
 
 
@@ -868,7 +909,9 @@ def aggregate_tca_by_regime(
 
     parts: list[pd.DataFrame] = []
     for metric in metrics_names:
-        cleaned, _ = _drop_nan_rows(trades, metric=metric)
+        cleaned, _ = _drop_nan_rows(
+            trades, metric=metric, dimensions=dimensions
+        )
         if cleaned.empty:
             continue
         agg = _group_aggregate(

@@ -85,6 +85,7 @@ from market_regime_engine.fixed_income.schemas import (
 )
 from market_regime_engine.fixed_income.tca_segmentation import (
     DIMENSION_COLUMNS,
+    DROPPED_ROWS_COUNTER,
     EXECUTION_SUCCESS_DEFAULT_THRESHOLD_BPS,
     TCA_METRICS,
     aggregate_tca_by_regime,
@@ -107,6 +108,7 @@ _register_fi_schema()
 __all__ = [
     "CREDIT_REGIME_DEFAULT_WEIGHTS",
     "DIMENSION_COLUMNS",
+    "DROPPED_ROWS_COUNTER",
     "EXECUTION_CONFIDENCE_DEFAULT_WEIGHTS",
     "EXECUTION_SUCCESS_DEFAULT_THRESHOLD_BPS",
     "FI_TABLE_NAMES",
