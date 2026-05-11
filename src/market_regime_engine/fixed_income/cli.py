@@ -247,8 +247,7 @@ def _build_fi_tca_segment(sub: argparse._SubParsersAction) -> None:
     )
     parser.add_argument(
         "--use-hysteresis",
-        help="Apply asymmetric hysteresis to the regime label during tagging "
-        "(default true).",
+        help="Apply asymmetric hysteresis to the regime label during tagging (default true).",
         default="true",
         choices=["true", "false"],
     )
@@ -359,9 +358,7 @@ def _cmd_fi_score_credit_regime(ns: argparse.Namespace) -> int:
     wh = Warehouse(ns.db)
     try:
         try:
-            features = build_credit_features(
-                wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504))
-            )
+            features = build_credit_features(wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504)))
         except PitViolationError as exc:
             print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
             return 2
@@ -492,23 +489,17 @@ def _cmd_fi_score_liquidity(ns: argparse.Namespace) -> int:
         Literal["market", "sector", "rating", "cusip"], scope_type_raw
     )
     scope_id = getattr(ns, "scope_id", "ALL") or "ALL"
-    prev_from_wh = (
-        (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
-    )
+    prev_from_wh = (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
     use_hier = bool(getattr(ns, "use_hierarchical", False))
 
     wh = Warehouse(ns.db)
     prev_label: LiquidityLabel | None = None
     try:
         if prev_from_wh:
-            prev = latest_liquidity_stress_score(
-                wh, scope_type=scope_type, scope_id=scope_id
-            )
+            prev = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
             if prev is not None and prev.liquidity_label:
                 try:
-                    prev_label = next(
-                        lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label
-                    )
+                    prev_label = next(lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label)
                 except StopIteration:
                     prev_label = None
         try:
@@ -589,9 +580,7 @@ def _envelope_from_execution_confidence(output: Any) -> dict[str, Any]:
         "protocol": output.protocol,
         "confidence_score": float(output.confidence_score),
         "expected_slippage_bps": (
-            float(output.expected_slippage_bps)
-            if output.expected_slippage_bps is not None
-            else None
+            float(output.expected_slippage_bps) if output.expected_slippage_bps is not None else None
         ),
         "confidence_interval": [
             output.confidence_interval_low,
@@ -636,11 +625,7 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
 
     input_path = getattr(ns, "input", None)
     if not input_path:
-        print(
-            json.dumps(
-                {"status": "error", "detail": "--input is required"}, sort_keys=True
-            )
-        )
+        print(json.dumps({"status": "error", "detail": "--input is required"}, sort_keys=True))
         return 2
     try:
         raw = Path(input_path).read_text(encoding="utf-8")
@@ -660,16 +645,10 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
     try:
         body = ExecutionConfidenceRequestModel(**payload)
     except Exception as exc:
-        print(
-            json.dumps(
-                {"status": "validation_error", "detail": str(exc)}, sort_keys=True
-            )
-        )
+        print(json.dumps({"status": "validation_error", "detail": str(exc)}, sort_keys=True))
         return 2
 
-    release_gate = (
-        (getattr(ns, "release_gate", "true") or "true").lower() != "false"
-    )
+    release_gate = (getattr(ns, "release_gate", "true") or "true").lower() != "false"
     profile = getattr(ns, "profile", "production")
 
     wh = Warehouse(ns.db)
@@ -683,31 +662,19 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
                 model_run_id=getattr(ns, "model_run_id", None),
             )
         except PitViolationError as exc:
-            print(
-                json.dumps(
-                    {"status": "pit_violation", "detail": str(exc)}, sort_keys=True
-                )
-            )
+            print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
             return 2
         except PitAuditFailure as exc:
-            print(
-                json.dumps(
-                    {"status": "pit_audit_failed", "detail": str(exc)}, sort_keys=True
-                )
-            )
+            print(json.dumps({"status": "pit_audit_failed", "detail": str(exc)}, sort_keys=True))
             return 2
-        write_execution_confidence_prediction(
-            wh, output, request_id=body.request_id
-        )
+        write_execution_confidence_prediction(wh, output, request_id=body.request_id)
     finally:
         wh.close()
 
     envelope = _envelope_from_execution_confidence(output)
     envelope["request_id"] = body.request_id
     print(json.dumps(envelope, sort_keys=True, default=str))
-    output_path = getattr(ns, "output_json", None) or getattr(
-        ns, "out_json_legacy", None
-    )
+    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
     if output_path:
         _write_optional_json(output_path, envelope)
     return 0
@@ -746,9 +713,7 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
             print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
             return 2
     else:
-        date_ts = previous_trading_day(
-            pd.Timestamp.now(tz="UTC"), TradingCalendar.SIFMA_BOND
-        )
+        date_ts = previous_trading_day(pd.Timestamp.now(tz="UTC"), TradingCalendar.SIFMA_BOND)
     if date_ts.tzinfo is None:
         date_ts = date_ts.tz_localize("UTC")
 
@@ -772,9 +737,7 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
         dim_list = ["regime_label", "liquidity_label"]
 
     soft_weighting = bool(getattr(ns, "soft_weighting", False))
-    use_hysteresis = (
-        (getattr(ns, "use_hysteresis", "true") or "true").lower() != "false"
-    )
+    use_hysteresis = (getattr(ns, "use_hysteresis", "true") or "true").lower() != "false"
     model_run_id = getattr(ns, "model_run_id", None)
 
     wh = Warehouse(ns.db)
@@ -788,11 +751,7 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
                 model_run_id=model_run_id,
             )
         except PitViolationError as exc:
-            print(
-                json.dumps(
-                    {"status": "pit_violation", "detail": str(exc)}, sort_keys=True
-                )
-            )
+            print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
             return 2
     finally:
         wh.close()
@@ -806,9 +765,7 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
         "use_hysteresis": bool(use_hysteresis),
     }
     print(json.dumps(envelope, sort_keys=True))
-    output_path = getattr(ns, "output_json", None) or getattr(
-        ns, "out_json_legacy", None
-    )
+    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
     if output_path:
         _write_optional_json(output_path, envelope)
     return 0

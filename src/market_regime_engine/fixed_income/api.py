@@ -34,12 +34,11 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -139,9 +138,7 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(
-                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
-            )
+            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
         return v
 
     @field_validator("cusip")
@@ -382,13 +379,9 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(
-                    wh, scope_type=scope_type, scope_id=scope_id
-                )
+                latest = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
             except Exception as exc:
-                log.exception(
-                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
-                )
+                log.exception("liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc)
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
                     detail={"detail": "no_data", "release_gate": False},
@@ -456,9 +449,7 @@ def build_router(
                     },
                 ) from exc
             try:
-                write_execution_confidence_prediction(
-                    wh, response, request_id=body.request_id
-                )
+                write_execution_confidence_prediction(wh, response, request_id=body.request_id)
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",
@@ -521,9 +512,7 @@ def build_router(
         wh = factory()
         try:
             try:
-                segments = latest_tca_regime_segments(
-                    wh, dimensions=dim_list, limit=clamped_limit
-                )
+                segments = latest_tca_regime_segments(wh, dimensions=dim_list, limit=clamped_limit)
             except Exception as exc:
                 log.exception("tca/regime-segments/latest read failed: %s", exc)
                 raise HTTPException(
@@ -535,9 +524,7 @@ def build_router(
             if callable(close):
                 close()
         if not segments:
-            return JSONResponse(
-                {"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE
-            )
+            return JSONResponse({"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE)
         return JSONResponse(
             {
                 "segments": [tca_regime_segment_to_dict(s) for s in segments],

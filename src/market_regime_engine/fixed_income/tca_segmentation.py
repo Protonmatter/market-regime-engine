@@ -54,7 +54,7 @@ import json
 import logging
 import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
@@ -71,6 +71,8 @@ from market_regime_engine.fixed_income.calendars import (
 )
 from market_regime_engine.fixed_income.credit_spread_regime import (
     classify_with_hysteresis as classify_credit_with_hysteresis,
+)
+from market_regime_engine.fixed_income.credit_spread_regime import (
     latest_credit_regime_score,
 )
 from market_regime_engine.fixed_income.execution_confidence import (
@@ -344,7 +346,7 @@ def tag_trade_with_regime_context(
     *,
     warehouse: Any,
     use_hysteresis: bool = True,
-    tolerance: pd.Timedelta = pd.Timedelta("5min"),  # noqa: B008  module-level constant
+    tolerance: pd.Timedelta = pd.Timedelta("5min"),
 ) -> TaggedTrade:
     """Attach prevailing regime / liquidity / execution-confidence context to a trade.
 
@@ -375,9 +377,7 @@ def tag_trade_with_regime_context(
     trade_ts = _coerce_utc(trade.timestamp)
 
     regime = latest_credit_regime_score(warehouse)
-    liquidity = latest_liquidity_stress_score(
-        warehouse, scope_type="cusip", scope_id=trade.cusip
-    )
+    liquidity = latest_liquidity_stress_score(warehouse, scope_type="cusip", scope_id=trade.cusip)
     if liquidity is None:
         liquidity = latest_liquidity_stress_score(warehouse)
 
@@ -404,24 +404,16 @@ def tag_trade_with_regime_context(
             # applied around the score; the hysteresis function does
             # the right thing when prev_label is None (sharp fallback).
             try:
-                prev_label = next(
-                    lbl for lbl in RegimeLabel if lbl.label == regime.regime_label
-                )
+                prev_label = next(lbl for lbl in RegimeLabel if lbl.label == regime.regime_label)
             except StopIteration:
                 prev_label = None
-            regime_label_str = classify_credit_with_hysteresis(
-                regime_score, prev_label
-            ).label
+            regime_label_str = classify_credit_with_hysteresis(regime_score, prev_label).label
         else:
             regime_label_str = regime_label_from_score(regime_score).label
         soft_weights = _triangular_soft_weights(regime_score)
 
-    liquidity_label_str = (
-        liquidity.liquidity_label if liquidity is not None else "unknown"
-    )
-    liquidity_index = (
-        float(liquidity.liquidity_index) if liquidity is not None else 50.0
-    )
+    liquidity_label_str = liquidity.liquidity_label if liquidity is not None else "unknown"
+    liquidity_index = float(liquidity.liquidity_index) if liquidity is not None else 50.0
 
     exec_pred = latest_execution_confidence_prediction(warehouse, cusip=trade.cusip)
     if exec_pred is not None:
@@ -436,12 +428,8 @@ def tag_trade_with_regime_context(
             # was made without that prediction.
             exec_pred = None
 
-    execution_confidence_score = (
-        float(exec_pred.confidence_score) if exec_pred is not None else None
-    )
-    execution_confidence_bucket = _execution_confidence_bucket_for(
-        execution_confidence_score
-    )
+    execution_confidence_score = float(exec_pred.confidence_score) if exec_pred is not None else None
+    execution_confidence_bucket = _execution_confidence_bucket_for(execution_confidence_score)
 
     sector_bucket = _sector_bucket_for(trade.sector)
     rating_bucket = _rating_bucket_for(trade.rating)
@@ -451,30 +439,18 @@ def tag_trade_with_regime_context(
     metadata: dict[str, Any] = {
         "use_hysteresis": bool(use_hysteresis),
         "tolerance_seconds": float(tolerance.total_seconds()),
-        "regime_score_source_timestamp": (
-            regime.timestamp if regime is not None else None
-        ),
-        "liquidity_index_source_timestamp": (
-            liquidity.timestamp if liquidity is not None else None
-        ),
-        "liquidity_scope_type": (
-            liquidity.scope_type if liquidity is not None else None
-        ),
-        "liquidity_scope_id": (
-            liquidity.scope_id if liquidity is not None else None
-        ),
+        "regime_score_source_timestamp": (regime.timestamp if regime is not None else None),
+        "liquidity_index_source_timestamp": (liquidity.timestamp if liquidity is not None else None),
+        "liquidity_scope_type": (liquidity.scope_type if liquidity is not None else None),
+        "liquidity_scope_id": (liquidity.scope_id if liquidity is not None else None),
         "execution_confidence_source_request_id": (
             exec_pred.metadata.get("request_id")
             if exec_pred is not None and isinstance(exec_pred.metadata, dict)
             else None
         ),
-        "execution_confidence_release_gate": (
-            bool(exec_pred.release_gate) if exec_pred is not None else None
-        ),
+        "execution_confidence_release_gate": (bool(exec_pred.release_gate) if exec_pred is not None else None),
         "regime_release_gate": (bool(regime.release_gate) if regime is not None else None),
-        "liquidity_release_gate": (
-            bool(liquidity.release_gate) if liquidity is not None else None
-        ),
+        "liquidity_release_gate": (bool(liquidity.release_gate) if liquidity is not None else None),
     }
 
     return TaggedTrade(
@@ -590,9 +566,7 @@ def compute_tca_metrics_for_outcome(
     del warehouse  # reserved for future per-cusip markout joins
     observed_at_raw = outcome.get("observed_at")
     if observed_at_raw is None:
-        raise ValueError(
-            "compute_tca_metrics_for_outcome: outcome must include 'observed_at'"
-        )
+        raise ValueError("compute_tca_metrics_for_outcome: outcome must include 'observed_at'")
     decision_ts, _ = assert_outcome_after_decision(
         decision_timestamp=request.timestamp,
         observed_at=observed_at_raw,
@@ -610,7 +584,7 @@ def compute_tca_metrics_for_outcome(
     best_bid = outcome.get("best_bid_at_arrival")
     best_ask = outcome.get("best_ask_at_arrival")
 
-    results: dict[str, float | None] = {m: None for m in TCA_METRICS}
+    results: dict[str, float | None] = dict.fromkeys(TCA_METRICS)
 
     # arrival_cost_bps = sign * (execution - arrival) / arrival * 10_000
     if execution is not None and arrival is not None:
@@ -647,9 +621,7 @@ def compute_tca_metrics_for_outcome(
                 pi = to_bps(to_decimal(execution) - to_decimal(best_bid), ref)
             else:
                 pi = None
-            results["price_improvement_bps"] = (
-                decimal_to_float_for_report(pi) if pi is not None else None
-            )
+            results["price_improvement_bps"] = decimal_to_float_for_report(pi) if pi is not None else None
         except ZeroDivisionError:
             results["price_improvement_bps"] = None
 
@@ -702,17 +674,12 @@ def compute_tca_metrics_for_outcome(
         results["execution_success"] = float(1.0 if bool(es) else 0.0)
 
     # post-trade markouts — trading-day calendar window observability.
-    markout_1d_observable, _ = _markout_window_observable(
-        decision_ts, days_forward=1, asof_now=asof
-    )
-    markout_5d_observable, _ = _markout_window_observable(
-        decision_ts, days_forward=5, asof_now=asof
-    )
+    markout_1d_observable, _ = _markout_window_observable(decision_ts, days_forward=1, asof_now=asof)
+    markout_5d_observable, _ = _markout_window_observable(decision_ts, days_forward=5, asof_now=asof)
     if markout_1d_observable and outcome.get("markout_price_1d") is not None and execution is not None:
         try:
             mk = to_bps(
-                to_decimal(sign)
-                * (to_decimal(outcome["markout_price_1d"]) - to_decimal(execution)),
+                to_decimal(sign) * (to_decimal(outcome["markout_price_1d"]) - to_decimal(execution)),
                 to_decimal(execution),
             )
             results["post_trade_markout_1d_bps"] = decimal_to_float_for_report(mk)
@@ -721,8 +688,7 @@ def compute_tca_metrics_for_outcome(
     if markout_5d_observable and outcome.get("markout_price_5d") is not None and execution is not None:
         try:
             mk = to_bps(
-                to_decimal(sign)
-                * (to_decimal(outcome["markout_price_5d"]) - to_decimal(execution)),
+                to_decimal(sign) * (to_decimal(outcome["markout_price_5d"]) - to_decimal(execution)),
                 to_decimal(execution),
             )
             results["post_trade_markout_5d_bps"] = decimal_to_float_for_report(mk)
@@ -783,9 +749,7 @@ def _drop_nan_rows(
         label_kwargs["regime_label"] = "__all__"
     if "liquidity_label" in dimensions:
         label_kwargs["liquidity_label"] = "__all__"
-    metrics().incr(
-        DROPPED_ROWS_COUNTER, value=float(n_dropped), **label_kwargs
-    )
+    metrics().incr(DROPPED_ROWS_COUNTER, value=float(n_dropped), **label_kwargs)
     return cleaned, n_dropped
 
 
@@ -804,13 +768,11 @@ def _group_aggregate(
     ``"regime_label"`` is a dimension, else from constant 1.0 weights.
     """
     if trades.empty:
-        return pd.DataFrame(
-            columns=list(dimensions) + ["metric_value", "sample_count"]
-        )
+        return pd.DataFrame(columns=[*dimensions, "metric_value", "sample_count"])
     groups: dict[tuple, list[tuple[float, float]]] = {}
     soft_weight_dicts = trades.get("regime_soft_weights")
     has_soft = soft_weighting and "regime_label" in dimensions and soft_weight_dicts is not None
-    for idx, row in trades.iterrows():
+    for _, row in trades.iterrows():
         value = row.get(metric)
         if value is None or (isinstance(value, float) and math.isnan(value)):
             continue
@@ -824,9 +786,7 @@ def _group_aggregate(
                 # Fall back to hard label with weight 1.0.
                 sw = {str(row.get("regime_label", "unknown")): 1.0}
             for label, weight in sw.items():
-                key = tuple(
-                    label if dim == "regime_label" else row.get(dim) for dim in dimensions
-                )
+                key = tuple(label if dim == "regime_label" else row.get(dim) for dim in dimensions)
                 groups.setdefault(key, []).append((float(value), float(weight)))
         else:
             key = tuple(row.get(dim) for dim in dimensions)
@@ -846,15 +806,11 @@ def _group_aggregate(
         # sample_count is the number of trade contributions to the bucket,
         # rounded down on soft-weighted aggregates so partial weights do
         # not inflate counts.
-        out["sample_count"] = int(
-            sum(weights) if not all(w == 1.0 for w in weights) else len(values)
-        )
+        out["sample_count"] = int(sum(weights) if not all(w == 1.0 for w in weights) else len(values))
         rows.append(out)
     df = pd.DataFrame(rows)
     if df.empty:
-        return pd.DataFrame(
-            columns=list(dimensions) + ["metric_value", "sample_count"]
-        )
+        return pd.DataFrame(columns=[*dimensions, "metric_value", "sample_count"])
     return df
 
 
@@ -891,27 +847,21 @@ def aggregate_tca_by_regime(
     ``metric_name``, ``metric_value``, ``sample_count``.
     """
     if trades is None or len(trades) == 0:
-        out_cols = list(dimensions) + ["metric_name", "metric_value", "sample_count"]
+        out_cols = [*dimensions, "metric_name", "metric_value", "sample_count"]
         return pd.DataFrame(columns=out_cols)
 
     invalid_dims = [d for d in dimensions if d not in DIMENSION_COLUMNS]
     if invalid_dims:
         raise ValueError(
-            f"aggregate_tca_by_regime: invalid dimensions {invalid_dims!r}; "
-            f"valid set is {DIMENSION_COLUMNS!r}"
+            f"aggregate_tca_by_regime: invalid dimensions {invalid_dims!r}; valid set is {DIMENSION_COLUMNS!r}"
         )
     invalid_metrics = [m for m in metrics_names if m not in TCA_METRICS]
     if invalid_metrics:
-        raise ValueError(
-            f"aggregate_tca_by_regime: invalid metrics {invalid_metrics!r}; "
-            f"valid set is {TCA_METRICS!r}"
-        )
+        raise ValueError(f"aggregate_tca_by_regime: invalid metrics {invalid_metrics!r}; valid set is {TCA_METRICS!r}")
 
     parts: list[pd.DataFrame] = []
     for metric in metrics_names:
-        cleaned, _ = _drop_nan_rows(
-            trades, metric=metric, dimensions=dimensions
-        )
+        cleaned, _ = _drop_nan_rows(trades, metric=metric, dimensions=dimensions)
         if cleaned.empty:
             continue
         agg = _group_aggregate(
@@ -925,11 +875,10 @@ def aggregate_tca_by_regime(
         agg["metric_name"] = metric
         parts.append(agg)
     if not parts:
-        out_cols = list(dimensions) + ["metric_name", "metric_value", "sample_count"]
+        out_cols = [*dimensions, "metric_name", "metric_value", "sample_count"]
         return pd.DataFrame(columns=out_cols)
     out = pd.concat(parts, ignore_index=True)
-    # Re-order columns for downstream readability.
-    final_cols = list(dimensions) + ["metric_name", "metric_value", "sample_count"]
+    final_cols = [*dimensions, "metric_name", "metric_value", "sample_count"]
     return out.reindex(columns=final_cols)
 
 
@@ -1008,9 +957,7 @@ def _row_to_segment(row: pd.Series) -> TcaRegimeSegment:
         metric_value=float(row["metric_value"]),
         sample_count=int(row["sample_count"]),
         model_run_id=str(row["model_run_id"]),
-        metadata_json=(
-            str(row.get("metadata_json")) if row.get("metadata_json") is not None else "{}"
-        ),
+        metadata_json=(str(row.get("metadata_json")) if row.get("metadata_json") is not None else "{}"),
     )
 
 
@@ -1107,26 +1054,18 @@ def _build_trades_frame_from_outcomes(
     if outcomes is None or outcomes.empty:
         return pd.DataFrame()
     outcomes = outcomes.copy()
-    outcomes["observed_at_ts"] = pd.to_datetime(
-        outcomes["observed_at"], utc=True, errors="coerce"
-    )
-    outcomes["decision_ts"] = pd.to_datetime(
-        outcomes["decision_timestamp"], utc=True, errors="coerce"
-    )
+    outcomes["observed_at_ts"] = pd.to_datetime(outcomes["observed_at"], utc=True, errors="coerce")
+    outcomes["decision_ts"] = pd.to_datetime(outcomes["decision_timestamp"], utc=True, errors="coerce")
     day = _coerce_utc(date).normalize()
     day_end = day + pd.Timedelta(days=1)
-    outcomes = outcomes.loc[
-        (outcomes["decision_ts"] >= day) & (outcomes["decision_ts"] < day_end)
-    ]
+    outcomes = outcomes.loc[(outcomes["decision_ts"] >= day) & (outcomes["decision_ts"] < day_end)]
     if outcomes.empty:
         return pd.DataFrame()
 
     predictions = warehouse.read_execution_confidence_predictions()
     if predictions is None or predictions.empty:
         return pd.DataFrame()
-    pred_by_request: dict[str, pd.Series] = {
-        str(row["request_id"]): row for _, row in predictions.iterrows()
-    }
+    pred_by_request: dict[str, pd.Series] = {str(row["request_id"]): row for _, row in predictions.iterrows()}
 
     trade_rows: list[dict[str, Any]] = []
     for _, outcome_row in outcomes.iterrows():
@@ -1155,13 +1094,10 @@ def _build_trades_frame_from_outcomes(
         )
         tagged = tag_trade_with_regime_context(trade, warehouse=warehouse)
         try:
-            tca = compute_tca_metrics_for_outcome(
-                request, response, outcome_dict, warehouse=warehouse
-            )
+            tca = compute_tca_metrics_for_outcome(request, response, outcome_dict, warehouse=warehouse)
         except PitViolationError:
             log.warning(
-                "materialize_tca_segments_for_day: dropping request_id=%s due to "
-                "outcome-observation-lag violation",
+                "materialize_tca_segments_for_day: dropping request_id=%s due to outcome-observation-lag violation",
                 request_id,
             )
             continue
@@ -1188,9 +1124,7 @@ def _outcome_row_to_dict(row: pd.Series) -> dict[str, Any]:
     """Materialise an ``execution_outcomes`` row plus its metadata blob."""
     metadata_json = row.get("metadata_json")
     metadata: dict[str, Any] = {}
-    if metadata_json is not None and not (
-        isinstance(metadata_json, float) and math.isnan(metadata_json)
-    ):
+    if metadata_json is not None and not (isinstance(metadata_json, float) and math.isnan(metadata_json)):
         try:
             metadata = json.loads(str(metadata_json))
         except json.JSONDecodeError:
@@ -1202,8 +1136,10 @@ def _outcome_row_to_dict(row: pd.Series) -> dict[str, Any]:
         "filled_quantity",
         "decision_timestamp",
     ):
-        if col in row.index and row.get(col) is not None and not (
-            isinstance(row.get(col), float) and math.isnan(row.get(col))
+        if (
+            col in row.index
+            and row.get(col) is not None
+            and not (isinstance(row.get(col), float) and math.isnan(row.get(col)))
         ):
             out[col] = row.get(col)
     # ``arrival_price`` etc. ride in the metadata blob; surface them at
@@ -1214,9 +1150,7 @@ def _outcome_row_to_dict(row: pd.Series) -> dict[str, Any]:
 def _reconstruct_request_from_prediction(row: pd.Series) -> ExecutionConfidenceRequest:
     metadata_json = row.get("metadata_json")
     metadata: dict[str, Any] = {}
-    if metadata_json is not None and not (
-        isinstance(metadata_json, float) and math.isnan(metadata_json)
-    ):
+    if metadata_json is not None and not (isinstance(metadata_json, float) and math.isnan(metadata_json)):
         try:
             metadata = json.loads(str(metadata_json))
         except json.JSONDecodeError:
@@ -1246,9 +1180,7 @@ def _reconstruct_response_from_prediction(row: pd.Series) -> ExecutionConfidence
         notional=float(row["notional"]),
         protocol=str(row["protocol"]),
         confidence_score=float(row["confidence_score"]),
-        expected_slippage_bps=(
-            float(expected_slippage) if expected_slippage is not None else None
-        ),
+        expected_slippage_bps=(float(expected_slippage) if expected_slippage is not None else None),
         confidence_interval_low=None,
         confidence_interval_high=None,
         recommended_action=str(row.get("recommended_action") or ""),
@@ -1265,7 +1197,7 @@ def materialize_tca_segments_for_day(
     *,
     date: pd.Timestamp,
     soft_weighting: bool = False,
-    use_hysteresis: bool = True,  # noqa: ARG001  threaded for API compatibility
+    use_hysteresis: bool = True,
     model_run_id: str | None = None,
 ) -> int:
     """Materialise tca_regime_segments rows for the given date.
@@ -1282,9 +1214,7 @@ def materialize_tca_segments_for_day(
         return 0
     timestamp_utc = _coerce_utc(date)
     resolved_run_id = (
-        model_run_id
-        if model_run_id and model_run_id.strip()
-        else f"tca_segmentation-{uuid.uuid4().hex[:12]}"
+        model_run_id if model_run_id and model_run_id.strip() else f"tca_segmentation-{uuid.uuid4().hex[:12]}"
     )
     rows_written = 0
     for dim_combo in _dimension_combinations():
@@ -1300,24 +1230,16 @@ def materialize_tca_segments_for_day(
             segment = TcaRegimeSegment(
                 timestamp=timestamp_utc,
                 regime_label=agg_row.get("regime_label") if "regime_label" in dim_combo else None,
-                liquidity_label=(
-                    agg_row.get("liquidity_label") if "liquidity_label" in dim_combo else None
-                ),
+                liquidity_label=(agg_row.get("liquidity_label") if "liquidity_label" in dim_combo else None),
                 execution_confidence_bucket=(
-                    agg_row.get("execution_confidence_bucket")
-                    if "execution_confidence_bucket" in dim_combo
-                    else None
+                    agg_row.get("execution_confidence_bucket") if "execution_confidence_bucket" in dim_combo else None
                 ),
                 protocol=agg_row.get("protocol") if "protocol" in dim_combo else None,
                 side=agg_row.get("side") if "side" in dim_combo else None,
                 sector=agg_row.get("sector") if "sector" in dim_combo else None,
                 rating=agg_row.get("rating") if "rating" in dim_combo else None,
-                maturity_bucket=(
-                    agg_row.get("maturity_bucket") if "maturity_bucket" in dim_combo else None
-                ),
-                notional_bucket=(
-                    agg_row.get("notional_bucket") if "notional_bucket" in dim_combo else None
-                ),
+                maturity_bucket=(agg_row.get("maturity_bucket") if "maturity_bucket" in dim_combo else None),
+                notional_bucket=(agg_row.get("notional_bucket") if "notional_bucket" in dim_combo else None),
                 metric_name=str(agg_row["metric_name"]),
                 metric_value=float(agg_row["metric_value"]),
                 sample_count=int(agg_row["sample_count"]),

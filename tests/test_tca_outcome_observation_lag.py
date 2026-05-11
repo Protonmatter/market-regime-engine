@@ -70,7 +70,10 @@ def test_write_execution_outcome_rejects_same_timestamp(tmp_path: Path) -> None:
             }
         ]
     )
-    with pytest.raises(ValueError, match="strictly greater|strict|must be strictly|observed_at > decision_timestamp"):
+    with pytest.raises(
+        ValueError,
+        match=r"strictly greater|strict|must be strictly|observed_at > decision_timestamp",
+    ):
         wh.write_execution_outcome(df)
 
 
@@ -138,9 +141,7 @@ def test_compute_tca_metrics_rejects_outcome_before_decision() -> None:
         "execution_price": 100.0,
     }
     with pytest.raises(PitViolationError):
-        compute_tca_metrics_for_outcome(
-            request, response, outcome, warehouse=None
-        )
+        compute_tca_metrics_for_outcome(request, response, outcome, warehouse=None)
 
 
 def test_assert_outcome_after_decision_returns_utc_normalised() -> None:

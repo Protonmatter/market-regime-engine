@@ -149,9 +149,7 @@ def test_get_tca_regime_segments_latest_returns_200(client_seeded) -> None:
 
 def test_get_tca_regime_segments_latest_filters_by_dimensions(client_seeded) -> None:
     testclient, _ = client_seeded
-    resp = testclient.get(
-        "/v1/tca/regime-segments/latest?dimensions=regime_label,liquidity_label"
-    )
+    resp = testclient.get("/v1/tca/regime-segments/latest?dimensions=regime_label,liquidity_label")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     # Only the (regime_label, liquidity_label) rows qualify.
@@ -171,9 +169,7 @@ def test_get_tca_regime_segments_latest_rejects_invalid_dimension(
     client_seeded,
 ) -> None:
     testclient, _ = client_seeded
-    resp = testclient.get(
-        "/v1/tca/regime-segments/latest?dimensions=bogus_dim"
-    )
+    resp = testclient.get("/v1/tca/regime-segments/latest?dimensions=bogus_dim")
     assert resp.status_code == 400, resp.text
     body = resp.json()
     assert "bogus_dim" in str(body)

@@ -41,8 +41,8 @@ from decimal import (
 )
 
 __all__ = [
-    "TCA_PRECISION_CONTEXT",
     "BPS_SCALE",
+    "TCA_PRECISION_CONTEXT",
     "bps_aggregate_sum",
     "bps_arithmetic_mean",
     "decimal_to_float_for_report",
@@ -131,8 +131,7 @@ def bps_arithmetic_mean(
             return total / Decimal(len(values))
     if len(weights) != len(values):
         raise ValueError(
-            f"bps_arithmetic_mean: weights length ({len(weights)}) does "
-            f"not match values length ({len(values)})"
+            f"bps_arithmetic_mean: weights length ({len(weights)}) does not match values length ({len(values)})"
         )
     with with_tca_context():
         weighted_sum = sum(
