@@ -101,9 +101,12 @@ def validate_execution_confidence_response(resp: ExecutionConfidenceResponse) ->
     prob_violation = _check_probability(resp.confidence_score)
     if prob_violation is not None:
         violations.append(prob_violation)
-    if resp.confidence_interval_low is not None and resp.confidence_interval_high is not None:
-        if resp.confidence_interval_low > resp.confidence_interval_high:
-            violations.append("ci_low_above_high")
+    if (
+        resp.confidence_interval_low is not None
+        and resp.confidence_interval_high is not None
+        and resp.confidence_interval_low > resp.confidence_interval_high
+    ):
+        violations.append("ci_low_above_high")
     if not resp.release_gate and not resp.human_review_required:
         violations.append("release_gate_false_but_human_review_not_required")
     violations.extend(_check_governance_fields(resp.model_run_id, resp.artifact_hash))

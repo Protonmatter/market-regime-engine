@@ -47,7 +47,7 @@ def test_daily_grid_generates_business_day_count(vintage_frame: pd.DataFrame) ->
 def test_intraday_15min_grid_works(vintage_frame: pd.DataFrame) -> None:
     """``freq="15min"`` produces a high-resolution grid, time component preserved."""
     grid = _resolve_asof_grid(vintage_frame, min_history_months=0, freq="15min")
-    # 91 days × 96 quarter-hours/day = 8736; the first 15min slot is 00:00,
+    # 91 days x 96 quarter-hours/day = 8736; the first 15min slot is 00:00,
     # so the grid endpoints are 2024-01-01 00:00 and 2024-03-31 00:00.
     assert len(grid) == 8641
     assert grid[0] == pd.Timestamp("2024-01-01 00:00:00")
@@ -73,6 +73,8 @@ def test_cadence_enum_round_trip() -> None:
 
 
 def test_empty_vintage_returns_empty_grid() -> None:
-    df = pd.DataFrame({"vintage_date": pd.Series(dtype="datetime64[ns]"), "observation_date": pd.Series(dtype="datetime64[ns]")})
+    df = pd.DataFrame(
+        {"vintage_date": pd.Series(dtype="datetime64[ns]"), "observation_date": pd.Series(dtype="datetime64[ns]")}
+    )
     assert _resolve_asof_grid(df, min_history_months=0) == []
     assert _resolve_asof_grid(df, min_history_months=0, freq="D") == []
