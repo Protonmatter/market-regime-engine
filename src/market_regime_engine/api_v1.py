@@ -363,15 +363,46 @@ def _mount_fixed_income_router() -> None:
 
     The router from PR-1 was deliberately not mounted while every
     handler still returned ``501 not_yet_implemented``. PR-3 ships
-    the first real handler (``GET /v1/regime_index/latest``); the
-    other 5 endpoints remain 501 stubs until their respective PRs.
-    Mounted via factory + late import so the FI subpackage is not
-    eagerly loaded when an operator only needs the macro routes.
+    the first real handler (``GET /v1/regime_index/latest``); PR-4
+    lights up the liquidity endpoints; PR-5 lights up the
+    ``POST /v1/execution_confidence`` endpoint with slowapi rate
+    limiting + 32 KB body cap. Mounted via factory + late import so
+    the FI subpackage is not eagerly loaded when an operator only
+    needs the macro routes.
     """
     try:
-        from market_regime_engine.fixed_income.api import build_router as _fi_build_router
+        from market_regime_engine.fixed_income.api import (
+            _build_rate_limiter,
+            build_router as _fi_build_router,
+        )
 
-        app.include_router(_fi_build_router())
+        limiter = _build_rate_limiter()
+        if limiter is not None:
+            # slowapi requires the limiter to be attached to ``app.state``
+            # and its ``RateLimitExceeded`` exception handler to be
+            # registered before the routes use it. PR-5 also enforces the
+            # ``Retry-After: 1`` header per the plan spec.
+            try:
+                from fastapi import Request as _RLRequest
+                from fastapi.responses import JSONResponse as _RLJSONResponse
+                from slowapi.errors import RateLimitExceeded  # type: ignore[import-not-found]
+
+                app.state.limiter = limiter
+
+                async def _rate_limit_handler(
+                    request: _RLRequest, exc: RateLimitExceeded
+                ) -> _RLJSONResponse:
+                    return _RLJSONResponse(
+                        {"detail": f"rate limit exceeded: {exc.detail}"},
+                        status_code=429,
+                        headers={"Retry-After": "1"},
+                    )
+
+                app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+            except Exception as exc:  # pragma: no cover - defensive
+                log.warning("slowapi exception handler setup failed: %s", exc)
+                limiter = None
+        app.include_router(_fi_build_router(limiter=limiter))
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("could not mount fixed_income router: %s", exc)
 
