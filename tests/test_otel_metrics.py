@@ -66,9 +66,7 @@ def test_fi_counters_registered_at_module_load() -> None:
     snapshot = fi_metric_snapshot()
     counter_bases = {key.split("{", 1)[0] for key in snapshot["counters"]}
     histogram_bases = {key.split("{", 1)[0] for key in snapshot["histograms"]}
-    assert set(FI_COUNTER_NAMES) <= counter_bases, (
-        f"missing counters: {set(FI_COUNTER_NAMES) - counter_bases}"
-    )
+    assert set(FI_COUNTER_NAMES) <= counter_bases, f"missing counters: {set(FI_COUNTER_NAMES) - counter_bases}"
     assert set(FI_HISTOGRAM_NAMES) <= histogram_bases, (
         f"missing histograms: {set(FI_HISTOGRAM_NAMES) - histogram_bases}"
     )
@@ -77,9 +75,7 @@ def test_fi_counters_registered_at_module_load() -> None:
 def test_observability_legacy_api_still_works_when_otel_disabled() -> None:
     """``incr`` / ``record_histogram`` always update the legacy registry."""
     observability.configure_otel(enabled=False)
-    before = observability.metrics().snapshot()["counters"].get(
-        "test_legacy_counter", 0.0
-    )
+    before = observability.metrics().snapshot()["counters"].get("test_legacy_counter", 0.0)
     observability.incr("test_legacy_counter", 1.0, source="test")
     after = observability.metrics().snapshot()["counters"]
     # Counter is keyed with labels; find the one that has source=test.

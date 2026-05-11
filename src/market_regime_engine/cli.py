@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 from datetime import UTC
@@ -1099,18 +1100,14 @@ def verify_run_cmd(args: argparse.Namespace) -> None:
         # v1.5 PR-7 §G: surface the FI evidence-pack verification trio
         # alongside the macro report so a single command checks both
         # governance layers.
-        try:
+        with contextlib.suppress(Exception):
             import market_regime_engine.fixed_income  # noqa: F401  - register schema
-        except Exception:
-            pass
         try:
             fi_report = _verify_fi_evidence_pack(db, str(run_row["run_id"]))
         except Exception as exc:
             fi_report = {"fi_error": str(exc)}
         report = {**report, **fi_report}
-        if not bool(fi_report.get("fi_hmac_verified", True)) and fi_report.get(
-            "fi_evidence_pack_present"
-        ):
+        if not bool(fi_report.get("fi_hmac_verified", True)) and fi_report.get("fi_evidence_pack_present"):
             report["approved"] = False
         log.info("verify_run", extra=report)
         print(json.dumps(report, indent=2, sort_keys=True, default=str))

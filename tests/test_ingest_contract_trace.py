@@ -123,7 +123,5 @@ def test_trace_contract_rejects_notional_out_of_bounds(tmp_path: Path) -> None:
 
 def test_trace_contract_required_and_optional_columns() -> None:
     """The exported contract must list the AGENT.md PR-7 §K columns."""
-    assert {"timestamp", "cusip", "price", "size", "side", "trade_id"} <= set(
-        TRACE_CONTRACT.required_columns
-    )
+    assert {"timestamp", "cusip", "price", "size", "side", "trade_id"} <= set(TRACE_CONTRACT.required_columns)
     assert {"yield_pct"} <= set(TRACE_CONTRACT.optional_columns)

@@ -28,9 +28,9 @@ import market_regime_engine.fixed_income  # noqa: F401  - register FI tables
 from market_regime_engine.fixed_income.cli import run as fi_cli_run
 from market_regime_engine.fixed_income.evidence_pack import (
     build_evidence_pack,
+    read_evidence_pack,
     verify_pack,
     write_evidence_pack,
-    read_evidence_pack,
 )
 from market_regime_engine.storage import Warehouse
 
@@ -72,9 +72,7 @@ def _persist_signed_pack(
     return write_evidence_pack(warehouse, pack, request_id=request_id, sign=True)
 
 
-def test_fi_evidence_resign_updates_all_matching_packs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_fi_evidence_resign_updates_all_matching_packs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "resign.duckdb"
     keys_v1_only = json.dumps({"v1": _b64()})
     monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", keys_v1_only)
@@ -159,9 +157,7 @@ def test_fi_evidence_resign_dry_run_no_changes(
         wh2.close()
 
 
-def test_fi_evidence_resign_skips_unsigned_packs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_fi_evidence_resign_skips_unsigned_packs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "resign-unsigned.duckdb"
     monkeypatch.delenv("MRE_FI_HMAC_KEY_VERSIONS", raising=False)
     wh = Warehouse(str(db_path))

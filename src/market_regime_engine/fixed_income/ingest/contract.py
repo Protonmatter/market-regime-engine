@@ -112,7 +112,7 @@ class IngestContract:
         """
         if df is None:
             df = pd.DataFrame()
-        rows_in = int(len(df))
+        rows_in = len(df)
         errors: list[str] = []
         warnings: list[str] = []
         dropped_count = 0
@@ -147,15 +147,9 @@ class IngestContract:
             warnings.append(msg)
 
         # Timestamp monotonicity check (against the entire frame).
-        if (
-            self.timestamp_monotonic
-            and self.timestamp_column in df.columns
-            and rows_in > 1
-        ):
+        if self.timestamp_monotonic and self.timestamp_column in df.columns and rows_in > 1:
             ts = pd.to_datetime(df[self.timestamp_column], errors="coerce")
-            if ts.is_monotonic_increasing is False and (
-                ts.dropna().diff().dropna() < pd.Timedelta(0)
-            ).any():
+            if ts.is_monotonic_increasing is False and (ts.dropna().diff().dropna() < pd.Timedelta(0)).any():
                 errors.append("timestamp column is not monotonic non-decreasing")
                 return df.iloc[0:0], IngestReport(
                     passed=False,
@@ -176,9 +170,7 @@ class IngestContract:
             col_mask = df[column].map(validator).astype(bool)
             invalid = (~col_mask).sum()
             if invalid:
-                warnings.append(
-                    f"column {column!r}: {int(invalid)} rows failed validator"
-                )
+                warnings.append(f"column {column!r}: {int(invalid)} rows failed validator")
             mask &= col_mask
 
         # Notional bounds (drop offending rows).
@@ -187,9 +179,7 @@ class IngestContract:
             within = (df["notional"] >= float(lo)) & (df["notional"] <= float(hi))
             invalid = (~within).sum()
             if invalid:
-                warnings.append(
-                    f"notional out of bounds [{lo}, {hi}]: {int(invalid)} rows dropped"
-                )
+                warnings.append(f"notional out of bounds [{lo}, {hi}]: {int(invalid)} rows dropped")
             mask &= within
 
         out_df = df[mask].copy()
@@ -200,7 +190,7 @@ class IngestContract:
             warnings=tuple(warnings),
             dropped_count=dropped_count,
             rows_in=rows_in,
-            rows_out=int(len(out_df)),
+            rows_out=len(out_df),
             vendor_name=self.vendor_name,
         )
         return out_df, report
@@ -224,8 +214,7 @@ class IngestContract:
         if not unknown:
             return
         msg = (
-            f"vendor={self.vendor_name!r}: unknown columns {sorted(unknown)!r} "
-            f"(known: {sorted(self.known_columns)!r})"
+            f"vendor={self.vendor_name!r}: unknown columns {sorted(unknown)!r} (known: {sorted(self.known_columns)!r})"
         )
         if level == "warn":
             log.warning("%s", msg)

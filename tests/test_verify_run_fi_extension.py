@@ -9,16 +9,11 @@ exits non-zero.
 
 from __future__ import annotations
 
-import argparse
 import base64
-import dataclasses
-import io
 import json
 import secrets
-from contextlib import redirect_stdout
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 import market_regime_engine.fixed_income  # noqa: F401  - register FI tables
@@ -85,9 +80,7 @@ def test_verify_run_includes_fi_evidence_pack_verification_when_present(
     assert report["fi_release_gate"] is True
 
 
-def test_verify_run_passes_when_pack_verifies(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_verify_run_passes_when_pack_verifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": _b64()}))
     db_path = tmp_path / "vr-fi-pass.duckdb"
     wh = Warehouse(str(db_path))
@@ -100,9 +93,7 @@ def test_verify_run_passes_when_pack_verifies(
     assert report["fi_hmac_verified"] is True
 
 
-def test_verify_run_fails_when_pack_tampered(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_verify_run_fails_when_pack_tampered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A tampered pack must fail HMAC verification.
 
     We simulate tampering by overwriting the ``output_hash`` column
@@ -117,9 +108,7 @@ def test_verify_run_fails_when_pack_tampered(
         _persist_pack(wh, model_run_id="run-vr-tamper", request_id="req-t", sign=True)
         # Tamper: rewrite the output_hash on the persisted row.
         df = wh.read_evidence_packs()
-        df.loc[df["model_run_id"] == "run-vr-tamper", "output_hash"] = (
-            "sha256:tampered"
-        )
+        df.loc[df["model_run_id"] == "run-vr-tamper", "output_hash"] = "sha256:tampered"
         # Re-write the tampered row (composite PK ON CONFLICT replaces).
         wh.write_evidence_pack(df)
         report = _verify_fi_evidence_pack(wh, "run-vr-tamper")
