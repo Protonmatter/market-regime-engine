@@ -17,7 +17,7 @@ the work ships in 7 sequential PRs on top of `v1.4.1`:
 | PR-4 | Liquidity stress model | shipped |
 | PR-5 | Execution confidence | shipped |
 | PR-6 | TCA segmentation | shipped |
-| PR-7 | Evidence-pack hardening + report | pending |
+| PR-7 | Evidence-pack hardening + report + final polish + v1.5.0 tag | shipped |
 
 ## PR-1 surface (already shipped)
 
@@ -853,3 +853,293 @@ after import returns the family with a zero baseline rather than 404.
 - Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md` §6.4
 - Review thread: §3.4 Q-2 (outcome observation lag) / Q-6 (Decimal precision); §3.6 PR-10 / PR-11
 - Deep-research report: §4 (Regime-Aware TCA Segmentation)
+
+## PR-7 surface (this release — v1.5.0 final)
+
+PR-7 closes out the v1.5 release by hardening the evidence-pack
+governance rails, shipping the FI report writer, migrating
+observability to OpenTelemetry, and threading the cross-cutting
+polish (correlation IDs, signal_age in every response, versioned
+cache keys, ingest contracts, model-registry integration, Streamlit
+FI tab, verify-run FI extension, DuckDB writer detector). The
+`v1.5.0` tag is cut at the end of PR-7.
+
+### Architecture (FI lane)
+
+```
+                 (vendor feeds)
+                       │
+                       ▼
+            IngestContract.validate           (TRACE / MarketAxess RFQ
+                       │                       — schema-drift + bounds)
+                       ▼
+              Warehouse.write_*               (DuckDB — 13 FI tables)
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+ score_credit   score_liquidity  score_execution
+   _regime         _stress       _confidence
+        │              │              │
+        ▼              ▼              ▼
+  credit_regime   liquidity_   execution_
+    _scores        stress_      confidence_
+                   scores       predictions
+        │              │              │
+        └──────────────┼──────────────┘
+                       ▼
+            tag_trade_with_regime_context
+                       │
+                       ▼
+                tca_regime_segments
+                       │
+                       ▼
+            build_evidence_pack →
+            sign_pack (HMAC-SHA-256) →
+            write_evidence_pack
+                       │
+                       ▼
+             fixed_income_evidence_packs
+                       │
+                       ▼
+                  GET /v1/evidence-pack/{id}
+                  mre verify-run --model-run-id <id>
+                  mre fi-report
+```
+
+### HMAC sign / verify (§A)
+
+The evidence-pack module gains the v1.5 governance non-negotiable:
+every production-published pack carries `hmac_signature` of the
+canonical bytestream (excluding the signature field itself).
+
+**Public surface**:
+
+- `get_hmac_keys() -> dict[str, bytes]` — parse
+  `MRE_FI_HMAC_KEY_VERSIONS` (JSON `{"v1": "<base64>", ...}`) or the
+  singleton `MRE_FI_HMAC_KEY` (registered as `v1`).
+- `latest_hmac_version() -> str | None` — lexicographic max of the
+  configured versions.
+- `sign_pack(pack, *, key_version=None) -> FixedIncomeEvidencePack`
+  signs and returns a new pack with `hmac_signature = "v<ver>:<hex>"`.
+- `verify_pack(pack) -> bool` — parses the version prefix, recomputes
+  the HMAC, and compares with `hmac.compare_digest` (constant-time).
+- `require_production_hmac() -> bool` — `True` when `MRE_ENV=production`
+  or `MRE_FI_REQUIRE_HMAC=1`.
+- `capture_data_vintages(warehouse, *, asof=None) -> dict[str, str]`
+  — per-source latest vintage timestamps (review §4.3 data lineage).
+- `write_evidence_pack(warehouse, pack, *, request_id, sign=None)` —
+  persists the pack with optional sign-on-write; refuses to write
+  unsigned in production mode.
+- `read_evidence_pack(warehouse, *, model_run_id, request_id=None)` —
+  round-trips a row to `FixedIncomeEvidencePack`.
+
+**Behaviour**:
+
+- Dev mode + no keys → pass-through unsigned (`hmac_signature=None`).
+- Production mode + no keys → `RuntimeError`.
+- Tampering with any byte of the canonical JSON fails verification.
+
+See `docs/V1_5_HMAC_OPERATIONS.md` for the on-call playbook.
+
+### `mre fi-evidence-pack` CLI (§B)
+
+```
+mre fi-evidence-pack --db <path> --model-run-id <id> \
+                      --component credit_regime|liquidity_stress|execution_confidence|tca_segmentation|other \
+                      [--request-id <id>] \
+                      [--sign auto|true|false] \
+                      [--output-json <path>]
+```
+
+Resolves the component output row, captures vintages, builds the
+pack, signs (when keys configured / forced), persists, and prints
+the JSON. Production-mode without keys exits `3` with
+`governance=production_requires_hmac` so the on-call signal is
+distinct from generic errors.
+
+### `GET /v1/evidence-pack/{model_run_id}` (§D)
+
+- 200 with the full `FixedIncomeEvidencePack` JSON (including
+  `hmac_signature`) for the latest pack matching `model_run_id`.
+- 404 `{"detail": "evidence_pack_not_found"}` for unknown ids.
+- 503 on warehouse read failure.
+
+### FI report (§C)
+
+```
+mre fi-report --db <path> --out <path> [--format markdown|html] [--asof <iso>]
+```
+
+`fixed_income.report.generate_fi_report(warehouse, *, asof,
+output_format)` emits a Markdown or HTML report with six sections:
+
+1. Credit regime index (latest score / label / drivers / signal age).
+2. Liquidity stress index (per-scope summary table).
+3. Execution confidence (last-N predictions vs. outcomes; filled-rate).
+4. TCA by regime (top buckets by sample count + average metric).
+5. Release-gate status (latest decision + reasons).
+6. Evidence packs (latest pack per component with HMAC version).
+
+HTML uses the optional `markdown` library; falls back to a `<pre>`
+wrapper when the dep is absent so the CLI works without extras.
+
+### `mre fi-evidence-resign` CLI (§F)
+
+```
+mre fi-evidence-resign --db <path> --from-key <ver> --to-key <ver> [--dry-run]
+```
+
+Bulk re-signs every pack signed under `--from-key` with `--to-key`.
+Skips unsigned packs and packs signed under unrelated key versions.
+Refuses to start if `--to-key` is not in
+`MRE_FI_HMAC_KEY_VERSIONS`. `--dry-run` prints the matched count
+without persisting. See `docs/V1_5_HMAC_OPERATIONS.md`.
+
+### `mre verify-run` FI extension (§G)
+
+The macro `mre verify-run --model-run-id <id>` now also reads the FI
+evidence pack matching the run id, recomputes the canonical hash,
+runs `verify_pack` (HMAC), and surfaces three new keys on the
+JSON report: `fi_evidence_pack_present`, `fi_envelope_consistent`,
+`fi_hmac_verified`. A tampered pack flips `approved=False` so the
+operator command exits non-zero.
+
+### OpenTelemetry SDK migration (§E, AF-4)
+
+`observability.configure_otel(service_name, exporter_endpoint,
+enabled)` initialises an OTel `MeterProvider` + `TracerProvider`
+with an OTLP / Console exporter. Soft-degrades to the legacy
+in-process `MetricsRegistry` when the `[observability]` extra is
+missing. New top-level `incr` / `record_histogram` / `time_block`
+emit to BOTH backends.
+
+`fixed_income/observability_ext.py` pre-registers the seven FI
+counters and four FI histograms at module load so a fresh
+deployment renders the canonical zero-baseline. Helpers:
+`incr_credit_regime_score`, `incr_liquidity_stress_score`,
+`incr_execution_confidence_request(recommended_action=...)`,
+`incr_release_gate_block(reason=...)`,
+`incr_evidence_pack_verify_fail`, `incr_tca_dropped_rows`,
+`incr_hmac_signature_failures`, plus the four `record_*_latency`
+companions.
+
+### Correlation-ID middleware (§I)
+
+`fixed_income/correlation.py::CorrelationIdMiddleware` is mounted on
+`api_v1.app` at module load. Reads `X-Request-ID` (or generates
+UUID4), threads via `contextvars`, echoes in response headers, and
+populates `request_id` on every log record via
+`CorrelationIdLogFilter`. CLI commands can opt in via
+`set_request_id(...)`.
+
+### Versioned cache key (§L, PR-8)
+
+The per-process FI cache (`_FI_CACHE`) is keyed on `(endpoint,
+warehouse_path, latest_data_timestamp)`. A fresh score in
+`credit_regime_scores` / `liquidity_stress_scores` invalidates the
+cache instantly — no TTL wait. `reset_fi_cache()` is a public test /
+operator handle.
+
+### signal_age_seconds in every FI response (§N, PR-13)
+
+`credit_regime_output_to_dict` and `liquidity_stress_output_to_dict`
+populate `metadata.signal_age_seconds`. Execution-confidence already
+exposed `signal_age_seconds_credit_regime` / `_liquidity` /
+`max_signal_age_seconds` (PR-5); PR-7 pins the contract across all
+FI endpoints so Auto-X can run a single SLA check.
+
+### Per-vendor IngestContract (§K)
+
+`fixed_income/ingest/contract.py::IngestContract` is the per-vendor
+schema-drift contract: required / optional columns, per-column
+validators, monotonic-timestamp policy, notional bounds,
+`assert_no_unknown_columns(level="warn"|"error")`. Ships with two
+vendor scaffolds:
+
+- `TRACE_CONTRACT` (6 required / 8 optional; notional bounds
+  `(0, 5e8)`; monotonic timestamps).
+- `MARKETAXESS_RFQ_CONTRACT` (9 required / 9 optional; status /
+  side validators; notional bounds; non-monotonic timestamps).
+
+`ingest_trace(warehouse, df)` and `ingest_marketaxess_rfq(...)`
+validate + bulk-load and return an `IngestReport` with
+`{passed, errors, warnings, dropped_count, rows_in, rows_out}`.
+
+### Model registry FI components (§J, F-20)
+
+`models/registry.py` registers `fi_credit_regime_baseline`,
+`fi_liquidity_stress_baseline`, `fi_execution_confidence_baseline`
+as metadata-only entries. `available_models()` / `model_cards()` /
+`get_model_class()` discover them by canonical name. `fit` /
+`predict` redirect to the live FI scorer with a
+`NotImplementedError` so production callers stay one route away
+from the deterministic baselines.
+
+### Streamlit FI dashboard tab (§H, AF-2)
+
+`fixed_income/dashboard_tab.py::render_fi_tab(fi_data)` renders the
+FI section with credit-regime ribbon, liquidity-stress heatmap,
+execution-confidence rolling fill-rate, and release-gate decision
+timeline. The macro Streamlit page renders the section
+conditionally on at least one FI table having rows.
+
+### DuckDB writer contention detector (§M, PR-7 review §3.6)
+
+`tools/check_duckdb_writers.py --db <path> [--strict]` inspects WAL /
+`.tmp` companion files and (when `psutil` is installed) processes
+holding the DB path open. Exit codes:
+- `0` no writer / WAL warning;
+- `2` concurrent writer detected;
+- `3` dependency / permission failure.
+
+### Definition of done (per INSTRUCTIONS.md §13)
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | All 13 FI warehouse tables present | ✅ |
+| 2 | All 6 FI API endpoints live | ✅ |
+| 3 | All 7 `mre fi-*` CLI commands live (PR-7 adds `fi-evidence-resign`) | ✅ |
+| 4 | Evidence pack with HMAC sign/verify | ✅ |
+| 5 | FI report writer (Markdown + HTML) | ✅ |
+| 6 | OpenTelemetry SDK migration with legacy adapters | ✅ |
+| 7 | Streamlit FI dashboard tab | ✅ |
+| 8 | Correlation-ID middleware | ✅ |
+| 9 | Per-vendor IngestContract scaffolding (TRACE + MarketAxess) | ✅ |
+| 10 | v1.5.0 tag + wheel + sdist + audit zip | ✅ |
+
+### Tests (PR-7)
+
+- `tests/test_fixed_income_evidence_pack_hmac.py` —
+  `test_evidence_pack_hmac_rejects_tampering` + 14 cases.
+- `tests/test_fixed_income_evidence_pack_data_vintages.py` — 5
+  cases.
+- `tests/test_fi_evidence_pack_cli.py` — 5 cases.
+- `tests/test_fi_evidence_pack_api_endpoint.py` — 4 cases.
+- `tests/test_fi_report.py` — 6 cases (markdown + HTML + CLI).
+- `tests/test_otel_metrics.py` — 6 cases.
+- `tests/test_correlation_id_middleware.py` — 7 cases.
+- `tests/test_streamlit_fi_tab.py` — 4 cases.
+- `tests/test_fi_evidence_resign.py` — 4 cases.
+- `tests/test_verify_run_fi_extension.py` — 4 cases.
+- `tests/test_models_registry_fi_components.py` — 5 cases.
+- `tests/test_ingest_contract_trace.py` — 7 cases.
+- `tests/test_ingest_contract_marketaxess.py` — 8 cases.
+- `tests/test_versioned_cache_key.py` — 2 cases.
+- `tests/test_signal_age_seconds_in_all_fi_responses.py` — 5 cases.
+- `tests/test_check_duckdb_writers.py` — 4 cases.
+
+### Reference (PR-7)
+
+- Plan: `.cursor/plans/fi_v1.5_implementation_plan_bcda9355.plan.md` §7 PR-7.
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_AGENT.md` "PR 7 —
+  evidence pack hardening and report" + "Hashing rules" + "Data
+  contracts".
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md`
+  §5 (`fixed_income_evidence_packs`), §6.5, §10, §13.
+- Review: §3.1 AF-4 / AF-2; §3.6 PR-7 / PR-8 / PR-9 / PR-13;
+  §4.1 / §4.2 / §4.3 / §4.4; FLAG F-20.
+- Deep-research report: §5 (Fixed-Income Evidence Pack);
+  "Governance & Model Lifecycle".
+- Operations doc: `docs/V1_5_HMAC_OPERATIONS.md`.
+- AutoX contract: `docs/V1_5_AUTOX_CONTRACT.md`.
+- Breaking changes: `docs/V1_5_BREAKING_CHANGES.md`.
