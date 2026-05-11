@@ -266,13 +266,7 @@ def build_credit_features(
         If any feature row's ``source_timestamp`` is after ``asof`` or
         falls on a closed trading day.
     """
-    asof_utc = (
-        to_utc(asof)
-        if isinstance(asof, str)
-        else pd.Timestamp(asof, tz="UTC")
-        if pd.Timestamp(asof).tzinfo is None
-        else pd.Timestamp(asof).tz_convert("UTC")
-    )
+    asof_utc = to_utc(asof) if isinstance(asof, str) else pd.Timestamp(asof, tz="UTC") if pd.Timestamp(asof).tzinfo is None else pd.Timestamp(asof).tz_convert("UTC")
     if asof_utc is None:
         raise ValueError("asof is required and must not be None")
 
@@ -436,26 +430,493 @@ def _enforce_pit_and_calendar(
 
 
 def build_liquidity_features(
+    warehouse: Any,
+    asof: pd.Timestamp | str,
     *,
-    asof: pd.Timestamp,
     scope_type: str,
     scope_id: str,
-    trace: pd.DataFrame | None = None,
-    rfq: pd.DataFrame | None = None,
-    quotes: pd.DataFrame | None = None,
-    bond_reference: pd.DataFrame | None = None,
-    config: dict[str, Any] | None = None,
+    lookback_days: int = 30,
+    nan_policy: NanPolicy = NanPolicy.NAN_FAILS_PIT_AUDIT,
+    calendar: TradingCalendar = TradingCalendar.SIFMA_BOND,
 ) -> pd.DataFrame:
-    """Build PR-4 liquidity-stress features (skeleton).
+    """Build PIT-safe liquidity-stress features from the FI warehouse.
 
-    Will return per-scope features: bid-ask, trade-count velocity,
-    time since last trade, volume / trailing ADV, RFQ dealers
-    requested, quotes received, quote dispersion, Amihud illiquidity,
-    dealer response count, axe freshness. Four scope levels:
-    ``market`` / ``sector`` / ``rating`` / ``cusip``. PR-3 keeps the
-    stub; the real implementation lands in PR-4.
+    Per ``MRE_FIXED_INCOME_AGENT.md §"PR 4"`` and ``INSTRUCTIONS.md §6.2``,
+    the eleven feature names emitted are::
+
+        bid_ask_width, trade_count_velocity, volume_over_adv,
+        time_since_last_trade, dealers_requested, quotes_received,
+        quote_dispersion, amihud_illiquidity, dealer_response_count,
+        axe_freshness_proxy, order_imbalance
+
+    Scope filtering (REVIEW.md §3.4 Q-4 survivorship-safe via
+    :func:`read_bond_reference_asof`):
+
+    * ``market`` — every cusip seen in the trade/quote/RFQ tables.
+    * ``sector`` — filter the bond reference at ``asof`` to
+      ``sector == scope_id``, then restrict trades/quotes/RFQs to the
+      surviving cusip set.
+    * ``rating`` — same shape with ``rating == scope_id``.
+    * ``cusip`` — single bond keyed by ``scope_id``.
+
+    Output: long-form DataFrame with the standard PR-3 columns
+    ``["date", "feature_name", "value", "source_timestamp",
+    "vintage_date"]``. Per-feature semantics:
+
+    * ``bid_ask_width`` — per-day median(ask) − median(bid) across
+      cusips/dealers.
+    * ``trade_count_velocity`` — count of trades per UTC date.
+    * ``volume_over_adv`` — daily volume / mean daily volume in the
+      lookback (the trailing average daily volume proxy).
+    * ``time_since_last_trade`` — minutes between ``asof`` and the
+      most recent trade in the window (one row at ``asof``).
+    * ``dealers_requested`` / ``quotes_received`` /
+      ``dealer_response_count`` — RFQ aggregates per day.
+    * ``quote_dispersion`` — per-day std of dealer quote prices
+      across (cusip, side); aggregated across cusips by mean.
+    * ``amihud_illiquidity`` — per-day |VWAP return| / daily volume.
+    * ``axe_freshness_proxy`` — seconds between ``asof`` and the
+      most recent dealer quote (one row at ``asof``).
+    * ``order_imbalance`` — per-day (buy_volume − sell_volume) /
+      total_volume.
+
+    PIT contract: every emitted row passes
+    :func:`pit_guard.assert_pit_safe`. Per-source-trading-day
+    enforcement is applied only to ``trade_count_velocity`` /
+    ``volume_over_adv`` / ``quote_dispersion`` / ``bid_ask_width``
+    (market-microstructure features that are only meaningful on open
+    trading days); the ``time_since_last_trade`` and
+    ``axe_freshness_proxy`` rows are stamped at ``asof`` so they
+    always pass the trading-day rail.
+
+    Raises
+    ------
+    PitViolationError
+        If a market-microstructure row falls on a closed trading day.
+    ValueError
+        If ``scope_type`` is not in
+        ``{"market", "sector", "rating", "cusip"}``.
     """
-    raise NotImplementedError("build_liquidity_features lands in PR-4 (liquidity stress model)")
+    if scope_type not in {"market", "sector", "rating", "cusip"}:
+        raise ValueError(
+            "scope_type must be one of {'market', 'sector', 'rating', 'cusip'}; "
+            f"got {scope_type!r}"
+        )
+
+    asof_utc = _coerce_asof_utc(asof)
+    lower = asof_utc - pd.Timedelta(days=int(lookback_days))
+
+    cusip_filter: set[str] | None = _resolve_scope_cusips(
+        warehouse, asof_utc, scope_type=scope_type, scope_id=scope_id
+    )
+
+    trades = _filter_microstructure(
+        _safe_read(warehouse, "read_trace_trades"),
+        column="timestamp",
+        lower=lower,
+        upper=asof_utc,
+        cusip_filter=cusip_filter,
+    )
+    quotes = _filter_microstructure(
+        _safe_read(warehouse, "read_dealer_quotes"),
+        column="timestamp",
+        lower=lower,
+        upper=asof_utc,
+        cusip_filter=cusip_filter,
+    )
+    rfqs = _filter_microstructure(
+        _safe_read(warehouse, "read_rfq_events"),
+        column="timestamp",
+        lower=lower,
+        upper=asof_utc,
+        cusip_filter=cusip_filter,
+    )
+
+    rows: list[dict[str, Any]] = []
+    rows.extend(_emit_bid_ask_rows(quotes))
+    rows.extend(_emit_trade_velocity_rows(trades))
+    rows.extend(_emit_volume_over_adv_rows(trades))
+    rows.extend(_emit_time_since_last_trade_rows(trades, asof=asof_utc))
+    rows.extend(_emit_rfq_rows(rfqs))
+    rows.extend(_emit_quote_dispersion_rows(quotes))
+    rows.extend(_emit_amihud_rows(trades))
+    rows.extend(_emit_axe_freshness_rows(quotes, asof=asof_utc))
+    rows.extend(_emit_order_imbalance_rows(trades))
+
+    if not rows:
+        return pd.DataFrame(columns=list(_FI_OUTPUT_COLUMNS))
+
+    frame = pd.DataFrame(rows, columns=list(_FI_OUTPUT_COLUMNS))
+    _enforce_pit_liquidity(frame, asof=asof_utc, calendar=calendar)
+    frame.attrs["nan_policy"] = nan_policy.value
+    frame.attrs["asof"] = asof_utc.isoformat()
+    frame.attrs["lookback_days"] = int(lookback_days)
+    frame.attrs["scope_type"] = scope_type
+    frame.attrs["scope_id"] = scope_id
+    return frame
+
+
+# ---------------------------------------------------------------------------
+# liquidity-feature helpers
+# ---------------------------------------------------------------------------
+
+
+# Features that *must* land on a SIFMA trading day (the market
+# microstructure feeds). ``time_since_last_trade`` and
+# ``axe_freshness_proxy`` rows are stamped at ``asof`` and skip the
+# trading-day rail (they describe the gap to the decision instant, not
+# the print clock).
+_LIQUIDITY_TRADING_DAY_FEATURES: frozenset[str] = frozenset(
+    {
+        "bid_ask_width",
+        "trade_count_velocity",
+        "volume_over_adv",
+        "quote_dispersion",
+        "amihud_illiquidity",
+        "dealers_requested",
+        "quotes_received",
+        "dealer_response_count",
+        "order_imbalance",
+    }
+)
+
+
+def _coerce_asof_utc(asof: pd.Timestamp | str) -> pd.Timestamp:
+    if isinstance(asof, str):
+        out = to_utc(asof)
+        if out is None:
+            raise ValueError("asof must not be None")
+        return out
+    ts = pd.Timestamp(asof)
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def _resolve_scope_cusips(
+    warehouse: Any,
+    asof: pd.Timestamp,
+    *,
+    scope_type: str,
+    scope_id: str,
+) -> set[str] | None:
+    """Return the cusip set to filter trades/quotes/RFQs by, or ``None`` for market scope.
+
+    Sector / rating scopes route through :func:`read_bond_reference_asof`
+    so the filter respects survivorship (defaulted / delisted cusips
+    are excluded automatically). Cusip scope returns the single
+    requested cusip wrapped in a set. Market scope returns ``None`` so
+    no filter is applied.
+    """
+    if scope_type == "market":
+        return None
+    if scope_type == "cusip":
+        if not scope_id:
+            raise ValueError("cusip scope requires a non-empty scope_id")
+        return {str(scope_id)}
+    # sector / rating: read bond reference at asof and filter the
+    # column matching the scope.
+    from market_regime_engine.storage import read_bond_reference_asof  # local import to avoid cycle
+
+    if not scope_id:
+        raise ValueError(f"{scope_type} scope requires a non-empty scope_id")
+    bond_ref = read_bond_reference_asof(warehouse, asof)
+    if bond_ref is None or bond_ref.empty or scope_type not in bond_ref.columns:
+        return set()
+    matches = bond_ref.loc[bond_ref[scope_type].astype(str) == str(scope_id), "cusip"]
+    return set(matches.astype(str).tolist())
+
+
+def _filter_microstructure(
+    frame: pd.DataFrame,
+    *,
+    column: str,
+    lower: pd.Timestamp,
+    upper: pd.Timestamp,
+    cusip_filter: set[str] | None,
+) -> pd.DataFrame:
+    """Time-window + cusip filter for a microstructure table.
+
+    The merge tolerance constant
+    :data:`DEFAULT_INTRADAY_MERGE_TOLERANCE` is referenced by downstream
+    cusip-level joins (e.g. trade↔quote slippage) which v1.5 does not
+    yet compute; the constant remains the documented contract per
+    REVIEW.md §3.4 Q-9.
+    """
+    if frame is None or frame.empty or column not in frame.columns:
+        return pd.DataFrame()
+    f = frame.copy()
+    f[column] = pd.to_datetime(f[column], utc=True, errors="coerce")
+    f = f.dropna(subset=[column])
+    f = f.loc[(f[column] > lower) & (f[column] <= upper)]
+    if cusip_filter is not None and "cusip" in f.columns:
+        if not cusip_filter:
+            return f.iloc[0:0]
+        f = f.loc[f["cusip"].astype(str).isin(cusip_filter)]
+    return f.reset_index(drop=True)
+
+
+def _floor_date(ts_series: pd.Series) -> pd.Series:
+    return pd.to_datetime(ts_series, utc=True, errors="coerce").dt.floor("D")
+
+
+def _emit_bid_ask_rows(quotes: pd.DataFrame) -> list[dict[str, Any]]:
+    if quotes.empty:
+        return []
+    q = quotes.copy()
+    q["date"] = _floor_date(q["timestamp"])
+    q = q.dropna(subset=["date"])
+    if "side" not in q.columns:
+        return []
+    bid = q.loc[q["side"].astype(str).str.lower() == "bid"].groupby(["date", "cusip"])["price"].median()
+    ask = q.loc[q["side"].astype(str).str.lower() == "ask"].groupby(["date", "cusip"])["price"].median()
+    width = (ask - bid).dropna()
+    if width.empty:
+        return []
+    daily = width.groupby(level="date").mean()
+    out: list[dict[str, Any]] = []
+    for ts, v in daily.items():
+        out.append(_emit_row(date=ts, feature_name="bid_ask_width", value=float(v), source_timestamp=ts))
+    return out
+
+
+def _emit_trade_velocity_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
+    if trades.empty:
+        return []
+    t = trades.copy()
+    t["date"] = _floor_date(t["timestamp"])
+    t = t.dropna(subset=["date"])
+    if t.empty:
+        return []
+    counts = t.groupby("date").size().astype(float)
+    return [
+        _emit_row(date=ts, feature_name="trade_count_velocity", value=float(v), source_timestamp=ts)
+        for ts, v in counts.items()
+    ]
+
+
+def _emit_volume_over_adv_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
+    if trades.empty or "size" not in trades.columns:
+        return []
+    t = trades.copy()
+    t["date"] = _floor_date(t["timestamp"])
+    t = t.dropna(subset=["date"])
+    if t.empty:
+        return []
+    daily_volume = t.groupby("date")["size"].sum().astype(float)
+    if daily_volume.empty:
+        return []
+    adv = float(daily_volume.mean())
+    if adv <= 0:
+        return []
+    return [
+        _emit_row(
+            date=ts,
+            feature_name="volume_over_adv",
+            value=float(v) / adv,
+            source_timestamp=ts,
+        )
+        for ts, v in daily_volume.items()
+    ]
+
+
+def _emit_time_since_last_trade_rows(
+    trades: pd.DataFrame, *, asof: pd.Timestamp
+) -> list[dict[str, Any]]:
+    """Emit one row at ``asof`` carrying minutes since the most recent trade.
+
+    The scorer's ``_latest`` reads only the final non-NaN value, so a
+    single ``asof``-stamped row is the cleanest representation.
+    """
+    if trades.empty or "timestamp" not in trades.columns:
+        return []
+    t = trades.copy()
+    t["timestamp"] = pd.to_datetime(t["timestamp"], utc=True, errors="coerce")
+    t = t.dropna(subset=["timestamp"])
+    if t.empty:
+        return []
+    last_ts = t["timestamp"].max()
+    delta = asof - last_ts
+    minutes = max(0.0, float(delta.total_seconds()) / 60.0)
+    return [
+        _emit_row(
+            date=asof,
+            feature_name="time_since_last_trade",
+            value=minutes,
+            source_timestamp=asof,
+        )
+    ]
+
+
+def _emit_rfq_rows(rfqs: pd.DataFrame) -> list[dict[str, Any]]:
+    if rfqs.empty:
+        return []
+    r = rfqs.copy()
+    r["date"] = _floor_date(r["timestamp"])
+    r = r.dropna(subset=["date"])
+    if r.empty:
+        return []
+    out: list[dict[str, Any]] = []
+    if "dealers_requested" in r.columns:
+        daily_req = r.groupby("date")["dealers_requested"].sum().astype(float)
+        for ts, v in daily_req.items():
+            out.append(
+                _emit_row(date=ts, feature_name="dealers_requested", value=float(v), source_timestamp=ts)
+            )
+    if "dealers_responded" in r.columns:
+        daily_resp = r.groupby("date")["dealers_responded"].sum().astype(float)
+        for ts, v in daily_resp.items():
+            out.append(
+                _emit_row(date=ts, feature_name="quotes_received", value=float(v), source_timestamp=ts)
+            )
+            out.append(
+                _emit_row(
+                    date=ts,
+                    feature_name="dealer_response_count",
+                    value=float(v),
+                    source_timestamp=ts,
+                )
+            )
+    return out
+
+
+def _emit_quote_dispersion_rows(quotes: pd.DataFrame) -> list[dict[str, Any]]:
+    if quotes.empty or "price" not in quotes.columns:
+        return []
+    q = quotes.copy()
+    q["date"] = _floor_date(q["timestamp"])
+    q = q.dropna(subset=["date"])
+    if q.empty:
+        return []
+    std = q.groupby(["date", "cusip"])["price"].std(ddof=0)
+    daily = std.groupby(level="date").mean().dropna()
+    return [
+        _emit_row(date=ts, feature_name="quote_dispersion", value=float(v), source_timestamp=ts)
+        for ts, v in daily.items()
+    ]
+
+
+def _emit_amihud_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
+    """Amihud (2002) illiquidity ratio: ``|return| / volume`` per day.
+
+    Volume-weighted average price (VWAP) is computed per day across
+    all surviving cusips in the scope; the day-over-day VWAP return
+    is divided by daily volume. Tiny denominators are squashed to
+    ``NaN`` rather than producing a near-infinite stress signal.
+    """
+    if trades.empty or "size" not in trades.columns:
+        return []
+    t = trades.copy()
+    t["timestamp"] = pd.to_datetime(t["timestamp"], utc=True, errors="coerce")
+    t = t.dropna(subset=["timestamp"])
+    if t.empty:
+        return []
+    t["date"] = t["timestamp"].dt.floor("D")
+    grouped = t.groupby("date").apply(
+        lambda g: pd.Series(
+            {
+                "vwap": (g["price"] * g["size"]).sum() / g["size"].sum()
+                if g["size"].sum() > 0
+                else float("nan"),
+                "volume": float(g["size"].sum()),
+            }
+        ),
+        include_groups=False,
+    )
+    if grouped.empty:
+        return []
+    grouped = grouped.sort_index()
+    grouped["return"] = grouped["vwap"].pct_change().abs()
+    grouped["amihud"] = (grouped["return"] / grouped["volume"]).replace(
+        [float("inf"), -float("inf")], float("nan")
+    )
+    grouped = grouped.dropna(subset=["amihud"])
+    return [
+        _emit_row(date=ts, feature_name="amihud_illiquidity", value=float(v), source_timestamp=ts)
+        for ts, v in grouped["amihud"].items()
+    ]
+
+
+def _emit_axe_freshness_rows(
+    quotes: pd.DataFrame, *, asof: pd.Timestamp
+) -> list[dict[str, Any]]:
+    """Seconds between ``asof`` and the most recent dealer quote (proxy for axe staleness)."""
+    if quotes.empty or "timestamp" not in quotes.columns:
+        return []
+    q = quotes.copy()
+    q["timestamp"] = pd.to_datetime(q["timestamp"], utc=True, errors="coerce")
+    q = q.dropna(subset=["timestamp"])
+    if q.empty:
+        return []
+    most_recent = q["timestamp"].max()
+    seconds = max(0.0, float((asof - most_recent).total_seconds()))
+    return [
+        _emit_row(
+            date=asof,
+            feature_name="axe_freshness_proxy",
+            value=seconds,
+            source_timestamp=asof,
+        )
+    ]
+
+
+def _emit_order_imbalance_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
+    """Per-day (buy_volume − sell_volume) / total_volume."""
+    if trades.empty or "size" not in trades.columns or "side" not in trades.columns:
+        return []
+    t = trades.copy()
+    t["date"] = _floor_date(t["timestamp"])
+    t = t.dropna(subset=["date"])
+    if t.empty:
+        return []
+    t["side_norm"] = t["side"].astype(str).str.lower()
+    pivot = t.groupby(["date", "side_norm"])["size"].sum().unstack(fill_value=0.0)
+    if "buy" not in pivot.columns and "sell" not in pivot.columns:
+        return []
+    buy = pivot.get("buy", 0.0)
+    sell = pivot.get("sell", 0.0)
+    total = (buy + sell).replace(0.0, float("nan"))
+    imbalance = ((buy - sell) / total).dropna()
+    return [
+        _emit_row(date=ts, feature_name="order_imbalance", value=float(v), source_timestamp=ts)
+        for ts, v in imbalance.items()
+    ]
+
+
+def _enforce_pit_liquidity(
+    frame: pd.DataFrame,
+    *,
+    asof: pd.Timestamp,
+    calendar: TradingCalendar,
+) -> None:
+    """Row-by-row PIT + trading-day enforcement for liquidity features."""
+    if frame.empty:
+        return
+    for _, row in frame.iterrows():
+        source_ts = pd.Timestamp(row["source_timestamp"])
+        if source_ts.tzinfo is None:
+            source_ts = source_ts.tz_localize("UTC")
+        vintage = row.get("vintage_date")
+        if vintage is not None and not pd.isna(vintage):
+            vintage_ts = pd.Timestamp(vintage)
+            if vintage_ts.tzinfo is None:
+                vintage_ts = vintage_ts.tz_localize("UTC")
+        else:
+            vintage_ts = None
+        assert_pit_safe(
+            feature_timestamp=source_ts,
+            decision_timestamp=asof,
+            vintage_timestamp=vintage_ts,
+            label=str(row["feature_name"]),
+        )
+        if (
+            str(row["feature_name"]) in _LIQUIDITY_TRADING_DAY_FEATURES
+            and not is_trading_day(source_ts, calendar)
+        ):
+            raise PitViolationError(
+                f"liquidity feature {row['feature_name']!r} reports on closed trading day "
+                f"{source_ts.isoformat()} per calendar {calendar.value}"
+            )
 
 
 def build_execution_features(
