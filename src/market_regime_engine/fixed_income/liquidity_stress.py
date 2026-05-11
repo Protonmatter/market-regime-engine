@@ -134,9 +134,7 @@ HYSTERESIS_BANDS_LIQUIDITY: dict[LiquidityLabel, tuple[float | None, float | Non
 }
 
 
-def classify_with_hysteresis(
-    score: float, prev_label: LiquidityLabel | None
-) -> LiquidityLabel:
+def classify_with_hysteresis(score: float, prev_label: LiquidityLabel | None) -> LiquidityLabel:
     """Map ``score`` to a :class:`LiquidityLabel` with asymmetric hysteresis.
 
     ``prev_label is None`` → sharp-bucket fallback via
@@ -240,9 +238,7 @@ def _apply_nan_policy(
     input is missing, so the audit must fire (mirrors the PR-3 fix)."""
     if wide is None or wide.empty:
         if nan_policy is NanPolicy.NAN_FAILS_PIT_AUDIT:
-            raise PitAuditFailure(
-                "liquidity stress features empty; cannot satisfy NAN_FAILS_PIT_AUDIT"
-            )
+            raise PitAuditFailure("liquidity stress features empty; cannot satisfy NAN_FAILS_PIT_AUDIT")
         return
     if nan_policy is not NanPolicy.NAN_FAILS_PIT_AUDIT and not overrides:
         return
@@ -493,9 +489,7 @@ def score_liquidity_stress(
         If any feature row's ``source_timestamp`` exceeds ``asof``.
     """
     if scope_type not in _VALID_SCOPE_TYPES:
-        raise ValueError(
-            f"scope_type must be one of {sorted(_VALID_SCOPE_TYPES)!r}; got {scope_type!r}"
-        )
+        raise ValueError(f"scope_type must be one of {sorted(_VALID_SCOPE_TYPES)!r}; got {scope_type!r}")
     if not scope_id:
         raise ValueError("scope_id must not be empty")
 
@@ -522,9 +516,7 @@ def score_liquidity_stress(
         _apply_nan_policy(wide, nan_policy=nan_policy, overrides=nan_policy_overrides)
     except PitAuditFailure:
         pit_audit_failed = True
-        log.warning(
-            "liquidity stress PIT audit failed (column-level); flipping release_gate=False"
-        )
+        log.warning("liquidity stress PIT audit failed (column-level); flipping release_gate=False")
     if nan_policy is NanPolicy.NAN_FAILS_PIT_AUDIT and missing_components:
         pit_audit_failed = True
         log.warning(
@@ -642,9 +634,7 @@ def latest_liquidity_stress_score(
     if df is None or df.empty:
         return None
     if scope_type is not None and scope_id is not None:
-        mask = (df["scope_type"].astype(str) == str(scope_type)) & (
-            df["scope_id"].astype(str) == str(scope_id)
-        )
+        mask = (df["scope_type"].astype(str) == str(scope_type)) & (df["scope_id"].astype(str) == str(scope_id))
         df = df.loc[mask]
         if df.empty:
             return None

@@ -34,7 +34,7 @@ def _seed_warehouse(wh: Warehouse) -> None:
     """Plant a per-cusip universe with trades / RFQs / quotes / bond reference."""
     dates = _trading_dates(_ASOF, 30)
 
-    # Bond reference: two sectors × two ratings.
+    # Bond reference: two sectors x two ratings.
     valid_from = (_ASOF - pd.Timedelta(days=400)).isoformat()
     wh.write_bond_reference(
         pd.DataFrame(
@@ -326,16 +326,12 @@ def test_write_and_read_per_scope_roundtrip(tmp_path: Path) -> None:
         latest_any = latest_liquidity_stress_score(wh)
         assert latest_any is not None
 
-        latest_market = latest_liquidity_stress_score(
-            wh, scope_type="market", scope_id="ALL"
-        )
+        latest_market = latest_liquidity_stress_score(wh, scope_type="market", scope_id="ALL")
         assert latest_market is not None
         assert latest_market.scope_type == "market"
         assert latest_market.model_run_id == "rt-market"
 
-        latest_cusip = latest_liquidity_stress_score(
-            wh, scope_type="cusip", scope_id=_CUSIP_A
-        )
+        latest_cusip = latest_liquidity_stress_score(wh, scope_type="cusip", scope_id=_CUSIP_A)
         assert latest_cusip is not None
         assert latest_cusip.scope_type == "cusip"
         assert latest_cusip.scope_id == _CUSIP_A

@@ -14,7 +14,7 @@ the work ships in 7 sequential PRs on top of `v1.4.1`:
 | PR-1 | Scaffolding & contracts | shipped |
 | PR-2 | Warehouse (13 FI tables + register_tables + bond_reference temporal versioning) | shipped |
 | PR-3 | Credit spread regime model | shipped |
-| PR-4 | Liquidity stress model | pending |
+| PR-4 | Liquidity stress model | shipped |
 | PR-5 | Execution confidence | pending |
 | PR-6 | TCA segmentation | pending |
 | PR-7 | Evidence-pack hardening + report | pending |
@@ -260,3 +260,210 @@ joins, and the 1-day constant covers end-of-day curve / vol joins.
 - Markdown pack: `markdown-pack/MRE_FIXED_INCOME_AGENT.md` "PR 3"
 - Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md` §6.1
 - Review threads: §3.2 ASK-5, §3.4 Q-7 / Q-8 / Q-9, §3.1 AF-8, §3.3 F-9
+
+## PR-4 surface (this release)
+
+The PR-4 scope is the **liquidity stress model**: a scope-aware
+deterministic composite scorer that emits a 0-100 `liquidity_index`
+(higher = more stress) for `market` / `sector` / `rating` / `cusip`
+scopes, with optional asymmetric hysteresis on the resulting label
+and an opt-in hierarchical Bayesian back-stop for sparsely-traded
+cusips.
+
+### 1. Liquidity-stress composite scorer (`fixed_income.liquidity_stress`)
+
+```python
+from market_regime_engine.fixed_income import (
+    build_liquidity_features,
+    score_liquidity_stress,
+    write_liquidity_stress_score,
+)
+from market_regime_engine.storage import Warehouse
+
+wh = Warehouse("data/mre.duckdb")
+asof = pd.Timestamp("2026-05-08T16:00:00+00:00")
+features = build_liquidity_features(
+    wh, asof,
+    scope_type="market", scope_id="ALL",
+    lookback_days=30,
+)
+out = score_liquidity_stress(
+    features,
+    scope_type="market", scope_id="ALL",
+    asof=asof,
+    profile="production",
+)
+write_liquidity_stress_score(wh, out)
+```
+
+**Inputs (`build_liquidity_features`)** — reads `trace_trades`,
+`rfq_events`, `dealer_quotes`, and (for sector / rating scopes) the
+survivorship-safe `read_bond_reference_asof`. Output is the standard
+long-form
+`["date", "feature_name", "value", "source_timestamp", "vintage_date"]`
+frame carrying the eleven AGENT.md liquidity features
+(`bid_ask_width`, `trade_count_velocity`, `volume_over_adv`,
+`time_since_last_trade`, `dealers_requested`, `quotes_received`,
+`quote_dispersion`, `amihud_illiquidity`, `dealer_response_count`,
+`axe_freshness_proxy`, `order_imbalance`).
+
+**Component scores** (each 0-100, higher = more stress):
+
+| Component | Sub-features | Normalisation |
+|---|---|---|
+| `quotes_dispersion` | `quote_dispersion` | z-score sigmoid vs trailing window |
+| `bid_ask` | `bid_ask_width` | rolling percentile |
+| `trade_velocity` | `trade_count_velocity` | inverse percentile (low velocity → high stress) |
+| `rfq_fill_rate` | `quotes_received`, `dealers_requested` | `(1 - quotes_received/dealers_requested) * 100` |
+| `amihud` | `amihud_illiquidity` | rolling percentile |
+| `time_gap` | `time_since_last_trade` | `min(100, minutes * 2)` |
+
+**Default weights** (sum to 1.0; override via `weights={...}`):
+
+| Component | Weight |
+|---|---:|
+| `quotes_dispersion` | 0.20 |
+| `bid_ask` | 0.20 |
+| `trade_velocity` | 0.15 |
+| `rfq_fill_rate` | 0.20 |
+| `amihud` | 0.15 |
+| `time_gap` | 0.10 |
+
+**Confidence / drivers / artifact hash / bucket labels** mirror the
+PR-3 credit-regime contract exactly so the API + evidence-pack code
+can serve both signals from one envelope shape.
+
+**Output bucket → label** (matches PR-1
+`LiquidityLabel.liquidity_label_from_score`):
+
+| Score | Label |
+|---:|---|
+| 0-20 | Normal |
+| 20-40 | Mild Stress |
+| 40-60 | Elevated Stress |
+| 60-80 | Severe Stress |
+| 80-100 | Crisis Liquidity |
+
+### 2. Label hysteresis (credit + liquidity)
+
+Asymmetric `(enter, exit)` bands per label so the regime / liquidity
+labels stop flipping on every tick when the score oscillates near a
+bucket boundary. Cold start (`prev_label=None`) falls through to the
+sharp-bucket mapping, preserving the PR-3 contract bit-for-bit.
+
+Liquidity bands (`HYSTERESIS_BANDS_LIQUIDITY`):
+
+| Label | Enter | Exit |
+|---|---:|---:|
+| Normal | — | 25 |
+| Mild Stress | 20 | 45 |
+| Elevated Stress | 40 | 65 |
+| Severe Stress | 60 | 85 |
+| Crisis Liquidity | 80 | — |
+
+Credit bands (`HYSTERESIS_BANDS_CREDIT`) follow the same shape over
+`RegimeLabel`. `score_credit_regime` and `score_liquidity_stress`
+accept an optional `prev_label=` parameter; when supplied, the new
+label is the output of `classify_with_hysteresis(score, prev_label)`.
+Metadata records `hysteresis_applied` / `prev_label` for telemetry.
+
+### 3. Hierarchical Bayesian liquidity model
+
+`frontier.hierarchical_liquidity.HierarchicalLiquidityModel` is the
+opt-in Bayesian back-stop per the v1.5 deep-research report §2 (OFR
+latent-liquidity-states). Model::
+
+    y_ij ~ Normal(mu_i, sigma_obs)
+    mu_i = mu_global + group_effect[s_i, r_i] + cusip_effect[i]
+
+Partial pooling across `(sector, rating)` plus a cusip-level random
+effect lets a sparsely-traded cusip inherit its tier's posterior
+rather than collapse to neutral. Inference is NumPyro NUTS; the
+`[bayesian]` extra (`numpyro`, `jax[cpu]`, `arviz`) is required —
+`fit()` raises a clean `ImportError` with the install hint when the
+extras are absent.
+
+`predict(cusip=..., sector=..., rating=...)` returns a posterior
+summary dict (`posterior_mean`, `ci_low_5`, `ci_high_95`, `n_obs`,
+`hierarchy_level`) with explicit back-off through cusip →
+`(sector, rating)` → rating → market. Per AGENT.md non-negotiable
+"explainable baselines first", the deterministic composite remains
+the production primary; the hierarchical scorer is opt-in via
+`mre fi-score-liquidity --use-hierarchical` and activates in
+production only after PR-7 validation.
+
+### 4. GP-BOCPD ring buffer (ASK-9)
+
+`frontier/gp_cpd._GPRun` switched from a Python list (copy-on-append)
+to a fixed-size `np.ndarray` ring buffer of `max_run` slots. Bit-for-
+bit equivalent to v1.4 for any panel processed by `GPBOCPD.score`
+(the BOCPD inner loop never appends past `max_run` on the same
+segment), with per-update cost dropping from O(n × d) to
+O(max_run × d). The posterior trace is pinned by sha256 in
+`tests/test_gp_cpd_ring_buffer.py`.
+
+### 5. API surface
+
+| Endpoint | Status |
+|---|---|
+| `GET /v1/regime_index/latest` | PR-3 |
+| `GET /v1/liquidity_index/latest` | **PR-4** |
+| `GET /v1/liquidity_index/{scope_type}/{scope_id}` | **PR-4** |
+| `POST /v1/execution_confidence` | 501 (PR-5) |
+| `GET /v1/tca/regime-segments/latest` | 501 (PR-6) |
+| `GET /v1/evidence-pack/{model_run_id}` | 501 (PR-7) |
+
+Both PR-4 liquidity endpoints return the full `LiquidityStressOutput`
+JSON (release_gate passthrough) on 200, `404` with
+`{"detail": "invalid_scope_type", ...}` when the by-scope endpoint
+receives an unknown scope, and `503` `{"detail": "no_data",
+"release_gate": false}` when no row exists for the requested scope.
+
+### 6. CLI: `mre fi-score-liquidity`
+
+```text
+mre fi-score-liquidity \
+    --db data/mre.duckdb \
+    --scope-type {market|sector|rating|cusip} \
+    --scope-id ALL \
+    --asof 2026-05-08T16:00:00Z \
+    --profile production \
+    --release-gate true \
+    [--model-run-id <id>] \
+    [--lookback-days 30] \
+    [--use-hierarchical] \
+    [--prev-label-from-warehouse true] \
+    [--output-json data/liquidity.json]
+```
+
+Workflow: open warehouse → optional `latest_liquidity_stress_score`
+for the previous label → `build_liquidity_features` →
+`score_liquidity_stress` (with `prev_label` for hysteresis) →
+`write_liquidity_stress_score` → print envelope to stdout → optional
+JSON write. Exit code `0` on clean run, `2` on PIT violation / audit
+failure / naive `--asof`.
+
+### Back-compat guarantees (PR-4)
+
+- `score_credit_regime(...)` without `prev_label=` is bit-for-bit
+  identical to PR-3 (same artifact hash, same label, same metadata
+  shape except for the additive `hysteresis_applied=False,
+  prev_label=None` keys).
+- GP-BOCPD posterior outputs are bit-for-bit unchanged for any panel
+  driven through `GPBOCPD.score` (pinned by sha256 in the ring-buffer
+  test).
+- Default `NanPolicy.NAN_TO_ZERO` paths in `bocpd` / MSVAR / GP-CPD
+  continue to match v1.4.
+- The PR-3 `test_other_fi_endpoints_still_return_501` test is updated
+  to drop the now-live `/v1/liquidity_index/*` paths from its 501-
+  stub list. The remaining stubs are
+  `POST /v1/execution_confidence`, `/v1/tca/regime-segments/latest`,
+  and `/v1/evidence-pack/{model_run_id}`.
+
+### Reference (PR-4)
+
+- Plan: `.cursor/plans/fi_v1.5_implementation_plan_bcda9355.plan.md` §4 PR-4
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_AGENT.md` "PR 4 — liquidity stress model"
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md` §6.2
+- Review thread: §3.2 ASK-9 (GP-BOCPD ring buffer)
+- Deep-research report: §2 (hierarchical Bayesian liquidity)

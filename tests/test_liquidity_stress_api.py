@@ -26,13 +26,63 @@ def _features(asof: pd.Timestamp = _ASOF, n: int = 20) -> pd.DataFrame:
     dates = pd.date_range(end=asof, periods=n, freq="D", tz="UTC")
     rows = []
     for i, ts in enumerate(dates):
-        rows.append({"date": ts, "feature_name": "bid_ask_width", "value": 0.5 + 0.01 * i, "source_timestamp": ts, "vintage_date": None})
-        rows.append({"date": ts, "feature_name": "quote_dispersion", "value": 0.05 + 0.001 * i, "source_timestamp": ts, "vintage_date": None})
-        rows.append({"date": ts, "feature_name": "trade_count_velocity", "value": 5.0 + 0.1 * i, "source_timestamp": ts, "vintage_date": None})
-        rows.append({"date": ts, "feature_name": "dealers_requested", "value": 5.0, "source_timestamp": ts, "vintage_date": None})
-        rows.append({"date": ts, "feature_name": "quotes_received", "value": 3.0, "source_timestamp": ts, "vintage_date": None})
-        rows.append({"date": ts, "feature_name": "amihud_illiquidity", "value": 1e-9 + 1e-12 * i, "source_timestamp": ts, "vintage_date": None})
-        rows.append({"date": ts, "feature_name": "time_since_last_trade", "value": 5.0, "source_timestamp": ts, "vintage_date": None})
+        rows.append(
+            {
+                "date": ts,
+                "feature_name": "bid_ask_width",
+                "value": 0.5 + 0.01 * i,
+                "source_timestamp": ts,
+                "vintage_date": None,
+            }
+        )
+        rows.append(
+            {
+                "date": ts,
+                "feature_name": "quote_dispersion",
+                "value": 0.05 + 0.001 * i,
+                "source_timestamp": ts,
+                "vintage_date": None,
+            }
+        )
+        rows.append(
+            {
+                "date": ts,
+                "feature_name": "trade_count_velocity",
+                "value": 5.0 + 0.1 * i,
+                "source_timestamp": ts,
+                "vintage_date": None,
+            }
+        )
+        rows.append(
+            {
+                "date": ts,
+                "feature_name": "dealers_requested",
+                "value": 5.0,
+                "source_timestamp": ts,
+                "vintage_date": None,
+            }
+        )
+        rows.append(
+            {"date": ts, "feature_name": "quotes_received", "value": 3.0, "source_timestamp": ts, "vintage_date": None}
+        )
+        rows.append(
+            {
+                "date": ts,
+                "feature_name": "amihud_illiquidity",
+                "value": 1e-9 + 1e-12 * i,
+                "source_timestamp": ts,
+                "vintage_date": None,
+            }
+        )
+        rows.append(
+            {
+                "date": ts,
+                "feature_name": "time_since_last_trade",
+                "value": 5.0,
+                "source_timestamp": ts,
+                "vintage_date": None,
+            }
+        )
     frame = pd.DataFrame(rows)
     frame.attrs["nan_policy"] = NanPolicy.NAN_FAILS_PIT_AUDIT.value
     return frame

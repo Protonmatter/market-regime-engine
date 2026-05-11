@@ -50,8 +50,7 @@ def test_liquidity_stress_missing_features_degrades_safely() -> None:
         release_gate=True,  # caller asked for production, the gate must self-flip.
     )
     assert out.release_gate is False, (
-        "missing required features must flip release_gate=False; "
-        f"got release_gate={out.release_gate}"
+        f"missing required features must flip release_gate=False; got release_gate={out.release_gate}"
     )
     assert out.confidence <= 0.5 + 1e-9, (
         f"confidence must be capped at 0.5 when release_gate flips; got {out.confidence}"
