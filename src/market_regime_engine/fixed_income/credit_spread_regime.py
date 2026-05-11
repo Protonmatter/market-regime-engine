@@ -409,14 +409,25 @@ def score_credit_regime(
         else:
             component_scores[component] = float(score)
 
-    # Apply the NaN policy to the *wide* frame to surface "all columns
-    # silently empty" failures distinct from per-component absence.
+    # Two-step NaN-policy enforcement:
+    # 1. Column-level: every column present in the wide pivot must have
+    #    at least one non-NaN observation in the lookback window.
+    # 2. Component-level: under NAN_FAILS_PIT_AUDIT, any missing
+    #    component is an audit failure (pivot_table silently drops
+    #    all-NaN columns so step 1 alone cannot catch the case where
+    #    every observation of a required feature was NaN).
     nan_policy = _resolve_nan_policy(features)
     try:
         _apply_nan_policy(wide, nan_policy=nan_policy, overrides=nan_policy_overrides)
     except PitAuditFailure:
         pit_audit_failed = True
-        log.warning("credit regime PIT audit failed; flipping release_gate=False")
+        log.warning("credit regime PIT audit failed (column-level); flipping release_gate=False")
+    if nan_policy is NanPolicy.NAN_FAILS_PIT_AUDIT and missing_components:
+        pit_audit_failed = True
+        log.warning(
+            "credit regime PIT audit failed: missing components %r; flipping release_gate=False",
+            missing_components,
+        )
 
     if not component_scores:
         # No features at all — neutral score, zero confidence, fail closed.
@@ -523,12 +534,16 @@ def _apply_nan_policy(
     nan_policy: NanPolicy,
     overrides: Mapping[str, NanPolicy] | None,
 ) -> None:
-    """Side-effect: validate that the *latest* row of ``wide`` is clean enough.
+    """Validate that the *latest non-NaN value per column* is present.
 
-    Mirrors the row-level fail-closed contract of
-    :func:`clean_with_policy` but only at the latest tick — the rolling
-    window may legitimately have early-NaN rows during the warm-up
-    period.
+    The deterministic scorer uses ``_latest(series)`` which returns the
+    last non-NaN value, so the audit must mirror that semantic: an
+    "input missing" means *no observation anywhere in the lookback
+    window*, not "the literal final timestamp doesn't carry this
+    feature". Curve / CDS / vintage cadences rarely align at the exact
+    same instant (EOD curve at 21:00 UTC vs. vintage observation at
+    midnight) so the strict-last-row check would falsely fire on every
+    real-data run.
     """
     if wide is None or wide.empty:
         if nan_policy is NanPolicy.NAN_FAILS_PIT_AUDIT:
@@ -536,14 +551,18 @@ def _apply_nan_policy(
         return
     if nan_policy is not NanPolicy.NAN_FAILS_PIT_AUDIT and not overrides:
         return
-    latest_row = wide.iloc[-1]
     missing_cols: list[str] = []
-    for col, val in latest_row.items():
+    for col in wide.columns:
         policy = (overrides or {}).get(col, nan_policy)
-        if policy is NanPolicy.NAN_FAILS_PIT_AUDIT and pd.isna(val):
+        if policy is not NanPolicy.NAN_FAILS_PIT_AUDIT:
+            continue
+        if wide[col].dropna().empty:
             missing_cols.append(str(col))
     if missing_cols:
-        raise PitAuditFailure(f"NAN_FAILS_PIT_AUDIT triggered on latest row: missing {sorted(missing_cols)!r}")
+        raise PitAuditFailure(
+            f"NAN_FAILS_PIT_AUDIT triggered: feature(s) have no non-NaN observation in the lookback window: "
+            f"{sorted(missing_cols)!r}"
+        )
 
 
 def _audit_pit(features: pd.DataFrame, *, asof: pd.Timestamp) -> None:
