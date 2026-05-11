@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Fixed-Income evidence-pack construction (PR-1 scaffolding).
+"""Fixed-Income evidence-pack construction (PR-1 scaffolding + PR-7 HMAC).
 
 Per ``MRE_FIXED_INCOME_AGENT.md §"FixedIncomeEvidencePack"``: every FI
 signal that goes external must be reproducible from a tamper-evident
@@ -8,26 +8,66 @@ hardens by adding HMAC sign/verify around the same canonical
 bytestream and threads ``data_vintages`` capture through the warehouse
 read path.
 
-Until PR-7 lands, ``hmac_signature`` is accepted as ``None`` and the
-``verify_pack_hash`` helper covers integrity only (not authenticity).
-
 The canonical bytestream for hashing is the AGENT.md hashing rule
 (``canonical_json``); the pack-hash is the SHA-256 of that bytestream
 **excluding** the ``hmac_signature`` field so future HMAC re-signing
 under a rotated key does not invalidate the historical hash.
+
+PR-7 HMAC operations
+--------------------
+
+- :func:`get_hmac_keys` parses ``MRE_FI_HMAC_KEY_VERSIONS`` (JSON
+  ``{"v1": "<base64>", "v2": "..."}``) — or the singleton
+  ``MRE_FI_HMAC_KEY`` (registered as ``v1``) — into a per-version map
+  of decoded key bytes.
+- :func:`sign_pack` signs the canonical JSON (excluding the
+  ``hmac_signature`` field itself) under the latest key version and
+  returns a new pack with ``hmac_signature = "v<ver>:<hex>"``.
+- :func:`verify_pack` parses the version prefix, looks up the key,
+  re-derives the HMAC, and compares with :func:`hmac.compare_digest`
+  (constant-time, side-channel-resistant).
+- :func:`require_production_hmac` returns True when ``MRE_ENV=production``
+  or ``MRE_FI_REQUIRE_HMAC=1``; in those modes :func:`sign_pack` raises
+  rather than returning a pack with ``hmac_signature=None`` so a
+  production worker cannot accidentally publish unsigned packs.
+- :func:`capture_data_vintages` snapshots the latest ``timestamp`` /
+  ``source_timestamp`` per FI source table at or below ``asof`` so a
+  downstream replay can verify the same vintages were available at
+  decision time (review §4.3 data lineage).
 """
 
 from __future__ import annotations
 
+import base64
+import hmac
+import json
+import logging
+import os
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
+
+import pandas as pd
 
 from market_regime_engine.fixed_income.hashing import canonical_json, canonical_sha256
 from market_regime_engine.fixed_income.schemas import FixedIncomeEvidencePack
 
+log = logging.getLogger(__name__)
+
 _HMAC_FIELD = "hmac_signature"
+
+# Env vars (per AGENT.md PR-7 + INSTRUCTIONS.md §10 governance rules).
+_HMAC_KEY_VERSIONS_ENV = "MRE_FI_HMAC_KEY_VERSIONS"
+_HMAC_KEY_SINGLETON_ENV = "MRE_FI_HMAC_KEY"
+_REQUIRE_HMAC_ENV = "MRE_FI_REQUIRE_HMAC"
+_ENV_NAME_ENV = "MRE_ENV"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _now_iso() -> str:
@@ -136,9 +176,457 @@ def verify_pack_hash(pack: FixedIncomeEvidencePack, expected_hash: str) -> bool:
     return computed.lower() == expected_hash.lower()
 
 
+# ---------------------------------------------------------------------------
+# PR-7 §A.1 — HMAC key resolution + sign / verify
+# ---------------------------------------------------------------------------
+
+
+def _decode_key_material(value: str) -> bytes:
+    """Decode an HMAC key from base64 (preferred) or raw UTF-8 bytes.
+
+    Operators may legitimately use either: base64-encoded random bytes
+    (``MRE_FI_HMAC_KEY_VERSIONS={"v1": "<base64>"}``) or a high-entropy
+    passphrase. We try base64 first (with padding tolerance) and fall
+    back to UTF-8 bytes if the base64 alphabet check fails.
+    """
+    raw = value.strip()
+    if not raw:
+        raise ValueError("HMAC key material must not be empty")
+    try:
+        # validate=True ensures we don't silently accept arbitrary text
+        return base64.b64decode(raw, validate=True)
+    except Exception:
+        pass
+    # Tolerate base64 without padding (common in env vars copied from
+    # secret managers).
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        return base64.b64decode(padded, validate=True)
+    except Exception:
+        return raw.encode("utf-8")
+
+
+def get_hmac_keys() -> dict[str, bytes]:
+    """Parse ``MRE_FI_HMAC_KEY_VERSIONS`` (JSON env var) into ``{version: bytes}``.
+
+    Schema: ``{"v1": "base64-encoded-key", "v2": "...", ...}``.
+
+    If ``MRE_FI_HMAC_KEY_VERSIONS`` is unset *and* ``MRE_FI_HMAC_KEY``
+    (singleton) is set, the singleton is registered under version
+    ``"v1"`` so a single-key deployment can rotate to multi-key without
+    code changes.
+
+    Returns an empty dict if neither is set. Bad JSON raises
+    :class:`RuntimeError` rather than silently degrading; a typo in the
+    env var must NOT produce a worker that signs nothing.
+    """
+    raw = os.environ.get(_HMAC_KEY_VERSIONS_ENV, "").strip()
+    if raw:
+        try:
+            mapping = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"{_HMAC_KEY_VERSIONS_ENV} must be a JSON object: {exc}"
+            ) from exc
+        if not isinstance(mapping, dict):
+            raise RuntimeError(
+                f"{_HMAC_KEY_VERSIONS_ENV} must decode to a JSON object; got {type(mapping).__name__}"
+            )
+        out: dict[str, bytes] = {}
+        for version, value in mapping.items():
+            if not isinstance(version, str) or not version:
+                raise RuntimeError("HMAC key version must be a non-empty string")
+            if not isinstance(value, str):
+                raise RuntimeError(f"HMAC key {version!r} value must be a string")
+            out[version] = _decode_key_material(value)
+        return out
+    singleton = os.environ.get(_HMAC_KEY_SINGLETON_ENV, "").strip()
+    if singleton:
+        return {"v1": _decode_key_material(singleton)}
+    return {}
+
+
+def latest_hmac_version() -> str | None:
+    """Return the most recent key version, or ``None`` if no keys are configured.
+
+    "Most recent" is defined as the lexicographic max of the version
+    strings, which matches the documented ``v1 < v2 < ... < vN``
+    convention. Operators who want a non-lexicographic ordering should
+    prefix versions with a fixed-width number (e.g. ``v01``, ``v02``).
+    """
+    keys = get_hmac_keys()
+    if not keys:
+        return None
+    return max(keys.keys())
+
+
+def require_production_hmac() -> bool:
+    """Returns True if ``MRE_ENV=production`` or ``MRE_FI_REQUIRE_HMAC=1``."""
+    if os.environ.get(_REQUIRE_HMAC_ENV) == "1":
+        return True
+    return os.environ.get(_ENV_NAME_ENV, "").lower() == "production"
+
+
+def _hmac_hex(key: bytes, payload: str) -> str:
+    return hmac.new(key, payload.encode("utf-8"), sha256).hexdigest()
+
+
+def sign_pack(
+    pack: FixedIncomeEvidencePack,
+    *,
+    key_version: str | None = None,
+) -> FixedIncomeEvidencePack:
+    """Sign the pack's canonical JSON and return a new pack.
+
+    The signature format is ``"v<ver>:<hex(hmac-sha256)>"`` so the
+    verifier can route to the right key version without an out-of-band
+    contract.
+
+    Behaviour matrix:
+
+    - keys configured (any number of versions) → sign with
+      ``key_version`` if supplied, else :func:`latest_hmac_version`,
+      return a new pack with ``hmac_signature`` populated.
+    - no keys configured AND :func:`require_production_hmac` is True →
+      raise :class:`RuntimeError` (production must not publish
+      unsigned packs).
+    - no keys configured AND production mode is False → return the
+      pack unchanged (``hmac_signature`` stays ``None``); dev-mode
+      pass-through.
+    """
+    keys = get_hmac_keys()
+    if not keys:
+        if require_production_hmac():
+            raise RuntimeError(
+                "FI HMAC required (MRE_ENV=production or MRE_FI_REQUIRE_HMAC=1) "
+                f"but no keys are configured via {_HMAC_KEY_VERSIONS_ENV} / "
+                f"{_HMAC_KEY_SINGLETON_ENV}"
+            )
+        return pack
+    if key_version is None:
+        key_version = latest_hmac_version()
+    if key_version not in keys:
+        raise RuntimeError(
+            f"HMAC key version {key_version!r} is not in the configured "
+            f"versions {sorted(keys)!r}"
+        )
+    payload = canonical_pack_payload(pack)
+    digest = _hmac_hex(keys[key_version], payload)
+    signature = f"{key_version}:{digest}"
+    return replace(pack, hmac_signature=signature)
+
+
+def verify_pack(pack: FixedIncomeEvidencePack) -> bool:
+    """Verify the HMAC signature on a pack.
+
+    Parses ``"v<ver>:<hex>"`` from ``pack.hmac_signature``, looks up
+    the key, recomputes the HMAC over the canonical JSON (excluding
+    the signature field itself), and compares with
+    :func:`hmac.compare_digest` (constant-time).
+
+    Returns ``False`` when the signature is missing, malformed, or
+    signed under a key version that is not currently configured.
+    Returns ``True`` (dev-mode pass-through) only when no keys are
+    configured *and* ``hmac_signature`` is ``None``: a deployment that
+    deliberately runs unsigned must not see a wall of False from this
+    helper.
+    """
+    keys = get_hmac_keys()
+    sig = pack.hmac_signature
+    if sig is None:
+        if not keys:
+            return True
+        return False
+    if not isinstance(sig, str) or ":" not in sig:
+        return False
+    version, _, hex_digest = sig.partition(":")
+    if not version or not hex_digest:
+        return False
+    key = keys.get(version)
+    if key is None:
+        return False
+    payload = canonical_pack_payload(pack)
+    expected = _hmac_hex(key, payload)
+    try:
+        return hmac.compare_digest(hex_digest, expected)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# PR-7 §A.2 — data_vintages capture
+# ---------------------------------------------------------------------------
+
+# Per-table column to read for the vintage timestamp (review §4.3 point 1).
+# When a column is absent the helper falls back to the next listed name.
+_FI_VINTAGE_TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("trace_trades", "read_trace_trades", ("source_timestamp", "timestamp")),
+    ("rfq_events", "read_rfq_events", ("source_timestamp", "timestamp")),
+    ("curve_snapshots", "read_curve_snapshots", ("source_timestamp", "timestamp")),
+    ("cds_curve_snapshots", "read_cds_curve_snapshots", ("source_timestamp", "timestamp")),
+    ("bond_reference", "read_bond_reference", ("valid_from", "issue_date")),
+    ("dealer_quotes", "read_dealer_quotes", ("source_timestamp", "timestamp")),
+    ("dealer_response_stats", "read_dealer_response_stats", ("window_end", "window_start")),
+)
+
+
+_EPOCH_VINTAGE: str = "1970-01-01T00:00:00Z"
+
+
+def _coerce_iso8601_z(ts: Any) -> str:
+    """Coerce a timestamp scalar to an ISO-8601 string with ``Z`` suffix."""
+    if ts is None:
+        return _EPOCH_VINTAGE
+    try:
+        parsed = pd.Timestamp(ts)
+    except Exception:
+        return _EPOCH_VINTAGE
+    if pd.isna(parsed):
+        return _EPOCH_VINTAGE
+    if parsed.tzinfo is None:
+        parsed = parsed.tz_localize("UTC")
+    else:
+        parsed = parsed.tz_convert("UTC")
+    return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _latest_vintage_for_table(
+    warehouse: Any,
+    *,
+    reader_name: str,
+    columns: tuple[str, ...],
+    asof: pd.Timestamp | None,
+) -> str:
+    """Return the latest vintage ISO-8601 string for one FI table."""
+    reader = getattr(warehouse, reader_name, None)
+    if reader is None or not callable(reader):
+        return _EPOCH_VINTAGE
+    try:
+        df = reader()
+    except Exception as exc:  # pragma: no cover - reader-side failure
+        log.warning("read for %s failed during vintage capture: %s", reader_name, exc)
+        return _EPOCH_VINTAGE
+    if df is None or df.empty:
+        return _EPOCH_VINTAGE
+    column = next((c for c in columns if c in df.columns), None)
+    if column is None:
+        return _EPOCH_VINTAGE
+    series = pd.to_datetime(df[column], errors="coerce", utc=True)
+    series = series.dropna()
+    if asof is not None:
+        cap = pd.Timestamp(asof)
+        if cap.tzinfo is None:
+            cap = cap.tz_localize("UTC")
+        else:
+            cap = cap.tz_convert("UTC")
+        series = series[series <= cap]
+    if series.empty:
+        return _EPOCH_VINTAGE
+    return _coerce_iso8601_z(series.max())
+
+
+def capture_data_vintages(
+    warehouse: Any,
+    *,
+    asof: pd.Timestamp | None = None,
+) -> dict[str, str]:
+    """Capture per-source latest vintage timestamps from the warehouse.
+
+    Returns a stable dict keyed by FI table name with ISO-8601 ``Z``
+    timestamps. Missing tables, tables without a recognised vintage
+    column, or tables with no rows ≤ ``asof`` produce
+    ``"1970-01-01T00:00:00Z"`` so the dict shape is invariant across
+    fresh deployments and full-history runs.
+
+    Per review §4.3 point 1: this snapshot is what allows
+    ``mre verify-run --model-run-id <id>`` to assert that the same
+    vintages were available when the pack was signed and when an
+    auditor rebuilds it later.
+    """
+    out: dict[str, str] = {}
+    for table_name, reader_name, columns in _FI_VINTAGE_TABLES:
+        out[table_name] = _latest_vintage_for_table(
+            warehouse,
+            reader_name=reader_name,
+            columns=columns,
+            asof=asof,
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# PR-7 §A.3 — write evidence pack to warehouse
+# ---------------------------------------------------------------------------
+
+
+def evidence_pack_to_row(
+    pack: FixedIncomeEvidencePack,
+    *,
+    request_id: str,
+) -> dict[str, Any]:
+    """Project a pack onto the ``fixed_income_evidence_packs`` row schema.
+
+    JSON-encoded fields use ``canonical_json`` so the row hash is
+    deterministic and matches what :func:`compute_pack_hash` saw.
+    """
+    return {
+        "model_run_id": pack.model_run_id,
+        "request_id": request_id,
+        "component_name": pack.component_name,
+        "model_version": pack.model_version,
+        "timestamp": pack.timestamp,
+        "code_sha": pack.code_sha,
+        "model_hash": pack.model_hash,
+        "input_features_hash": pack.input_features_hash,
+        "output_hash": pack.output_hash,
+        "data_vintages_json": canonical_json(dict(pack.data_vintages)),
+        "validation_results_json": canonical_json(dict(pack.validation_results)),
+        "release_gate": 1 if pack.release_gate else 0,
+        "random_seeds_json": canonical_json(dict(pack.random_seeds)),
+        "python_version": pack.python_version,
+        "lockfile_hash": pack.lockfile_hash,
+        "hmac_signature": pack.hmac_signature,
+        "metadata_json": canonical_json(dict(pack.metadata)),
+    }
+
+
+def write_evidence_pack(
+    warehouse: Any,
+    pack: FixedIncomeEvidencePack,
+    *,
+    request_id: str,
+    sign: bool | None = None,
+) -> FixedIncomeEvidencePack:
+    """Persist an evidence pack to ``fixed_income_evidence_packs``.
+
+    Behaviour:
+
+    - ``sign`` is ``None`` (default) → sign when keys are configured;
+      pass through unsigned otherwise (subject to
+      :func:`require_production_hmac`).
+    - ``sign=True`` → always attempt to sign; raise if no keys
+      configured.
+    - ``sign=False`` → never sign; raise if production mode requires
+      HMAC.
+
+    Returns the (possibly newly-signed) pack so the caller can compare
+    the persisted ``hmac_signature`` against the in-memory one.
+    """
+    if sign is True:
+        signed = sign_pack(pack)
+        if signed.hmac_signature is None:
+            raise RuntimeError(
+                "sign=True requested but no HMAC keys are configured "
+                "(set MRE_FI_HMAC_KEY_VERSIONS or MRE_FI_HMAC_KEY)"
+            )
+    elif sign is False:
+        if require_production_hmac():
+            raise RuntimeError(
+                "sign=False requested but production mode requires HMAC; "
+                "either disable production mode or pass sign=True"
+            )
+        signed = pack
+    else:
+        signed = sign_pack(pack)
+    row = evidence_pack_to_row(signed, request_id=request_id)
+    warehouse.write_evidence_pack(pd.DataFrame([row]))
+    return signed
+
+
+def read_evidence_pack(
+    warehouse: Any,
+    *,
+    model_run_id: str,
+    request_id: str | None = None,
+) -> FixedIncomeEvidencePack | None:
+    """Read an evidence pack row → :class:`FixedIncomeEvidencePack`.
+
+    When ``request_id`` is omitted, returns the most recent pack for
+    ``model_run_id`` (ordered by ``timestamp``). Returns ``None`` if no
+    matching row exists.
+    """
+    df = warehouse.read_evidence_packs()
+    if df is None or df.empty:
+        return None
+    sub = df[df["model_run_id"] == model_run_id]
+    if request_id is not None:
+        sub = sub[sub["request_id"] == request_id]
+    if sub.empty:
+        return None
+    row = sub.iloc[-1]
+    return _row_to_pack(row)
+
+
+def _parse_json_field(value: Any) -> dict[str, Any]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _row_to_pack(row: pd.Series) -> FixedIncomeEvidencePack:
+    return FixedIncomeEvidencePack(
+        model_run_id=str(row["model_run_id"]),
+        component_name=str(row["component_name"]),
+        model_version=str(row["model_version"]),
+        timestamp=str(row["timestamp"]),
+        code_sha=(None if pd.isna(row.get("code_sha")) else str(row["code_sha"])),
+        model_hash=str(row["model_hash"]),
+        input_features_hash=str(row["input_features_hash"]),
+        output_hash=str(row["output_hash"]),
+        data_vintages=_parse_json_field(row.get("data_vintages_json")),
+        validation_results=_parse_json_field(row.get("validation_results_json")),
+        release_gate=bool(int(row["release_gate"])),
+        random_seeds=_parse_json_field(row.get("random_seeds_json")),
+        python_version=(
+            None if pd.isna(row.get("python_version")) else str(row["python_version"])
+        )
+        or "",
+        lockfile_hash=(
+            None if pd.isna(row.get("lockfile_hash")) else str(row["lockfile_hash"])
+        ),
+        hmac_signature=(
+            None
+            if pd.isna(row.get("hmac_signature"))
+            or row.get("hmac_signature") in ("", None)
+            else str(row["hmac_signature"])
+        ),
+        metadata=_parse_json_field(row.get("metadata_json")),
+    )
+
+
+def evidence_pack_to_dict(pack: FixedIncomeEvidencePack) -> dict[str, Any]:
+    """JSON-serialisable dict form of a pack — used by the API + CLI."""
+    out = asdict(pack)
+    out["data_vintages"] = dict(pack.data_vintages)
+    out["validation_results"] = dict(pack.validation_results)
+    out["random_seeds"] = dict(pack.random_seeds)
+    out["metadata"] = dict(pack.metadata)
+    return out
+
+
 __all__ = [
     "build_evidence_pack",
     "canonical_pack_payload",
+    "capture_data_vintages",
     "compute_pack_hash",
+    "evidence_pack_to_dict",
+    "evidence_pack_to_row",
+    "get_hmac_keys",
+    "latest_hmac_version",
+    "read_evidence_pack",
+    "require_production_hmac",
+    "sign_pack",
+    "verify_pack",
     "verify_pack_hash",
+    "write_evidence_pack",
 ]

@@ -32,22 +32,31 @@ from market_regime_engine.fixed_income.calendars import (
     previous_trading_day,
     trading_days_between,
 )
-from market_regime_engine.fixed_income.credit_spread_regime import (
-    DEFAULT_WEIGHTS as CREDIT_REGIME_DEFAULT_WEIGHTS,
+from market_regime_engine.fixed_income.evidence_pack import (
+    build_evidence_pack,
+    canonical_pack_payload,
+    capture_data_vintages,
+    compute_pack_hash,
+    evidence_pack_to_dict,
+    get_hmac_keys,
+    latest_hmac_version,
+    read_evidence_pack,
+    require_production_hmac,
+    sign_pack,
+    verify_pack,
+    verify_pack_hash,
+    write_evidence_pack,
 )
 from market_regime_engine.fixed_income.credit_spread_regime import (
+    DEFAULT_WEIGHTS as CREDIT_REGIME_DEFAULT_WEIGHTS,
     HYSTERESIS_BANDS_CREDIT,
+    classify_with_hysteresis as classify_credit_with_hysteresis,
     latest_credit_regime_score,
     score_credit_regime,
     write_credit_regime_score,
 )
-from market_regime_engine.fixed_income.credit_spread_regime import (
-    classify_with_hysteresis as classify_credit_with_hysteresis,
-)
 from market_regime_engine.fixed_income.execution_confidence import (
     DEFAULT_WEIGHTS as EXECUTION_CONFIDENCE_DEFAULT_WEIGHTS,
-)
-from market_regime_engine.fixed_income.execution_confidence import (
     build_execution_features,
     latest_execution_confidence_prediction,
     score_execution_confidence,
@@ -61,25 +70,21 @@ from market_regime_engine.fixed_income.feature_builders import (
 from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.liquidity_stress import (
     DEFAULT_WEIGHTS as LIQUIDITY_STRESS_DEFAULT_WEIGHTS,
-)
-from market_regime_engine.fixed_income.liquidity_stress import (
     HYSTERESIS_BANDS_LIQUIDITY,
+    classify_with_hysteresis as classify_liquidity_with_hysteresis,
     latest_liquidity_stress_score,
     list_recent_liquidity_stress_scores,
     score_liquidity_stress,
     write_liquidity_stress_score,
 )
-from market_regime_engine.fixed_income.liquidity_stress import (
-    classify_with_hysteresis as classify_liquidity_with_hysteresis,
-)
 from market_regime_engine.fixed_income.pit_guard import assert_pit_safe, assert_trading_day
+from market_regime_engine.fixed_income.timestamps import assert_utc, iso8601_z, to_utc
 from market_regime_engine.fixed_income.posterior_mode import (
     FilteredPosterior,
     PosteriorMode,
     SmoothedPosterior,
 )
-from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES
-from market_regime_engine.fixed_income.schema import register as _register_fi_schema
+from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES, register as _register_fi_schema
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
     ExecutionConfidenceRequest,
@@ -106,7 +111,6 @@ from market_regime_engine.fixed_income.tca_segmentation import (
     tag_trade_with_regime_context,
     write_tca_regime_segment,
 )
-from market_regime_engine.fixed_income.timestamps import assert_utc, iso8601_z, to_utc
 
 # v1.5 (PR-2 task B): register the 13 FI warehouse tables with the
 # storage registry on package import. ``register_tables`` is idempotent
@@ -147,30 +151,43 @@ __all__ = [
     "assert_trading_day",
     "assert_utc",
     "build_credit_features",
+    "build_evidence_pack",
     "build_execution_features",
     "build_liquidity_features",
+    "canonical_pack_payload",
     "canonical_sha256",
+    "capture_data_vintages",
     "classify_credit_with_hysteresis",
     "classify_liquidity_with_hysteresis",
     "compute_execution_success_label",
+    "compute_pack_hash",
     "compute_tca_metrics_for_outcome",
+    "evidence_pack_to_dict",
+    "get_hmac_keys",
     "is_trading_day",
     "iso8601_z",
     "latest_credit_regime_score",
     "latest_execution_confidence_prediction",
+    "latest_hmac_version",
     "latest_liquidity_stress_score",
     "latest_tca_regime_segments",
     "list_recent_liquidity_stress_scores",
     "materialize_tca_segments_for_day",
     "next_trading_day",
     "previous_trading_day",
+    "read_evidence_pack",
+    "require_production_hmac",
     "score_credit_regime",
     "score_execution_confidence",
     "score_liquidity_stress",
+    "sign_pack",
     "tag_trade_with_regime_context",
     "to_utc",
     "trading_days_between",
+    "verify_pack",
+    "verify_pack_hash",
     "write_credit_regime_score",
+    "write_evidence_pack",
     "write_execution_confidence_prediction",
     "write_execution_outcome",
     "write_liquidity_stress_score",
