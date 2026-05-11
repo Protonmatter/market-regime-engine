@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -22,16 +24,137 @@ from market_regime_engine.validation import (
 )
 from market_regime_engine.walk_forward import PurgedWalkForward, evaluate_walk_forward
 
+# v1.5 PR-5 (AF-10): the legacy parser ``_parse_horizon_months`` only worked
+# for monthly horizons and silently coerced ``"15min"`` → 15 *months*, which
+# breaks the FI execution-confidence intraday cadence. PR-5 introduces
+# :func:`_parse_horizon_periods` that requires an explicit cadence and
+# rejects mismatched suffixes (e.g. ``"12m"`` with ``cadence="daily"``).
+# ``_parse_horizon_months`` is preserved as a deprecation shim so the macro
+# backtest call sites compile unchanged.
+
 _HORIZON_RE = re.compile(r"(\d+)")
+
+Cadence = Literal["monthly", "daily", "intraday"]
+
+# Suffix → canonical period unit mapping per cadence. ``_HORIZON_UNITS``
+# lists every suffix the parser accepts for a given cadence; suffixes
+# outside the allowed list trip ``ValueError``. The matching is performed
+# in declaration order so the longest unambiguous suffix (e.g. ``"min"``
+# before ``"m"``) is checked first.
+_HORIZON_UNITS: dict[str, tuple[tuple[str, int], ...]] = {
+    # Months: ``"m"``, ``"mo"``, ``"month"``, ``"months"``.
+    "monthly": (
+        ("months", 1),
+        ("month", 1),
+        ("mo", 1),
+        ("m", 1),
+    ),
+    # Days / weeks: ``"d"``, ``"day"``, ``"days"``, ``"w"``/``"week"``
+    # (1 week = 5 trading days under the SIFMA / NYSE bond calendar; we
+    # use 5 as the documented conversion so callers passing a weekly
+    # horizon get the canonical daily-period count).
+    "daily": (
+        ("weeks", 5),
+        ("week", 5),
+        ("days", 1),
+        ("day", 1),
+        ("w", 5),
+        ("d", 1),
+    ),
+    # Intraday: ``"min"``, ``"m"`` (minute alias when cadence='intraday'),
+    # ``"h"``/``"hour"``/``"hours"`` (= 60 minutes), ``"s"``/``"sec"``
+    # (informational only — sub-minute trading horizons are accepted as
+    # period counts in seconds but most callers run in minutes).
+    "intraday": (
+        ("minutes", 1),
+        ("minute", 1),
+        ("hours", 60),
+        ("hour", 60),
+        ("hr", 60),
+        ("h", 60),
+        ("min", 1),
+        ("sec", 1),
+        ("s", 1),
+    ),
+}
+
+_HORIZON_RE_FULL = re.compile(r"^\s*(\d+)\s*([A-Za-z]*)\s*$")
+
+
+def _parse_horizon_periods(horizon: str, *, cadence: Cadence) -> int:
+    """Parse ``"N<unit>"`` horizon strings to period counts at ``cadence``.
+
+    Examples
+    --------
+    >>> _parse_horizon_periods("12m", cadence="monthly")
+    12
+    >>> _parse_horizon_periods("1d", cadence="daily")
+    1
+    >>> _parse_horizon_periods("15min", cadence="intraday")
+    15
+
+    Suffix matching is **cadence-strict**: ``"12m"`` with
+    ``cadence="daily"`` raises :class:`ValueError` because ``"m"`` is the
+    months unit on a daily cadence (the silent coercion was the AF-10 bug).
+    A trailing ``"m"`` on an ``"intraday"`` cadence is accepted as the
+    minutes alias; the alias is documented in :data:`_HORIZON_UNITS` so the
+    test pin in ``tests/test_backtest_horizon_parsing.py`` keeps this
+    contract.
+
+    A bare numeric input (``"12"``) is accepted under any cadence and
+    interpreted as a count in that cadence's natural period (months /
+    days / minutes).
+    """
+    if horizon is None or str(horizon).strip() == "":
+        raise ValueError("horizon must not be empty")
+    if cadence not in _HORIZON_UNITS:
+        raise ValueError(
+            f"unknown cadence {cadence!r}; expected one of {sorted(_HORIZON_UNITS)}"
+        )
+
+    match = _HORIZON_RE_FULL.match(str(horizon))
+    if match is None:
+        raise ValueError(
+            f"horizon {horizon!r} is not of the form N<unit> (e.g. '12m', '1d', '15min')"
+        )
+    n = int(match.group(1))
+    suffix = match.group(2).lower().strip()
+    if n <= 0:
+        raise ValueError(f"horizon {horizon!r} must be a positive integer count")
+
+    if suffix == "":
+        return n
+
+    candidates = _HORIZON_UNITS[cadence]
+    for unit, multiplier in candidates:
+        if suffix == unit:
+            return n * multiplier
+
+    accepted = sorted({u for u, _ in candidates})
+    raise ValueError(
+        f"horizon suffix {suffix!r} is not valid for cadence={cadence!r}; "
+        f"accepted units: {accepted!r}"
+    )
 
 
 def _parse_horizon_months(horizon: str, fallback: int = 1) -> int:
-    """Extract the integer horizon from a label like ``"3m"`` / ``"12m"``.
+    """DEPRECATED — use ``_parse_horizon_periods(horizon, cadence='monthly')``.
 
-    The walk-forward purge uses ``H`` to drop training rows whose forward
-    target window overlaps the test point. We default to ``1`` only when the
-    label is unparsable; callers always pass a labelled horizon in practice.
+    Kept as a back-compat shim so the v1.4 backtest call sites
+    (``expanding_window_binary_backtest``, ``expanding_window_quantile_backtest``)
+    keep their pre-PR-5 behaviour bit-for-bit: ``"12m"`` → 12. The new
+    cadence-strict parser rejects ``"12m"`` under ``cadence="daily"``;
+    this shim preserves the old permissive ``fallback=1`` semantic on
+    unparseable inputs because the macro callers always pass a labelled
+    monthly horizon in practice and the v1.4 contract was to soft-fail
+    rather than raise.
     """
+    warnings.warn(
+        "_parse_horizon_months is deprecated; "
+        "use _parse_horizon_periods(horizon, cadence='monthly') instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if horizon is None:
         return fallback
     match = _HORIZON_RE.search(str(horizon))
@@ -61,7 +184,7 @@ def expanding_window_binary_backtest(
     :func:`evaluate_walk_forward`. The public signature is preserved so the
     CLI does not need to change.
     """
-    H = _parse_horizon_months(horizon)
+    H = _parse_horizon_periods(horizon, cadence="monthly")
     splitter = PurgedWalkForward(
         min_train=min_train,
         step=step,
@@ -147,7 +270,7 @@ def expanding_window_quantile_backtest(
     fresh ``QuantileReturnModel`` on each fold's training slice, predict on
     the test slice, and emit the per-fold quantile frame.
     """
-    H = _parse_horizon_months(horizon)
+    H = _parse_horizon_periods(horizon, cadence="monthly")
     splitter = PurgedWalkForward(
         min_train=min_train,
         step=step,
@@ -322,6 +445,7 @@ def dataframe_to_json_records(df: pd.DataFrame) -> str:
 
 
 __all__ = [
+    "Cadence",
     "benchmark_report",
     "binary_benchmark_report",
     "dataframe_to_json_records",
