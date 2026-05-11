@@ -115,9 +115,8 @@ def test_pooled_warehouse_write_lock_is_reentrant(tmp_path: Path) -> None:
     calls into a helper that also grabs it does not deadlock."""
     db = tmp_path / "reentrant.duckdb"
     get_pooled_warehouse(db)  # mint the lock
-    with pooled_warehouse_write_lock(db):
-        with pooled_warehouse_write_lock(db):
-            pass  # would deadlock with a non-re-entrant lock
+    with pooled_warehouse_write_lock(db), pooled_warehouse_write_lock(db):
+        pass  # would deadlock with a non-re-entrant lock
 
 
 def test_pooled_warehouse_write_lock_mints_warehouse_lazily(tmp_path: Path) -> None:

@@ -34,10 +34,10 @@ def test_api_v1_health_endpoint_uses_pooled_warehouse(monkeypatch, tmp_path: Pat
     close_pooled_warehouses()
     _seed_warehouse(db)
 
-    from fastapi.testclient import TestClient
-
     # Re-import so the module re-reads ``MRE_DB_PATH``.
     import importlib
+
+    from fastapi.testclient import TestClient
 
     import market_regime_engine.api_v1 as api_v1
 
@@ -63,9 +63,9 @@ def test_api_v1_repeated_reads_reuse_pooled_warehouse(monkeypatch, tmp_path: Pat
     close_pooled_warehouses()
     _seed_warehouse(db)
 
-    from fastapi.testclient import TestClient
-
     import importlib
+
+    from fastapi.testclient import TestClient
 
     import market_regime_engine.api_v1 as api_v1
 
@@ -90,9 +90,9 @@ def test_api_v1_shutdown_event_drains_pool(monkeypatch, tmp_path: Path) -> None:
     close_pooled_warehouses()
     _seed_warehouse(db)
 
-    from fastapi.testclient import TestClient
-
     import importlib
+
+    from fastapi.testclient import TestClient
 
     import market_regime_engine.api_v1 as api_v1
 

@@ -135,7 +135,7 @@ def validation_frame(results: list[BinaryValidationResult]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# v1.5 PR-5: Bailey–López de Prado validation primitives (Q-5, deep research)
+# v1.5 PR-5: Bailey-Lopez de Prado validation primitives (Q-5, deep research)
 # ---------------------------------------------------------------------------
 
 
@@ -302,7 +302,7 @@ def deflated_sharpe(
     sr_star_threshold = float(sharpe_target) + (_expected_max_z(n_trials) / math.sqrt(max(n - 1, 1)))
 
     # Non-normality adjustment per BLP eq. (5).
-    # Var(SR_hat) ≈ (1 − skew·SR + ((kurt − 1)/4)·SR^2) / (n − 1).
+    # Var(SR_hat) ~= (1 - skew*SR + ((kurt - 1)/4)*SR^2) / (n - 1).
     var_term = 1.0 - skew * sharpe_hat + (kurt - 1.0) / 4.0 * sharpe_hat * sharpe_hat
     var_term = max(var_term, 1e-12)
     denom = math.sqrt(var_term / max(n - 1, 1))
@@ -351,9 +351,7 @@ def probability_of_backtest_overfitting(
         return float("nan")
 
     block_edges = np.linspace(0, t, n_partitions + 1, dtype=int)
-    block_indices: list[np.ndarray] = [
-        np.arange(block_edges[i], block_edges[i + 1]) for i in range(n_partitions)
-    ]
+    block_indices: list[np.ndarray] = [np.arange(block_edges[i], block_edges[i + 1]) for i in range(n_partitions)]
 
     # Each combination picks half the blocks as IS, the other half as OOS.
     from itertools import combinations
@@ -362,9 +360,7 @@ def probability_of_backtest_overfitting(
     n_total = 0
     for combo in combinations(range(n_partitions), n_partitions // 2):
         is_blocks = np.concatenate([block_indices[i] for i in combo])
-        oos_blocks = np.concatenate(
-            [block_indices[i] for i in range(n_partitions) if i not in combo]
-        )
+        oos_blocks = np.concatenate([block_indices[i] for i in range(n_partitions) if i not in combo])
         if is_blocks.size == 0 or oos_blocks.size == 0:
             continue
         is_perf = mat[is_blocks].mean(axis=0)
@@ -420,8 +416,8 @@ def minimum_track_record_length(
 
 
 __all__ = [
-    "BinaryValidationResult",
     "EPS",
+    "BinaryValidationResult",
     "brier_score",
     "calibration_table",
     "deflated_sharpe",

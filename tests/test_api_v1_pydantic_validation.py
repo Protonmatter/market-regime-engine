@@ -107,9 +107,7 @@ def test_pydantic_model_accepts_valid_body() -> None:
 
 def test_pydantic_model_rejects_naive_timestamp() -> None:
     with pytest.raises(ValueError, match="explicit tz info"):
-        ExecutionConfidenceRequestModel(
-            **{**_valid_payload(), "timestamp": "2026-05-01T16:00:30"}
-        )
+        ExecutionConfidenceRequestModel(**{**_valid_payload(), "timestamp": "2026-05-01T16:00:30"})
 
 
 def test_pydantic_model_rejects_non_alphanumeric_cusip() -> None:
@@ -119,9 +117,7 @@ def test_pydantic_model_rejects_non_alphanumeric_cusip() -> None:
 
 def test_pydantic_model_rejects_oversized_notional() -> None:
     with pytest.raises(ValueError):
-        ExecutionConfidenceRequestModel(
-            **{**_valid_payload(), "notional": 1_000_000_000}
-        )
+        ExecutionConfidenceRequestModel(**{**_valid_payload(), "notional": 1_000_000_000})
 
 
 def test_pydantic_model_rejects_unknown_side() -> None:

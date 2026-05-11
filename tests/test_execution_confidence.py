@@ -30,7 +30,6 @@ import market_regime_engine.fixed_income  # noqa: F401
 from market_regime_engine.fixed_income import (
     ExecutionConfidenceRequest,
     LiquidityLabel,
-    RegimeLabel,
     score_credit_regime,
     score_execution_confidence,
     score_liquidity_stress,
@@ -321,12 +320,8 @@ def test_artifact_hash_is_stable_across_runs(wh: Warehouse) -> None:
     asof = pd.Timestamp("2026-05-01T16:00:00Z")
     _seed_signals(wh, asof=asof, regime_score=20.0, liquidity_index=15.0)
     request = _request(timestamp=asof + pd.Timedelta(seconds=30))
-    a = score_execution_confidence(
-        request, warehouse=wh, release_gate=True, model_run_id="fixed-run-id"
-    )
-    b = score_execution_confidence(
-        request, warehouse=wh, release_gate=True, model_run_id="fixed-run-id"
-    )
+    a = score_execution_confidence(request, warehouse=wh, release_gate=True, model_run_id="fixed-run-id")
+    b = score_execution_confidence(request, warehouse=wh, release_gate=True, model_run_id="fixed-run-id")
     assert a.artifact_hash == b.artifact_hash
 
 

@@ -50,9 +50,7 @@ def test_min_train_after_purge_explicit_threshold_skips_more_folds() -> None:
 def test_min_train_after_purge_zero_keeps_every_attempt() -> None:
     """``min_train_after_purge=0`` lets every candidate fold through as long
     as ``train_upper > train_lower``."""
-    splitter = PurgedWalkForward(
-        min_train=60, step=1, horizon=12, embargo=0, min_train_after_purge=0
-    )
+    splitter = PurgedWalkForward(min_train=60, step=1, horizon=12, embargo=0, min_train_after_purge=0)
     folds = list(splitter.split(200))
     assert len(folds) >= 100  # very large fold count vs the default rail
 

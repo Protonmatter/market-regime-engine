@@ -23,7 +23,6 @@ from market_regime_engine.backtest import (
     _parse_horizon_periods,
 )
 
-
 # --------------------------------------------------------------------------
 # new cadence-aware parser
 # --------------------------------------------------------------------------
@@ -89,8 +88,7 @@ def test_parse_horizon_months_legacy_shim_emits_deprecation_warning() -> None:
         out = _parse_horizon_months("12m")
     assert out == 12
     assert any(
-        isinstance(w.message, DeprecationWarning)
-        and "_parse_horizon_months is deprecated" in str(w.message)
+        isinstance(w.message, DeprecationWarning) and "_parse_horizon_months is deprecated" in str(w.message)
         for w in caught
     )
 
