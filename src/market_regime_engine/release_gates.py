@@ -38,6 +38,17 @@ def production_profile() -> dict[str, Any]:
       coverage drift > 2pp blocks release.
     - ``promotion_method="mcs"`` — Hansen MCS is the only accepted
       promotion criterion in this profile.
+
+    v1.5 PR-5 (Q-5, deep research): DSR / PBO rails:
+
+    - ``min_dsr=0.5`` — Deflated Sharpe ≥ 0.5 (Bailey–López de Prado);
+      blocks release when ``confidence`` frame carries ``dsr`` column.
+    - ``max_pbo=0.05`` — Probability of Backtest Overfitting ≤ 5%
+      (BBLZ); blocks release when ``confidence`` frame carries ``pbo``.
+
+    Both columns are **optional** in the confidence frame; absence
+    skips the rail entirely so legacy callers without DSR/PBO emit the
+    same release decision as v1.4.1.
     """
     return {
         "min_confidence": 0.75,
@@ -47,6 +58,8 @@ def production_profile() -> dict[str, Any]:
         "min_coverage": 0.85,
         "coverage_drop_pp": 0.02,
         "promotion_method": "mcs",
+        "min_dsr": 0.5,
+        "max_pbo": 0.05,
     }
 
 
@@ -57,6 +70,10 @@ def default_profile() -> dict[str, Any]:
     release-gate`` was invoked with no flags. Available as an explicit
     opt-back-in for legitimate dev / staging environments via
     ``profile="default"`` or ``MRE_ENV=dev``.
+
+    v1.5 PR-5: ``min_dsr=None`` and ``max_pbo=None`` so the dev profile
+    does not gate on validation primitives that the macro engine does
+    not emit.
     """
     return {
         "min_confidence": 0.55,
@@ -66,6 +83,8 @@ def default_profile() -> dict[str, Any]:
         "min_coverage": None,
         "coverage_drop_pp": 0.05,
         "promotion_method": "mcs",
+        "min_dsr": None,
+        "max_pbo": None,
     }
 
 
@@ -118,6 +137,8 @@ def evaluate_release_gate(
     e_value_log: pd.DataFrame | None = None,
     e_value_alpha: float = 0.05,
     profile: Literal["default", "production"] | None = None,
+    min_dsr: Any = _UNSET,
+    max_pbo: Any = _UNSET,
 ) -> pd.DataFrame:
     """Evaluate the release gate.
 
@@ -205,14 +226,37 @@ def evaluate_release_gate(
         promotion_method = str(prof_kwargs.get("promotion_method", "mcs"))
     else:
         promotion_method = str(promotion_method)
+    # v1.5 PR-5: optional DSR / PBO thresholds. ``None`` opts out of the
+    # rail; the production profile defaults to ``0.5`` / ``0.05``.
+    if min_dsr is _UNSET:
+        prof_dsr = prof_kwargs.get("min_dsr")
+        min_dsr = float(prof_dsr) if prof_dsr is not None else None
+    else:
+        min_dsr = float(min_dsr) if min_dsr is not None else None
+    if max_pbo is _UNSET:
+        prof_pbo = prof_kwargs.get("max_pbo")
+        max_pbo = float(prof_pbo) if prof_pbo is not None else None
+    else:
+        max_pbo = float(max_pbo) if max_pbo is not None else None
     conf_val = 0.0
     conf_grade = "F"
     date = None
+    dsr_val: float | None = None
+    pbo_val: float | None = None
     if confidence is not None and not confidence.empty:
         latest = confidence.sort_values("date").iloc[-1]
         conf_val = float(latest.get("confidence", 0.0))
         conf_grade = str(latest.get("grade", "unknown"))
         date = latest.get("date")
+        # DSR / PBO are optional columns on the confidence frame; coerce
+        # to None when absent or NaN so the rail can decide whether to
+        # fire below.
+        if "dsr" in confidence.columns:
+            raw = latest.get("dsr")
+            dsr_val = float(raw) if raw is not None and not pd.isna(raw) else None
+        if "pbo" in confidence.columns:
+            raw = latest.get("pbo")
+            pbo_val = float(raw) if raw is not None and not pd.isna(raw) else None
     severe_drift = 0
     major_drift = 0
     max_psi = 0.0
@@ -317,6 +361,13 @@ def evaluate_release_gate(
         coverage_floor = (1.0 - coverage_alpha) - coverage_drop_pp
         if worst_coverage < min(min_coverage, coverage_floor):
             reasons.append("conformal_coverage_below_floor")
+    # v1.5 PR-5 (Q-5 / deep research): DSR / PBO rails. Optional —
+    # absence of the column on the confidence frame skips the rail so
+    # legacy callers without DSR/PBO emit the same decision as v1.4.1.
+    if min_dsr is not None and dsr_val is not None and dsr_val < min_dsr:
+        reasons.append(f"deflated_sharpe_below_{min_dsr:.2f}")
+    if max_pbo is not None and pbo_val is not None and pbo_val > max_pbo:
+        reasons.append(f"probability_of_overfit_above_{max_pbo:.2f}")
     approved = len(reasons) == 0
     return pd.DataFrame(
         [
@@ -339,6 +390,12 @@ def evaluate_release_gate(
                 # the threshold selection. Persisted into the
                 # release_gates warehouse table by storage.write_release_gates.
                 "resolved_profile": resolved_profile,
+                # v1.5 PR-5: surface the DSR / PBO values used (NaN when
+                # the rail was skipped). The release_gates warehouse
+                # writer ignores unknown columns so this is back-compat
+                # safe for callers that have not migrated yet.
+                "dsr": dsr_val if dsr_val is not None else float("nan"),
+                "pbo": pbo_val if pbo_val is not None else float("nan"),
             }
         ]
     )
