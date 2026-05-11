@@ -45,9 +45,7 @@ CLI_COMMANDS: tuple[str, ...] = (
 
 # Commands fully implemented in this PR. Stub-emitting commands fall
 # back to ``_emit_stub`` below.
-_LIVE_COMMANDS: frozenset[str] = frozenset(
-    {"fi-score-credit-regime", "fi-score-liquidity"}
-)
+_LIVE_COMMANDS: frozenset[str] = frozenset({"fi-score-credit-regime", "fi-score-liquidity"})
 
 
 def _emit_stub(command: str) -> int:
@@ -283,9 +281,7 @@ def _cmd_fi_score_credit_regime(ns: argparse.Namespace) -> int:
     wh = Warehouse(ns.db)
     try:
         try:
-            features = build_credit_features(
-                wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504))
-            )
+            features = build_credit_features(wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504)))
         except PitViolationError as exc:
             print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
             return 2
@@ -400,25 +396,33 @@ def _cmd_fi_score_liquidity(ns: argparse.Namespace) -> int:
 
     release_gate = (getattr(ns, "release_gate", "true") or "true").lower() != "false"
     profile = getattr(ns, "profile", "production")
-    scope_type = getattr(ns, "scope_type", "market") or "market"
-    scope_id = getattr(ns, "scope_id", "ALL") or "ALL"
-    prev_from_wh = (
-        (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
+    scope_type_raw = getattr(ns, "scope_type", "market") or "market"
+    if scope_type_raw not in {"market", "sector", "rating", "cusip"}:
+        print(
+            json.dumps(
+                {"status": "error", "detail": f"unsupported scope_type: {scope_type_raw!r}"},
+                sort_keys=True,
+            )
+        )
+        return 2
+    # Narrow the type so mypy is happy passing into the Literal-typed scorer.
+    from typing import Literal, cast
+
+    scope_type: Literal["market", "sector", "rating", "cusip"] = cast(
+        Literal["market", "sector", "rating", "cusip"], scope_type_raw
     )
+    scope_id = getattr(ns, "scope_id", "ALL") or "ALL"
+    prev_from_wh = (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
     use_hier = bool(getattr(ns, "use_hierarchical", False))
 
     wh = Warehouse(ns.db)
     prev_label: LiquidityLabel | None = None
     try:
         if prev_from_wh:
-            prev = latest_liquidity_stress_score(
-                wh, scope_type=scope_type, scope_id=scope_id
-            )
+            prev = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
             if prev is not None and prev.liquidity_label:
                 try:
-                    prev_label = next(
-                        lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label
-                    )
+                    prev_label = next(lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label)
                 except StopIteration:
                     prev_label = None
         try:

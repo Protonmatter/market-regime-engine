@@ -222,13 +222,9 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(
-                    wh, scope_type=scope_type, scope_id=scope_id
-                )
+                latest = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
             except Exception as exc:
-                log.exception(
-                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
-                )
+                log.exception("liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc)
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
                     detail={"detail": "no_data", "release_gate": False},
