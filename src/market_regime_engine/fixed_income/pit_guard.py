@@ -220,10 +220,34 @@ def utc_now() -> datetime:
     return pd.Timestamp.now(tz="UTC").to_pydatetime()
 
 
+def assert_trading_day(
+    timestamp: Any,
+    calendar: Any = None,
+    *,
+    label: str = "timestamp",
+) -> None:
+    """Re-export of :func:`fixed_income.calendars.assert_trading_day`.
+
+    Kept on :mod:`pit_guard` so the FI feature builders import a
+    single ``pit_guard`` surface for both PIT rails and trading-day
+    enforcement (per PR-3 task D.4). ``calendar`` defaults to
+    :attr:`TradingCalendar.SIFMA_BOND`; passing the enum explicitly is
+    permitted.
+    """
+    from market_regime_engine.fixed_income.calendars import TradingCalendar
+    from market_regime_engine.fixed_income.calendars import (
+        assert_trading_day as _assert_trading_day,
+    )
+
+    cal = calendar if calendar is not None else TradingCalendar.SIFMA_BOND
+    _assert_trading_day(timestamp, cal, label=label)
+
+
 __all__ = [
     "PitAuditReport",
     "PitViolationError",
     "assert_pit_safe",
+    "assert_trading_day",
     "audit_pit_dataframe",
     "utc_now",
 ]

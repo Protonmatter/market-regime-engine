@@ -39,6 +39,12 @@ nowcast = ["statsmodels>=0.14", "scipy>=1.10"]
 frontier = ["statsmodels>=0.14", "ngboost>=0.5", "torch>=2.0"]
 explain = ["shap>=0.44"]
 observability = ["prometheus-client>=0.20", "structlog>=24.1"]
+# v1.5 (PR-3 task D.3): optional pandas_market_calendars adapter for
+# the SIFMA bond calendar. The hand-curated YAML at
+# data/calendars/sifma_bond.yaml is the audit-grade fallback; pmc is
+# only consulted when MRE_FI_USE_PMC=1 is set so a stale pmc install
+# on a dev laptop cannot override the reference YAML.
+fixed_income = ["pandas-market-calendars>=4.4"]
 # v1.3 supply-chain hardening: SBOM, license audit, and static
 # security scan tooling. Pinned to broad ranges so the CI matrix
 # can refresh without bumping pyproject every minor.
