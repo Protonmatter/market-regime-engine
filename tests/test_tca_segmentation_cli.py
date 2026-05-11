@@ -4,12 +4,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 import market_regime_engine.fixed_income  # noqa: F401 — register FI schema
 from market_regime_engine.fixed_income import (
@@ -129,9 +126,7 @@ def test_fi_tca_segment_cli_runs_on_synthetic_data(tmp_path: Path, capsys) -> No
     assert payload["rows_written"] > 0
 
 
-def test_fi_tca_segment_cli_writes_expected_segment_count(
-    tmp_path: Path, capsys
-) -> None:
+def test_fi_tca_segment_cli_writes_expected_segment_count(tmp_path: Path, capsys) -> None:
     db = tmp_path / "tca_cli.duckdb"
     asof = pd.Timestamp("2026-05-01T16:00:00Z")
     _seed_warehouse_for_materialise(db, asof=asof)
@@ -154,9 +149,7 @@ def test_fi_tca_segment_cli_writes_expected_segment_count(
     assert parsed["rows_written"] > 0
 
 
-def test_fi_tca_segment_cli_supports_soft_weighting_flag(
-    tmp_path: Path, capsys
-) -> None:
+def test_fi_tca_segment_cli_supports_soft_weighting_flag(tmp_path: Path, capsys) -> None:
     db = tmp_path / "tca_cli.duckdb"
     asof = pd.Timestamp("2026-05-01T16:00:00Z")
     _seed_warehouse_for_materialise(db, asof=asof)
@@ -199,9 +192,7 @@ def test_fi_tca_segment_cli_rejects_unknown_dimension(tmp_path: Path, capsys) ->
     assert payload["status"] == "error"
 
 
-def test_fi_tca_segment_cli_with_empty_warehouse_emits_zero_row_count(
-    tmp_path: Path, capsys
-) -> None:
+def test_fi_tca_segment_cli_with_empty_warehouse_emits_zero_row_count(tmp_path: Path, capsys) -> None:
     db = tmp_path / "tca_cli_empty.duckdb"
     wh = Warehouse(db)
     wh.close()

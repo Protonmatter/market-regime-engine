@@ -152,9 +152,7 @@ def compute_execution_success_label(
     )
 
     try:
-        bps = abs(
-            to_bps(to_decimal(execution) - to_decimal(arrival), to_decimal(arrival))
-        )
+        bps = abs(to_bps(to_decimal(execution) - to_decimal(arrival), to_decimal(arrival)))
     except ZeroDivisionError:
         return None
     return bps < to_decimal(threshold)

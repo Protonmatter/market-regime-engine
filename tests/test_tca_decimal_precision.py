@@ -23,7 +23,6 @@ from market_regime_engine.fixed_income.bps_precision import (
     to_decimal,
 )
 
-
 # ---------------------------------------------------------------------------
 # to_bps
 # ---------------------------------------------------------------------------
@@ -58,7 +57,7 @@ def test_to_bps_none_raises() -> None:
 
 
 def test_bps_scale_constant() -> None:
-    assert BPS_SCALE == Decimal("10000")
+    assert Decimal("10000") == BPS_SCALE
 
 
 def test_tca_precision_context_prec_is_28() -> None:
@@ -122,7 +121,7 @@ def test_bps_aggregate_sum_empty_returns_zero() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Acceptance gate: $1B daily × 0.5 bps; Decimal aggregate error < 1e-9 bps
+# Acceptance gate: $1B daily x 0.5 bps; Decimal aggregate error < 1e-9 bps
 # ---------------------------------------------------------------------------
 
 

@@ -53,7 +53,6 @@ from market_regime_engine.fixed_income.tca_segmentation import (
 )
 from market_regime_engine.storage import Warehouse
 
-
 # ---------------------------------------------------------------------------
 # fixtures + helpers
 # ---------------------------------------------------------------------------
@@ -277,9 +276,7 @@ def test_tag_trade_assigns_notional_bucket_correctly(wh: Warehouse) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _basic_request_response_outcome() -> tuple[
-    ExecutionConfidenceRequest, ExecutionConfidenceResponse, dict
-]:
+def _basic_request_response_outcome() -> tuple[ExecutionConfidenceRequest, ExecutionConfidenceResponse, dict]:
     decision_ts = "2026-05-01T16:00:00Z"
     observed_at = "2026-05-01T16:30:00Z"
     request = ExecutionConfidenceRequest(
@@ -327,9 +324,7 @@ def test_compute_tca_metrics_for_outcome_returns_all_required_metrics() -> None:
     # Force asof_now > 5 trading days after decision so the markout
     # window observability check passes.
     asof_now = pd.Timestamp("2026-05-15T16:00:00Z")
-    result = compute_tca_metrics_for_outcome(
-        request, response, outcome, warehouse=None, asof_now=asof_now
-    )
+    result = compute_tca_metrics_for_outcome(request, response, outcome, warehouse=None, asof_now=asof_now)
     for metric in TCA_METRICS:
         assert metric in result, metric
     # All non-None for the well-populated outcome.
@@ -370,9 +365,7 @@ def test_compute_tca_metrics_decimal_precision_preserved() -> None:
         # 0.25 bps cost = price moves 0.0025 on a buy at par.
         "execution_price": 100.0025,
     }
-    result = compute_tca_metrics_for_outcome(
-        request, response, outcome, warehouse=None
-    )
+    result = compute_tca_metrics_for_outcome(request, response, outcome, warehouse=None)
     assert result["arrival_cost_bps"] == pytest.approx(0.25, abs=1e-9)
 
 
@@ -381,9 +374,7 @@ def test_compute_tca_metrics_returns_none_for_unobservable_markout() -> None:
     request, response, outcome = _basic_request_response_outcome()
     # asof_now = 1 trading day after decision → 1d window closed, 5d not.
     asof_now = pd.Timestamp("2026-05-04T16:00:00Z")  # Monday after Friday
-    result = compute_tca_metrics_for_outcome(
-        request, response, outcome, warehouse=None, asof_now=asof_now
-    )
+    result = compute_tca_metrics_for_outcome(request, response, outcome, warehouse=None, asof_now=asof_now)
     assert result["post_trade_markout_5d_bps"] is None
 
 
@@ -574,9 +565,7 @@ def test_materialize_tca_segments_for_day_writes_one_row_per_dim_combo_metric(
             "maturity_years": 4.5,
         },
     )
-    rows_written = materialize_tca_segments_for_day(
-        wh, date=asof.normalize(), soft_weighting=False
-    )
+    rows_written = materialize_tca_segments_for_day(wh, date=asof.normalize(), soft_weighting=False)
     assert rows_written > 0
     # Sanity: read back rows.
     segments = latest_tca_regime_segments(wh, limit=200)
