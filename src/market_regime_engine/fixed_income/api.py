@@ -34,11 +34,12 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -138,7 +139,9 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
+            raise ValueError(
+                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
+            )
         return v
 
     @field_validator("cusip")
@@ -379,9 +382,13 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+                latest = latest_liquidity_stress_score(
+                    wh, scope_type=scope_type, scope_id=scope_id
+                )
             except Exception as exc:
-                log.exception("liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc)
+                log.exception(
+                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
+                )
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
                     detail={"detail": "no_data", "release_gate": False},
@@ -449,7 +456,9 @@ def build_router(
                     },
                 ) from exc
             try:
-                write_execution_confidence_prediction(wh, response, request_id=body.request_id)
+                write_execution_confidence_prediction(
+                    wh, response, request_id=body.request_id
+                )
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",
@@ -512,7 +521,9 @@ def build_router(
         wh = factory()
         try:
             try:
-                segments = latest_tca_regime_segments(wh, dimensions=dim_list, limit=clamped_limit)
+                segments = latest_tca_regime_segments(
+                    wh, dimensions=dim_list, limit=clamped_limit
+                )
             except Exception as exc:
                 log.exception("tca/regime-segments/latest read failed: %s", exc)
                 raise HTTPException(
@@ -524,7 +535,9 @@ def build_router(
             if callable(close):
                 close()
         if not segments:
-            return JSONResponse({"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE)
+            return JSONResponse(
+                {"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE
+            )
         return JSONResponse(
             {
                 "segments": [tca_regime_segment_to_dict(s) for s in segments],
@@ -535,6 +548,39 @@ def build_router(
 
     @router.get("/evidence-pack/{model_run_id}")
     async def evidence_pack_get(model_run_id: str) -> JSONResponse:
-        return _stub_response(f"GET /v1/evidence-pack/{model_run_id}")
+        """Return the most recent evidence pack for ``model_run_id``.
+
+        - **200** with the full :class:`FixedIncomeEvidencePack` JSON
+          (including ``hmac_signature`` so a downstream verifier can
+          authenticate the pack independently).
+        - **404** ``{"detail": "evidence_pack_not_found"}`` when no
+          row matches.
+        - **503** when the warehouse read fails.
+        """
+        from market_regime_engine.fixed_income.evidence_pack import (
+            evidence_pack_to_dict,
+            read_evidence_pack,
+        )
+
+        wh = factory()
+        try:
+            try:
+                pack = read_evidence_pack(wh, model_run_id=model_run_id)
+            except Exception as exc:
+                log.exception("evidence-pack read failed: %s", exc)
+                raise HTTPException(
+                    status_code=_HTTP_SERVICE_UNAVAILABLE,
+                    detail={"detail": "evidence_pack_read_failed"},
+                ) from exc
+        finally:
+            close = getattr(wh, "close", None)
+            if callable(close):
+                close()
+        if pack is None:
+            return JSONResponse(
+                {"detail": "evidence_pack_not_found", "model_run_id": model_run_id},
+                status_code=_HTTP_NOT_FOUND,
+            )
+        return JSONResponse(evidence_pack_to_dict(pack), status_code=200)
 
     return router
