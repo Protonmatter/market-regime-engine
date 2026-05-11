@@ -32,6 +32,15 @@ from market_regime_engine.fixed_income.calendars import (
     previous_trading_day,
     trading_days_between,
 )
+from market_regime_engine.fixed_income.credit_spread_regime import (
+    DEFAULT_WEIGHTS as CREDIT_REGIME_DEFAULT_WEIGHTS,
+)
+from market_regime_engine.fixed_income.credit_spread_regime import (
+    latest_credit_regime_score,
+    score_credit_regime,
+    write_credit_regime_score,
+)
+from market_regime_engine.fixed_income.feature_builders import build_credit_features
 from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.pit_guard import assert_pit_safe, assert_trading_day
 from market_regime_engine.fixed_income.posterior_mode import (
@@ -62,6 +71,7 @@ from market_regime_engine.fixed_income.timestamps import assert_utc, iso8601_z, 
 _register_fi_schema()
 
 __all__ = [
+    "CREDIT_REGIME_DEFAULT_WEIGHTS",
     "FI_TABLE_NAMES",
     "CreditRegimeOutput",
     "ExecutionConfidenceRequest",
@@ -78,11 +88,15 @@ __all__ = [
     "assert_pit_safe",
     "assert_trading_day",
     "assert_utc",
+    "build_credit_features",
     "canonical_sha256",
     "is_trading_day",
     "iso8601_z",
+    "latest_credit_regime_score",
     "next_trading_day",
     "previous_trading_day",
+    "score_credit_regime",
     "to_utc",
     "trading_days_between",
+    "write_credit_regime_score",
 ]
