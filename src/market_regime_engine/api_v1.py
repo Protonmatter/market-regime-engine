@@ -31,6 +31,7 @@ should mount ``api_v1.app``.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import logging
 import os
@@ -38,7 +39,7 @@ import pickle  # nosec B403 - cache values are produced by this module only
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
@@ -47,7 +48,11 @@ from market_regime_engine import __version__
 from market_regime_engine.analogs import analog_summary
 from market_regime_engine.explain import latest_explanation
 from market_regime_engine.observability import metrics, prometheus_text, time_block
-from market_regime_engine.storage import Warehouse
+from market_regime_engine.storage import (
+    Warehouse,
+    close_pooled_warehouses,
+    get_pooled_warehouse,
+)
 
 log = logging.getLogger(__name__)
 
@@ -248,17 +253,33 @@ def _read(name: str, fn: Callable[[Warehouse], object]) -> object:
         metrics().incr("mre_api_cache_hits_total", endpoint=name)
         return cached
     metrics().incr("mre_api_cache_misses_total", endpoint=name)
-    db = Warehouse(_db_path())
+    # v1.5 PR-5 (ASK-8): pooled per-process Warehouse so the FastAPI hot
+    # path no longer pays DuckDB catalog + WAL teardown per request. The
+    # pool is closed on shutdown (see ``_on_shutdown_close_pool`` below).
+    db = get_pooled_warehouse(_db_path())
+    with time_block("mre_api_read_seconds", endpoint=name):
+        value = fn(db)
+    _CACHE.set(name, value)
+    return value
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Release every pooled :class:`Warehouse` on FastAPI shutdown.
+
+    Avoids leaking DuckDB file handles when the app is replaced (e.g. a
+    ``uvicorn --reload`` cycle). FastAPI 0.110+ deprecates
+    ``on_event("shutdown")`` so PR-5 uses the lifespan context manager
+    pattern.
+    """
     try:
-        with time_block("mre_api_read_seconds", endpoint=name):
-            value = fn(db)
-        _CACHE.set(name, value)
-        return value
+        yield
     finally:
-        db.close()
+        with contextlib.suppress(Exception):
+            close_pooled_warehouses()
 
 
-app = FastAPI(title="Market Regime Engine v1", version=__version__)
+app = FastAPI(title="Market Regime Engine v1", version=__version__, lifespan=_lifespan)
 
 
 def _mount_fixed_income_router() -> None:
@@ -294,15 +315,15 @@ def v1_health() -> dict:
     Intentionally *not* gated by ``require_api_key`` so load balancers and
     Kubernetes liveness probes can hit it without provisioning a key. Only
     the latest release-gate decision is exposed; no row-level data leaks.
+
+    v1.5 PR-5 (ASK-8): reads from the per-process pooled Warehouse so
+    liveness probes do not flap DuckDB catalog handles on the hot path.
     """
-    db = Warehouse(_db_path())
-    try:
-        gates = db.read_release_gates()
-        latest_decision = "unknown"
-        if not gates.empty:
-            latest_decision = str(gates.iloc[-1]["decision"])
-    finally:
-        db.close()
+    db = get_pooled_warehouse(_db_path())
+    gates = db.read_release_gates()
+    latest_decision = "unknown"
+    if not gates.empty:
+        latest_decision = str(gates.iloc[-1]["decision"])
     return {"status": "ok", "version": __version__, "release_gate": latest_decision}
 
 
