@@ -1930,6 +1930,108 @@ class Warehouse:
 
 
 # ---------------------------------------------------------------------------
+# bond_reference temporal versioning helpers (PR-2 task C / Q-4)
+# ---------------------------------------------------------------------------
+
+
+def read_bond_reference_asof(
+    warehouse: Warehouse,
+    asof: pd.Timestamp | str,
+    *,
+    include_survivorship_failures: bool = False,
+) -> pd.DataFrame:
+    """Return the ``bond_reference`` snapshot effective at ``asof``.
+
+    A row is "effective at ``asof``" when ``valid_from <= asof`` and
+    (``valid_to`` is ``NULL`` OR ``valid_to > asof``). The function
+    additionally filters out CUSIPs that have a ``default_date`` or
+    ``delisted_date`` set (the survivorship rule from REVIEW.md §3.4
+    Q-4) unless the caller passes ``include_survivorship_failures=True``,
+    which is the audit-mode path used by ingestion validators.
+
+    Returns an empty frame when ``bond_reference`` is empty or missing.
+    The bool ``is_active`` is computed at read time and never stored,
+    so the warehouse cannot drift out of sync with the survivorship
+    rule.
+    """
+
+    asof_ts = pd.Timestamp(asof)
+    # ISO-8601 with explicit microseconds keeps both backends happy:
+    # DuckDB parses it as TIMESTAMP, SQLite compares it as TEXT against
+    # the same ISO-8601 strings written by the writer.
+    asof_str = asof_ts.isoformat()
+    sql_filter = (
+        "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+    )
+    params: tuple[Any, ...] = (asof_str, asof_str)
+    if not include_survivorship_failures:
+        sql_filter += " AND default_date IS NULL AND delisted_date IS NULL"
+
+    backend = warehouse._backend
+    try:
+        df = _read_with_params(backend, f"SELECT * FROM bond_reference WHERE {sql_filter}", params)
+    except Exception:
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame(columns=df.columns if df is not None else [])
+    df = df.copy()
+    df["is_active"] = True
+    return df
+
+
+def read_bond_reference_history(
+    warehouse: Warehouse,
+    cusip: str,
+) -> pd.DataFrame:
+    """Return every ``bond_reference`` row for ``cusip`` in temporal order.
+
+    Rows are ordered by ``valid_from`` ascending; the most recent
+    snapshot is the last row. Returns an empty frame when ``cusip`` has
+    never been written.
+    """
+
+    backend = warehouse._backend
+    try:
+        df = _read_with_params(
+            backend,
+            "SELECT * FROM bond_reference WHERE cusip = ? ORDER BY valid_from ASC",
+            (cusip,),
+        )
+    except Exception:
+        return pd.DataFrame()
+    if df is None:
+        return pd.DataFrame()
+    return df
+
+
+def _read_with_params(backend: _Backend, sql: str, params: tuple[Any, ...]) -> pd.DataFrame:
+    """Backend-agnostic parameterised SELECT helper.
+
+    The :class:`_Backend` protocol only exposes ``read_sql(sql)`` so we
+    reach into the underlying connection to bind parameters. Both
+    SQLite's ``pd.read_sql_query`` and DuckDB's ``execute(sql, params)
+    .fetchdf()`` accept positional parameters via ``?`` placeholders.
+    """
+
+    conn = getattr(backend, "conn", None)
+    if conn is None:
+        return backend.read_sql(sql)
+    # SQLite3 connection has ``execute`` returning a cursor; DuckDB
+    # connection has ``execute`` returning a result object with
+    # ``fetchdf``. We try the DuckDB-shaped path first because that is
+    # the new default backend.
+    try:
+        result = conn.execute(sql, params)
+        if hasattr(result, "fetchdf"):
+            return result.fetchdf()
+    except TypeError:
+        # SQLite execute does not accept tuple params via positional
+        # placeholders on read_sql — fall through to pandas helper.
+        pass
+    return pd.read_sql_query(sql, conn, params=params)
+
+
+# ---------------------------------------------------------------------------
 # Migration helper
 # ---------------------------------------------------------------------------
 
