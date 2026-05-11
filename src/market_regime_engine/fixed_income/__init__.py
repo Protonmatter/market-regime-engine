@@ -34,14 +34,20 @@ from market_regime_engine.fixed_income.calendars import (
 )
 from market_regime_engine.fixed_income.credit_spread_regime import (
     DEFAULT_WEIGHTS as CREDIT_REGIME_DEFAULT_WEIGHTS,
+)
+from market_regime_engine.fixed_income.credit_spread_regime import (
     HYSTERESIS_BANDS_CREDIT,
-    classify_with_hysteresis as classify_credit_with_hysteresis,
     latest_credit_regime_score,
     score_credit_regime,
     write_credit_regime_score,
 )
+from market_regime_engine.fixed_income.credit_spread_regime import (
+    classify_with_hysteresis as classify_credit_with_hysteresis,
+)
 from market_regime_engine.fixed_income.execution_confidence import (
     DEFAULT_WEIGHTS as EXECUTION_CONFIDENCE_DEFAULT_WEIGHTS,
+)
+from market_regime_engine.fixed_income.execution_confidence import (
     build_execution_features,
     latest_execution_confidence_prediction,
     score_execution_confidence,
@@ -55,21 +61,25 @@ from market_regime_engine.fixed_income.feature_builders import (
 from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.liquidity_stress import (
     DEFAULT_WEIGHTS as LIQUIDITY_STRESS_DEFAULT_WEIGHTS,
+)
+from market_regime_engine.fixed_income.liquidity_stress import (
     HYSTERESIS_BANDS_LIQUIDITY,
-    classify_with_hysteresis as classify_liquidity_with_hysteresis,
     latest_liquidity_stress_score,
     list_recent_liquidity_stress_scores,
     score_liquidity_stress,
     write_liquidity_stress_score,
 )
+from market_regime_engine.fixed_income.liquidity_stress import (
+    classify_with_hysteresis as classify_liquidity_with_hysteresis,
+)
 from market_regime_engine.fixed_income.pit_guard import assert_pit_safe, assert_trading_day
-from market_regime_engine.fixed_income.timestamps import assert_utc, iso8601_z, to_utc
 from market_regime_engine.fixed_income.posterior_mode import (
     FilteredPosterior,
     PosteriorMode,
     SmoothedPosterior,
 )
-from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES, register as _register_fi_schema
+from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES
+from market_regime_engine.fixed_income.schema import register as _register_fi_schema
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
     ExecutionConfidenceRequest,
@@ -96,6 +106,7 @@ from market_regime_engine.fixed_income.tca_segmentation import (
     tag_trade_with_regime_context,
     write_tca_regime_segment,
 )
+from market_regime_engine.fixed_income.timestamps import assert_utc, iso8601_z, to_utc
 
 # v1.5 (PR-2 task B): register the 13 FI warehouse tables with the
 # storage registry on package import. ``register_tables`` is idempotent

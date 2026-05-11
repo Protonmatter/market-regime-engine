@@ -99,9 +99,7 @@ def test_tca_aggregate_emits_dropped_rows_counter_per_bucket() -> None:
     counters = snapshot["counters"]
     # Find the counter for metric=arrival_cost_bps.
     matching = {
-        k: v
-        for k, v in counters.items()
-        if k.startswith(DROPPED_ROWS_COUNTER) and "metric=arrival_cost_bps" in k
+        k: v for k, v in counters.items() if k.startswith(DROPPED_ROWS_COUNTER) and "metric=arrival_cost_bps" in k
     }
     assert matching, f"no dropped-rows counter for arrival_cost_bps; got {counters!r}"
     # Total dropped = sum across all matching counters; must equal 3.
@@ -126,9 +124,7 @@ def test_tca_aggregate_no_counter_increment_when_no_nan() -> None:
     snapshot = metrics().snapshot()
     counters = snapshot["counters"]
     matching = {
-        k: v
-        for k, v in counters.items()
-        if k.startswith(DROPPED_ROWS_COUNTER) and "metric=arrival_cost_bps" in k
+        k: v for k, v in counters.items() if k.startswith(DROPPED_ROWS_COUNTER) and "metric=arrival_cost_bps" in k
     }
     # The counter family pre-registers at 0; no metric-labelled key gets
     # an increment when the frame is clean.

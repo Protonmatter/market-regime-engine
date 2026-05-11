@@ -150,21 +150,24 @@ def test_fi_router_mounted_on_api_v1_app() -> None:
 
 
 def test_other_fi_endpoints_still_return_501(populated_warehouse: Warehouse) -> None:
-    """After PR-5, only the PR-6 / PR-7 endpoints remain as 501 stubs.
+    """After PR-6, only the PR-7 endpoints remain as 501 stubs.
 
     PR-3 made ``/v1/regime_index/latest`` live; PR-4 made
     ``/v1/liquidity_index/*`` live; PR-5 makes
-    ``POST /v1/execution_confidence`` live. The TCA / evidence-pack
-    endpoints stay as stubs until their owning PR lands.
+    ``POST /v1/execution_confidence`` live; PR-6 makes
+    ``/v1/tca/regime-segments/latest`` live (returns 503 when the
+    warehouse has no TCA rows, not 501). The evidence-pack endpoint
+    stays as a stub until PR-7 lands.
     """
     client = TestClient(_app_with_warehouse(populated_warehouse))
-    for path in (
-        "/v1/tca/regime-segments/latest",
-        "/v1/evidence-pack/run-x",
-    ):
-        resp = client.get(path)
-        assert resp.status_code == 501, f"{path} returned {resp.status_code}"
-        assert resp.json()["status"] == "not_yet_implemented"
+    # PR-7 evidence-pack remains a stub.
+    resp = client.get("/v1/evidence-pack/run-x")
+    assert resp.status_code == 501, resp.status_code
+    assert resp.json()["status"] == "not_yet_implemented"
+    # PR-6: /v1/tca/regime-segments/latest is live; empty warehouse → 503.
+    resp = client.get("/v1/tca/regime-segments/latest")
+    assert resp.status_code == 503, resp.status_code
+    assert resp.json()["detail"] == "no_data"
     # PR-5: POST /v1/execution_confidence is live; an empty body should
     # 422 (Pydantic validation), not 501.
     resp = client.post("/v1/execution_confidence", json={})

@@ -15,8 +15,8 @@ the work ships in 7 sequential PRs on top of `v1.4.1`:
 | PR-2 | Warehouse (13 FI tables + register_tables + bond_reference temporal versioning) | shipped |
 | PR-3 | Credit spread regime model | shipped |
 | PR-4 | Liquidity stress model | shipped |
-| PR-5 | Execution confidence | pending |
-| PR-6 | TCA segmentation | pending |
+| PR-5 | Execution confidence | shipped |
+| PR-6 | TCA segmentation | shipped |
 | PR-7 | Evidence-pack hardening + report | pending |
 
 ## PR-1 surface (already shipped)
@@ -689,3 +689,167 @@ calibrated successor → `{numpy, sklearn}`; Bayesian MS-VAR →
 - Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md` §6.3
 - Review thread: §3.1 AF-3 / AF-5 / AF-10 / AF-11; §3.2 ASK-1 / ASK-8 / ASK-10 / ASK-13; §3.4 Q-3 / Q-5 / Q-11; §3.6 PR-1 / PR-2 / PR-13
 - Deep-research report: §3 (execution confidence); §"Validation & metrics" (DSR / PBO / MTRL)
+
+## PR-6 surface (this release)
+
+The PR-6 scope is **regime-aware TCA segmentation**: tag every trade
+with the prevailing credit-regime / liquidity / execution-confidence
+context, compute the 11 TCA metrics in `Decimal` precision, and
+aggregate by the 9 spec-canonical segmentation dimensions to the
+`tca_regime_segments` warehouse table.
+
+### TCA Segmentation
+
+#### Public surface
+
+- `fixed_income.tag_trade_with_regime_context(trade, *, warehouse,
+  use_hysteresis=True, tolerance=5min)` — attaches the regime label
+  (hard + soft-weights), liquidity label, execution-confidence
+  bucket, and the four trade-attribute buckets (sector / rating /
+  maturity / notional) to a single `TradeRecord`. PIT-safe: every
+  context read uses `asof <= trade.timestamp`; `assert_pit_safe`
+  raises on a post-decision context row.
+- `fixed_income.aggregate_tca_by_regime(trades, *, dimensions,
+  metrics_names=TCA_METRICS, soft_weighting=False)` — long-form
+  group-by. Returns one row per `(dim-combo, metric_name)` with
+  `metric_value` and `sample_count`. Soft weighting (PR-6 §A.1)
+  splits one trade across multiple regime labels by
+  `TaggedTrade.regime_soft_weights`; the default (`False`) uses the
+  hard label.
+- `fixed_income.compute_tca_metrics_for_outcome(request, response,
+  outcome, *, warehouse, asof_now=None)` — per-trade TCA metrics
+  in `Decimal` precision. Strict-inequality outcome-lag rail (PR-10);
+  markout windows use the SIFMA bond trading-day calendar (PR-3);
+  unobservable / missing-data metrics return `None`.
+- `fixed_income.compute_execution_success_label(request, outcome, *,
+  success_threshold_bps=None)` — binary execution-success label per
+  INSTRUCTIONS.md §6.4 (slippage strictly < threshold). The 25-bps
+  default is overridable via `MRE_FI_TCA_SUCCESS_THRESHOLD_BPS`.
+- `fixed_income.materialize_tca_segments_for_day(warehouse, *, date,
+  soft_weighting=False, use_hysteresis=True, model_run_id=None)` —
+  end-of-day driver. Reads `execution_outcomes` for the day, joins to
+  `execution_confidence_predictions`, tags every trade, aggregates over
+  the canonical dim-combos in `_dimension_combinations()`, and writes
+  one row per `(combo, metric)`.
+- `fixed_income.write_tca_regime_segment` /
+  `fixed_income.latest_tca_regime_segments` — `TcaRegimeSegment`
+  read/write via the warehouse. Missing dimensions persist as the
+  `"__all__"` sentinel so the composite PK is stable across runs that
+  aggregate over different dim subsets.
+
+#### TCA metric catalogue
+
+The 11 metrics in `TCA_METRICS` (AGENT.md §"PR 6" + INSTRUCTIONS.md
+§6.4):
+
+| Metric | Formula / source |
+|---|---|
+| `arrival_cost_bps` | `sign * (execution - arrival) / arrival * 10_000` |
+| `vwap_slippage_bps` | `sign * (execution - vwap) / vwap * 10_000` |
+| `price_improvement_bps` | buy: `(best_ask - execution) / mid * 10_000`; sell: symmetric |
+| `market_impact_bps` | `sign * (execution - mid_at_arrival) / mid * 10_000` |
+| `time_to_fill_seconds` | passthrough from the outcome row |
+| `dealer_response_count` | passthrough from the outcome row |
+| `quote_quality` | bounded ratio: `dealer_response_count / (dealer_response_count + expected_slippage_bps)` |
+| `protocol_success` | `1.0` when `filled_quantity / notional >= 0.95`, else `0.0` |
+| `post_trade_markout_1d_bps` | trading-day window; `None` when window not closed |
+| `post_trade_markout_5d_bps` | trading-day window; `None` when window not closed |
+| `execution_success` | binary; PR-10 strict-lag rail |
+
+#### Segmentation dimensions
+
+The 9 dimensions in `DIMENSION_COLUMNS` (INSTRUCTIONS.md §6.4):
+`regime_label`, `liquidity_label`, `execution_confidence_bucket`,
+`protocol`, `side`, `sector`, `rating`, `maturity_bucket`,
+`notional_bucket`. Bucket boundaries:
+
+- Maturity: `0-2y`, `2-5y`, `5-10y`, `10y+`.
+- Notional: `<1M`, `1-5M`, `5-25M`, `25M+`.
+- Execution confidence: `low` (`< 0.60`), `medium` (`< 0.80`),
+  `high` (`<= 1.0`), `unavailable` (no prediction logged).
+- Soft regime weights: triangular weighting between the two adjacent
+  regime-score bucket centres at `{10, 30, 50, 70, 90}`; saturates at
+  the endpoints. Sums to 1.0.
+
+#### Decimal-precision arithmetic (Q-6)
+
+`fixed_income/bps_precision.py` ships the Decimal helpers used
+throughout the TCA pipeline:
+
+- `TCA_PRECISION_CONTEXT` = 28 digits, `ROUND_HALF_EVEN` (banker's
+  rounding to avoid cumulative bias).
+- `to_bps(price_diff, reference)` — Decimal bps via
+  `(diff / reference) * 10_000`; raises on zero reference.
+- `bps_arithmetic_mean(values, weights=None)` — weighted Decimal mean.
+- `bps_aggregate_sum(values)` — Decimal sum (for daily-volume aggregates).
+- `decimal_to_float_for_report(d)` — the *only* place float conversion
+  happens; called at the warehouse write / JSON response edge.
+
+Acceptance gate ($1B daily × 0.5 bps over 100k synthetic trades):
+Decimal aggregate error `< 1e-9 bps`; the informational regression
+test contrasts the naive float64 aggregate at the same scale.
+
+#### Outcome observation lag (Q-2 / PR-10)
+
+`fixed_income/tca_outcome_lag.py` ships the canonical guard:
+
+- `assert_outcome_after_decision(*, decision_timestamp, observed_at,
+  label="outcome")` — strict inequality
+  `observed_at > decision_timestamp` (a same-nanosecond report is a
+  clock-drift artefact, not a real outcome). Returns the UTC-normalised
+  timestamps so callers don't re-coerce.
+- The storage writer (`Warehouse.write_execution_outcome` — PR-5) and
+  `compute_tca_metrics_for_outcome` both route through the guard.
+  Future labels (`post_trade_directional_pnl_1d`, etc.) inherit the
+  rail by calling the helper.
+- Markout windows use `fixed_income.next_trading_day` from PR-3 so a
+  Friday trade's 1-day markout closes on Monday. When the window has
+  not yet closed, the metric returns `None` and the segment row
+  records `sample_count=0` for that metric.
+
+#### NaN propagation (PR-11)
+
+`aggregate_tca_by_regime` drops NaN rows at the aggregation boundary
+(per-metric) so a single bad price never poisons the bucket mean. The
+`fi_tca_dropped_rows_total` counter labelled by `metric` plus the
+active grouping dimensions is emitted on every drop; the counter
+family pre-registers at module load so a Prometheus scrape immediately
+after import returns the family with a zero baseline rather than 404.
+
+#### API
+
+- `GET /v1/tca/regime-segments/latest?dimensions=&limit=` returns
+  `{segments: [...], count: N}` from `tca_regime_segments`. 503 with
+  `{"detail": "no_data"}` when empty; 400 on unknown dimension names.
+
+#### CLI
+
+- `mre fi-tca-segment --db <path> --date YYYY-MM-DD
+  [--dimensions ...] [--soft-weighting] [--use-hysteresis true|false]
+  [--model-run-id ...] [--output-json ...]` materialises segments for
+  the target day. Defaults to the previous SIFMA bond trading day per
+  PR-3 calendars. Exit codes: 0 on clean run; 2 on input validation /
+  PIT failure.
+
+#### Tests
+
+- `tests/test_tca_decimal_precision.py` — Decimal helpers + $1B-scale
+  acceptance.
+- `tests/test_tca_outcome_observation_lag.py` — strict inequality at
+  writer + helper boundaries.
+- `tests/test_tca_label_construction_guard.py` — PR-10 guard semantics.
+- `tests/test_tca_segmentation.py` — tag + aggregate + materialize
+  acceptance.
+- `tests/test_tca_segments_by_regime_and_liquidity.py` — 25-bucket
+  AGENT.md catalog test.
+- `tests/test_tca_nan_propagation.py` — drop + counter behaviour.
+- `tests/test_tca_api_endpoint.py` — `GET /v1/tca/regime-segments/latest`.
+- `tests/test_tca_segmentation_cli.py` — `mre fi-tca-segment`.
+
+### Reference (PR-6)
+
+- Plan: `.cursor/plans/fi_v1.5_implementation_plan_bcda9355.plan.md` §6 PR-6
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_AGENT.md` "PR 6 — TCA segmentation"
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md` §6.4
+- Review thread: §3.4 Q-2 (outcome observation lag) / Q-6 (Decimal precision); §3.6 PR-10 / PR-11
+- Deep-research report: §4 (Regime-Aware TCA Segmentation)
