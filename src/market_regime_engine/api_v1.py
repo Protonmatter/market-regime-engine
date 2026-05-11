@@ -68,8 +68,41 @@ async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
 
+_DB_PATH_LOGGED: bool = False
+
+
 def _db_path() -> str:
-    return os.getenv("MRE_DB_PATH", "data/mre.db")
+    """Resolve the warehouse DB path with v1.5-aligned defaults.
+
+    v1.5 (PR-1 AF-1 / P0 REVIEW.md section 3.1):
+
+    - Default flips from ``data/mre.db`` (SQLite) to ``data/mre.duckdb``
+      (DuckDB) to match the v1.4 CLI ``mre`` default. Pre-v1.5 deploys
+      that left ``MRE_DB_PATH`` unset were serving the API from a stale
+      SQLite while the CLI wrote to DuckDB.
+    - First call logs INFO with the resolved path + whether the file
+      exists (module-level ``_DB_PATH_LOGGED`` guard prevents spam).
+    - If ``MRE_DB_PATH`` is *explicitly* set BUT the file is missing,
+      raise ``RuntimeError`` at first use so a misconfigured deployment
+      fails fast (per AF-2). Default-path (env unset) absence still
+      degrades to a warning to preserve the existing auto-create
+      behaviour of the underlying Warehouse.
+    """
+    global _DB_PATH_LOGGED
+    explicit = os.environ.get("MRE_DB_PATH")
+    path = explicit if explicit is not None and explicit != "" else "data/mre.duckdb"
+    exists = os.path.exists(path)
+    if not _DB_PATH_LOGGED:
+        log.info("resolved db_path=%s exists=%s", path, exists)
+        _DB_PATH_LOGGED = True
+    if explicit and not exists:
+        raise RuntimeError(f"MRE_DB_PATH={path} but file does not exist")
+    if not explicit and not exists:
+        log.warning(
+            "default db_path=%s does not exist; warehouse will be auto-created on first write",
+            path,
+        )
+    return path
 
 
 def _ttl_seconds() -> float:
