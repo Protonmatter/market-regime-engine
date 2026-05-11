@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
-from collections.abc import Iterable
+import warnings
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import pandas as pd
 
@@ -16,17 +17,121 @@ import pandas as pd
 # ``backend="auto"`` picks DuckDB when ``path.suffix == ".duckdb"`` and
 # the optional ``duckdb`` package is importable. Schema parity is
 # verified end-to-end by ``tests/test_warehouse_duckdb_parity.py``.
+#
+# v1.5 (PR-2, ASK-3): the SCHEMA_STATEMENTS tuple has been replaced by
+# an explicit :class:`TableSpec` + :func:`register_tables` registry so
+# downstream packages (fixed_income, future equities, future FX) can
+# extend the schema without mutating a module-level tuple. PR-1's regex
+# PK parser (``_extract_pk``) is preserved with a DeprecationWarning so
+# any out-of-tree caller continues to work; the in-tree warehouse uses
+# the explicit ``TableSpec.primary_key`` field instead. Per-table
+# indexes (ASK-11) ride along on ``TableSpec.index_sql``. SQLite/DuckDB
+# DDL parity (PR-2 task D) is supported via the optional
+# ``TableSpec.sqlite_create_sql`` override.
 
 BackendName = Literal["sqlite", "duckdb", "auto"]
 
 
 # ---------------------------------------------------------------------------
-# Schema definitions (shared across backends)
+# Table registry (v1.5 PR-2 ASK-3)
 # ---------------------------------------------------------------------------
 
 
-SCHEMA_STATEMENTS: tuple[str, ...] = (
+@dataclass(frozen=True)
+class TableSpec:
+    """Declarative description of one warehouse table.
+
+    ``name`` is the canonical table identifier used by the upsert path
+    when constructing ``ON CONFLICT`` clauses on DuckDB. ``create_sql``
+    is the DuckDB-flavoured DDL (which doubles as the SQLite DDL for
+    every existing v1.4 table because they all use SQLite-compatible
+    type aliases). ``primary_key`` is explicit so the v1.4-era regex
+    parser (``_extract_pk``) is no longer load-bearing.
+
+    Optional fields:
+
+    - ``index_sql``: additional ``CREATE INDEX IF NOT EXISTS`` statements
+      run after ``create_sql`` in registration order. Both SQLite and
+      DuckDB accept the same ``CREATE INDEX IF NOT EXISTS`` grammar so a
+      single string works on both backends in practice.
+    - ``sqlite_create_sql``: optional SQLite-only DDL substituted for
+      ``create_sql`` when the backend is SQLite (used by the FI tables
+      to keep DuckDB-native ``TIMESTAMP`` / ``DECIMAL(18,6)`` / ``JSON``
+      types while emitting ``TEXT`` / ``REAL`` / ``TEXT`` on SQLite).
     """
+
+    name: str
+    create_sql: str
+    primary_key: tuple[str, ...]
+    index_sql: tuple[str, ...] = ()
+    sqlite_create_sql: str | None = None
+
+
+_REGISTRY: list[TableSpec] = []
+
+
+def register_tables(specs: Sequence[TableSpec]) -> None:
+    """Register tables for warehouse initialization.
+
+    Idempotent on the ``name`` column: re-registering the same
+    :class:`TableSpec` is a no-op; registering a *different* spec under
+    a name that already exists raises :class:`ValueError`. This protects
+    against silent schema drift when two packages try to claim the same
+    table.
+    """
+
+    by_name = {spec.name: spec for spec in _REGISTRY}
+    for spec in specs:
+        existing = by_name.get(spec.name)
+        if existing is None:
+            _REGISTRY.append(spec)
+            by_name[spec.name] = spec
+            continue
+        if existing == spec:
+            continue
+        raise ValueError(
+            "Table "
+            f"{spec.name!r} already registered with conflicting content. "
+            f"existing.primary_key={existing.primary_key!r} new.primary_key={spec.primary_key!r}; "
+            "register_tables is idempotent only when the TableSpec is byte-for-byte identical."
+        )
+
+
+def registered_tables() -> tuple[TableSpec, ...]:
+    """Read-only snapshot of the current registry, in insertion order."""
+
+    return tuple(_REGISTRY)
+
+
+def _get_table_pk(table: str) -> tuple[str, ...]:
+    """Internal helper: look up the primary-key tuple for ``table``.
+
+    Returns the empty tuple when the table is not in the registry; the
+    DuckDB upsert path interprets an empty PK as "no ON CONFLICT clause"
+    which is the historically correct behaviour for ad-hoc tables.
+    """
+
+    for spec in _REGISTRY:
+        if spec.name == table:
+            return spec.primary_key
+    return ()
+
+
+def _register_core_tables() -> None:
+    """Register the 34 core (macro / regime / governance) tables.
+
+    Called once on module import. Tables are listed in the same order
+    they appeared in the pre-PR-2 ``SCHEMA_STATEMENTS`` tuple so the
+    init-schema sequence is byte-for-byte unchanged.
+    """
+
+    register_tables(_CORE_TABLES)
+
+
+_CORE_TABLES: tuple[TableSpec, ...] = (
+    TableSpec(
+        name="observations",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS observations (
         series_id TEXT NOT NULL,
         date TEXT NOT NULL,
@@ -37,7 +142,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(series_id, date, vintage_date)
     )
     """,
-    """
+        primary_key=("series_id", "date", "vintage_date"),
+    ),
+    TableSpec(
+        name="features",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS features (
         feature_name TEXT NOT NULL,
         date TEXT NOT NULL,
@@ -47,7 +156,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(feature_name, date)
     )
     """,
-    """
+        primary_key=("feature_name", "date"),
+    ),
+    TableSpec(
+        name="regimes",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS regimes (
         date TEXT PRIMARY KEY,
         regime TEXT NOT NULL,
@@ -57,7 +170,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         metadata_json TEXT DEFAULT '{}'
     )
     """,
-    """
+        primary_key=("date",),
+    ),
+    TableSpec(
+        name="model_outputs",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS model_outputs (
         model_name TEXT NOT NULL,
         date TEXT NOT NULL,
@@ -68,7 +185,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(model_name, date, horizon, target)
     )
     """,
-    """
+        primary_key=("model_name", "date", "horizon", "target"),
+    ),
+    TableSpec(
+        name="recession_labels",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS recession_labels (
         date TEXT PRIMARY KEY,
         recession REAL NOT NULL,
@@ -76,7 +197,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         metadata_json TEXT DEFAULT '{}'
     )
     """,
-    """
+        primary_key=("date",),
+    ),
+    TableSpec(
+        name="historical_analogs",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS historical_analogs (
         as_of_date TEXT NOT NULL,
         analog_date TEXT NOT NULL,
@@ -87,7 +212,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(as_of_date, analog_date)
     )
     """,
-    """
+        primary_key=("as_of_date", "analog_date"),
+    ),
+    TableSpec(
+        name="driver_attribution",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS driver_attribution (
         date TEXT NOT NULL,
         attribution_type TEXT NOT NULL,
@@ -101,7 +230,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, attribution_type, rank, name)
     )
     """,
-    """
+        primary_key=("date", "attribution_type", "rank", "name"),
+    ),
+    TableSpec(
+        name="model_runs",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS model_runs (
         run_id TEXT PRIMARY KEY,
         created_at_utc TEXT NOT NULL,
@@ -117,7 +250,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         metadata_json TEXT DEFAULT '{}'
     )
     """,
-    """
+        primary_key=("run_id",),
+    ),
+    TableSpec(
+        name="calibrated_outputs",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS calibrated_outputs (
         model_name TEXT NOT NULL,
         date TEXT NOT NULL,
@@ -128,7 +265,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(model_name, date, horizon, target)
     )
     """,
-    """
+        primary_key=("model_name", "date", "horizon", "target"),
+    ),
+    TableSpec(
+        name="calibration_models",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS calibration_models (
         horizon TEXT NOT NULL,
         target TEXT NOT NULL,
@@ -143,7 +284,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(horizon, target, method)
     )
     """,
-    """
+        primary_key=("horizon", "target", "method"),
+    ),
+    TableSpec(
+        name="release_calendar_audit",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS release_calendar_audit (
         series_id TEXT PRIMARY KEY,
         rows INTEGER,
@@ -155,7 +300,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         max_actual_vintage TEXT
     )
     """,
-    """
+        primary_key=("series_id",),
+    ),
+    TableSpec(
+        name="invalidation_triggers",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS invalidation_triggers (
         date TEXT NOT NULL,
         trigger TEXT NOT NULL,
@@ -167,7 +316,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, trigger)
     )
     """,
-    """
+        primary_key=("date", "trigger"),
+    ),
+    TableSpec(
+        name="confidence_scores",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS confidence_scores (
         date TEXT PRIMARY KEY,
         confidence REAL NOT NULL,
@@ -175,7 +328,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         metadata_json TEXT DEFAULT '{}'
     )
     """,
-    """
+        primary_key=("date",),
+    ),
+    TableSpec(
+        name="exact_release_calendar",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS exact_release_calendar (
         series_id TEXT NOT NULL,
         observation_date TEXT NOT NULL,
@@ -187,7 +344,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(series_id, observation_date)
     )
     """,
-    """
+        primary_key=("series_id", "observation_date"),
+    ),
+    TableSpec(
+        name="ensemble_weights",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS ensemble_weights (
         horizon TEXT NOT NULL,
         target TEXT NOT NULL,
@@ -198,7 +359,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(horizon, target, model_name, method)
     )
     """,
-    """
+        primary_key=("horizon", "target", "model_name", "method"),
+    ),
+    TableSpec(
+        name="stacking_diagnostics",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS stacking_diagnostics (
         horizon TEXT NOT NULL,
         target TEXT NOT NULL,
@@ -211,7 +376,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(horizon, target, method)
     )
     """,
-    """
+        primary_key=("horizon", "target", "method"),
+    ),
+    TableSpec(
+        name="model_drift",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS model_drift (
         date TEXT NOT NULL,
         feature_name TEXT NOT NULL,
@@ -222,7 +391,17 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, feature_name)
     )
     """,
-    """
+        primary_key=("date", "feature_name"),
+    ),
+    # v1.5 PR-1 ASK-7 / P2: nullable resolved_profile column on release_gates.
+    # Pre-PR-2 the trailing comment was placed *outside* the CREATE TABLE
+    # statement because the regex PK extractor would mis-detect a
+    # parenthesised comment as the PRIMARY KEY column list (FLAG F-4 in
+    # REVIEW.md). PR-2 retires the regex parse (PK is explicit on
+    # TableSpec) so the comment can now live wherever it reads naturally.
+    TableSpec(
+        name="release_gates",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS release_gates (
         date TEXT PRIMARY KEY,
         approved INTEGER NOT NULL,
@@ -239,16 +418,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         resolved_profile TEXT
     )
     """,
-    # v1.5 PR-1 ASK-7 / P2: nullable resolved_profile column added above so
-    # existing v1.4 rows round-trip without migration. The column carries
-    # whichever profile (production / default) drove the threshold
-    # selection per release_gates._resolve_profile. Note: the SQL comment
-    # is placed *outside* the CREATE TABLE statement because
-    # storage._extract_pk uses a naive parse that would mis-detect a
-    # parenthesised comment as the PRIMARY KEY column list
-    # (FLAG F-4 in REVIEW.md; the planned PR-2 register_tables refactor
-    # replaces the regex parse with an explicit pk_map).
-    """
+        primary_key=("date",),
+    ),
+    TableSpec(
+        name="alfred_ingestion_manifest",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS alfred_ingestion_manifest (
         series_id TEXT NOT NULL,
         realtime_start TEXT NOT NULL,
@@ -263,7 +437,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(series_id, realtime_start, realtime_end)
     )
     """,
-    """
+        primary_key=("series_id", "realtime_start", "realtime_end"),
+    ),
+    TableSpec(
+        name="hazard_diagnostics",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS hazard_diagnostics (
         date TEXT NOT NULL,
         model_name TEXT NOT NULL,
@@ -276,7 +454,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, model_name)
     )
     """,
-    """
+        primary_key=("date", "model_name"),
+    ),
+    TableSpec(
+        name="oos_predictions",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS oos_predictions (
         date TEXT NOT NULL,
         model_name TEXT NOT NULL,
@@ -289,7 +471,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, model_name, horizon, target)
     )
     """,
-    """
+        primary_key=("date", "model_name", "horizon", "target"),
+    ),
+    TableSpec(
+        name="routed_alerts",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS routed_alerts (
         date TEXT NOT NULL,
         alert_type TEXT NOT NULL,
@@ -300,7 +486,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, alert_type, channel)
     )
     """,
-    """
+        primary_key=("date", "alert_type", "channel"),
+    ),
+    TableSpec(
+        name="promotion_workflow",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS promotion_workflow (
         date TEXT NOT NULL,
         workflow TEXT NOT NULL,
@@ -315,7 +505,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, workflow)
     )
     """,
-    """
+        primary_key=("date", "workflow"),
+    ),
+    TableSpec(
+        name="series_vintages",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS series_vintages (
         series_id TEXT NOT NULL,
         vintage_date TEXT NOT NULL,
@@ -325,7 +519,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(series_id, vintage_date)
     )
     """,
-    """
+        primary_key=("series_id", "vintage_date"),
+    ),
+    TableSpec(
+        name="vintage_observations",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS vintage_observations (
         series_id TEXT NOT NULL,
         observation_date TEXT NOT NULL,
@@ -339,7 +537,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(series_id, observation_date, vintage_date)
     )
     """,
-    """
+        primary_key=("series_id", "observation_date", "vintage_date"),
+    ),
+    TableSpec(
+        name="feature_asof_values",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS feature_asof_values (
         as_of_date TEXT NOT NULL,
         feature_name TEXT NOT NULL,
@@ -353,7 +555,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(as_of_date, feature_name)
     )
     """,
-    """
+        primary_key=("as_of_date", "feature_name"),
+    ),
+    TableSpec(
+        name="vintage_audits",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS vintage_audits (
         audit TEXT NOT NULL,
         run_at_utc TEXT NOT NULL,
@@ -365,7 +571,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(audit, run_at_utc)
     )
     """,
-    """
+        primary_key=("audit", "run_at_utc"),
+    ),
+    TableSpec(
+        name="conformal_coverage",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS conformal_coverage (
         as_of_date TEXT NOT NULL,
         target TEXT NOT NULL,
@@ -380,8 +590,12 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(as_of_date, target, horizon, bucket, method)
     )
     """,
+        primary_key=("as_of_date", "target", "horizon", "bucket", "method"),
+    ),
     # ----- v1.2 frontier tables -----
-    """
+    TableSpec(
+        name="e_value_log",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS e_value_log (
         date TEXT NOT NULL,
         target TEXT NOT NULL,
@@ -396,7 +610,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, target, horizon, challenger)
     )
     """,
-    """
+        primary_key=("date", "target", "horizon", "challenger"),
+    ),
+    TableSpec(
+        name="nowcast_factors",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS nowcast_factors (
         as_of_date TEXT NOT NULL,
         domain TEXT NOT NULL,
@@ -408,7 +626,11 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(as_of_date, domain)
     )
     """,
-    """
+        primary_key=("as_of_date", "domain"),
+    ),
+    TableSpec(
+        name="conditional_coverage_report",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS conditional_coverage_report (
         as_of_date TEXT NOT NULL,
         target TEXT NOT NULL,
@@ -423,8 +645,12 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(as_of_date, target, horizon, "group", method)
     )
     """,
+        primary_key=("as_of_date", "target", "horizon", "group", "method"),
+    ),
     # ----- v1.3 alert dispatch table -----
-    """
+    TableSpec(
+        name="alert_dispatches",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS alert_dispatches (
         date TEXT NOT NULL,
         alert_type TEXT NOT NULL,
@@ -436,8 +662,12 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(date, alert_type, sink, dispatched_at_utc)
     )
     """,
+        primary_key=("date", "alert_type", "sink", "dispatched_at_utc"),
+    ),
     # ----- v1.4 Bayesian MS-VAR diagnostics (item A) -----
-    """
+    TableSpec(
+        name="bayesian_msvar_diagnostics",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS bayesian_msvar_diagnostics (
         run_id TEXT NOT NULL,
         method TEXT NOT NULL,
@@ -450,8 +680,12 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(run_id, method)
     )
     """,
+        primary_key=("run_id", "method"),
+    ),
     # ----- v1.4 release calendar refresh outcomes (item D) -----
-    """
+    TableSpec(
+        name="release_calendar_refreshes",
+        create_sql="""
     CREATE TABLE IF NOT EXISTS release_calendar_refreshes (
         agency TEXT NOT NULL,
         fetched_at_utc TEXT NOT NULL,
@@ -463,21 +697,42 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY(agency, fetched_at_utc)
     )
     """,
+        primary_key=("agency", "fetched_at_utc"),
+    ),
 )
 
 
-# Tables whose primary keys are required for the DuckDB ON CONFLICT
-# clause. SQLite gets these for free via INSERT OR REPLACE, but
-# DuckDB needs an explicit conflict target. We map the canonical
-# column list at runtime; PK columns are extracted via simple parsing
-# of the schema strings above (single source of truth).
+# Register the core tables once at import time. Downstream packages
+# (fixed_income, future product lines) call register_tables(...) in
+# their own __init__.py to extend the registry.
+_register_core_tables()
+
+
+# legacy: TODO remove after PR-3+ migrations.
+# Pre-PR-2 the warehouse extracted the PRIMARY KEY tuple from each
+# CREATE TABLE statement via a naive parse. PR-2 makes the PK an
+# explicit field on :class:`TableSpec`, so any caller passing a raw
+# SQL string here is on a deprecated path. Kept for back-compat with
+# out-of-tree extensions that have not yet ported to the registry.
 def _extract_pk(schema_sql: str) -> tuple[str, ...]:
-    """Parse the PRIMARY KEY tuple from a CREATE TABLE statement."""
+    """Parse the PRIMARY KEY tuple from a raw CREATE TABLE statement.
+
+    .. deprecated:: 1.5 (PR-2)
+        Use :attr:`TableSpec.primary_key` instead. This regex-style
+        parser is retained only for legacy callers that still feed raw
+        SQL strings to ``migrate_warehouse`` or similar.
+    """
+
+    warnings.warn(
+        "storage._extract_pk is deprecated; use TableSpec.primary_key. "
+        "This shim will be removed after the PR-3+ migration cycle.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     text = schema_sql.upper()
     idx = text.find("PRIMARY KEY")
     if idx < 0:
         return ()
-    # Slice from PRIMARY KEY to the next closing paren.
     start = schema_sql.find("(", idx + len("PRIMARY KEY"))
     if start < 0:
         return ()
@@ -494,13 +749,25 @@ def _extract_pk(schema_sql: str) -> tuple[str, ...]:
     return tuple(cols)
 
 
+# legacy: TODO remove after PR-3+ migrations.
 def _extract_table_name(schema_sql: str) -> str:
+    """Parse the table name from a raw CREATE TABLE statement.
+
+    .. deprecated:: 1.5 (PR-2)
+        Use :attr:`TableSpec.name` instead.
+    """
+
+    warnings.warn(
+        "storage._extract_table_name is deprecated; use TableSpec.name. "
+        "This shim will be removed after the PR-3+ migration cycle.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     text = schema_sql.upper()
     idx = text.find("CREATE TABLE")
     if idx < 0:
         return ""
     rest = schema_sql[idx + len("CREATE TABLE") :].strip()
-    # Strip optional "IF NOT EXISTS"
     if rest.upper().startswith("IF NOT EXISTS"):
         rest = rest[len("IF NOT EXISTS") :].strip()
     name_end = rest.find("(")
@@ -509,7 +776,23 @@ def _extract_table_name(schema_sql: str) -> str:
     return rest[:name_end].strip()
 
 
-_TABLE_PKS: dict[str, tuple[str, ...]] = {_extract_table_name(sql): _extract_pk(sql) for sql in SCHEMA_STATEMENTS}
+def __getattr__(name: str) -> Any:
+    """PEP 562 module-level attribute lookup for legacy aggregates.
+
+    Pre-PR-2 callers reference ``SCHEMA_STATEMENTS`` / ``_TABLE_PKS`` /
+    ``_TABLE_NAMES`` directly. Those names continue to resolve, but now
+    they are dynamically derived from :func:`registered_tables` so
+    downstream registrations (e.g. ``fixed_income.schema.register``)
+    are reflected without re-importing this module.
+    """
+
+    if name == "SCHEMA_STATEMENTS":
+        return tuple(spec.create_sql for spec in _REGISTRY)
+    if name == "_TABLE_PKS":
+        return {spec.name: spec.primary_key for spec in _REGISTRY}
+    if name == "_TABLE_NAMES":
+        return tuple(spec.name for spec in _REGISTRY)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -583,8 +866,15 @@ class _SqliteBackend:
         self.conn.execute("PRAGMA foreign_keys=ON")
 
     def init_schema(self) -> None:
-        for sql in SCHEMA_STATEMENTS:
-            self.conn.execute(sql)
+        # v1.5 (PR-2 ASK-3): iterate the explicit registry instead of the
+        # module-level SCHEMA_STATEMENTS tuple. Per-table indexes (ASK-11)
+        # are applied after the CREATE TABLE statement so the table
+        # exists when ``CREATE INDEX`` runs.
+        for spec in registered_tables():
+            ddl = spec.sqlite_create_sql or spec.create_sql
+            self.conn.execute(ddl)
+            for idx_sql in spec.index_sql:
+                self.conn.execute(idx_sql)
         self.conn.commit()
         # Idempotent backfill for the v1.1 release_gates.severe_drift column.
         cols = pd.read_sql_query("PRAGMA table_info(release_gates)", self.conn)
@@ -675,11 +965,15 @@ class _DuckDBBackend:
         self.conn = duckdb.connect(str(self.path))
 
     def init_schema(self) -> None:
-        # DuckDB SQL is mostly SQLite-compatible. The CREATE TABLE
-        # IF NOT EXISTS statements above all parse cleanly (DuckDB
-        # accepts TEXT, REAL, INTEGER as type aliases).
-        for sql in SCHEMA_STATEMENTS:
-            self.conn.execute(sql)
+        # v1.5 (PR-2 ASK-3 / ASK-11): walk the explicit registry, run
+        # the CREATE TABLE then any CREATE INDEX statements for each
+        # spec. DuckDB accepts TEXT/REAL/INTEGER as aliases for the v1.4
+        # core tables, plus native TIMESTAMP/DECIMAL/JSON for the FI
+        # tables registered by the fixed_income package.
+        for spec in registered_tables():
+            self.conn.execute(spec.create_sql)
+            for idx_sql in spec.index_sql:
+                self.conn.execute(idx_sql)
         # release_gates.severe_drift back-compat column. DuckDB's
         # information_schema is the canonical way to inspect a table.
         cols = self.conn.execute(
@@ -739,7 +1033,7 @@ class _DuckDBBackend:
         if not rows:
             return
         placeholders = "VALUES (" + ", ".join(["?"] * len(cols)) + ")"
-        pk = _TABLE_PKS.get(table, ())
+        pk = _get_table_pk(table)
         sql = self._build_upsert_sql(table, cols, pk, mode=mode, source=placeholders)
         # Wrap the executemany batch in an explicit transaction so a
         # crash mid-batch leaves the table consistent (DuckDB autocommits
@@ -780,7 +1074,7 @@ class _DuckDBBackend:
         # cursor.
         staging_name = f"__mre_staging_{table}"
         select_sql = f"SELECT {_quote_columns(cols)} FROM {staging_name}"
-        pk = _TABLE_PKS.get(table, ())
+        pk = _get_table_pk(table)
         insert_sql = self._build_upsert_sql(table, cols, pk, mode=mode, source=select_sql)
 
         # Wrap in an explicit transaction so the bulk insert is atomic.
@@ -947,6 +1241,55 @@ class Warehouse:
         self._backend.upsert_frame(table, frame, cols, mode=mode)
         self._backend.commit()
         return len(frame)
+
+    def bulk_load_chunked(
+        self,
+        table: str,
+        df: pd.DataFrame,
+        chunk_rows: int = 1_000_000,
+        *,
+        cols: Sequence[str] | None = None,
+        mode: str = "REPLACE",
+    ) -> int:
+        """Chunked bulk insert via the per-backend bulk-load path.
+
+        v1.5 (PR-2 PR-14): a 100M-row TRACE import OOMs the worker when
+        the entire frame is registered to DuckDB at once. This helper
+        feeds the underlying ``upsert_frame`` one slice at a time so at
+        most ``chunk_rows`` of ``df`` sit in DuckDB's internal staging
+        buffer simultaneously. Each chunk runs inside its own
+        ``BEGIN/COMMIT`` (provided by ``upsert_frame``) so a crash
+        mid-chunk leaves the table consistent up to the last committed
+        chunk.
+
+        DuckDB callers keep the v1.4 ``register`` + ``INSERT ... SELECT
+        ... ON CONFLICT`` fast path (no regression on the 6600× speedup
+        the v1.4 transcript locked in). SQLite callers fall back to the
+        same ``executemany`` path they already use, just chunked.
+
+        Returns the total row count successfully committed across all
+        chunks. ``cols`` defaults to ``df.columns``; pass an explicit
+        list when the destination table expects a subset.
+        """
+
+        if df is None or df.empty:
+            return 0
+        if chunk_rows <= 0:
+            raise ValueError(f"chunk_rows must be positive; got {chunk_rows!r}")
+
+        column_list = list(cols) if cols is not None else list(df.columns)
+        total = 0
+        n = len(df)
+        for start in range(0, n, chunk_rows):
+            stop = min(start + chunk_rows, n)
+            chunk = df.iloc[start:stop]
+            # ``upsert_frame`` wraps each call in its own BEGIN/COMMIT;
+            # committing per chunk is exactly the partial-failure
+            # semantics PR-14 asks for.
+            self._backend.upsert_frame(table, chunk, column_list, mode=mode)
+            self._backend.commit()
+            total += len(chunk)
+        return total
 
     # ----- per-table writers -----
 
@@ -1591,26 +1934,52 @@ class Warehouse:
 # ---------------------------------------------------------------------------
 
 
-_TABLE_NAMES: tuple[str, ...] = tuple(_TABLE_PKS.keys())
-
-
 def migrate_warehouse(
     src: str | Path,
     dst: str | Path,
     *,
     src_backend: BackendName = "auto",
     dst_backend: BackendName = "auto",
+    tables: Sequence[str] | None = None,
 ) -> dict[str, int]:
     """Copy every warehouse table from ``src`` to ``dst``.
 
     Returns a dict mapping table name to row count copied. Used by the
     ``mre warehouse-migrate`` CLI command (v1.3 item D).
+
+    v1.5 (PR-2 AF-12): every table name is validated against
+    :func:`registered_tables` before it is interpolated into the
+    ``SELECT * FROM {table}`` statement. Pre-PR-2 the same f-string was
+    a documented internal-only SQL-injection foot-gun; the guard makes
+    the assumption explicit and refuses any unregistered name.
     """
+
+    allowed = {spec.name for spec in registered_tables()}
+    if tables is None:
+        target_tables: tuple[str, ...] = tuple(allowed)
+    else:
+        target_tables = tuple(tables)
+        unknown = [t for t in target_tables if t not in allowed]
+        if unknown:
+            raise ValueError(
+                f"migrate_warehouse refusing unregistered tables: {unknown!r}. "
+                "Register the table via storage.register_tables(...) before invoking migrate."
+            )
+
     src_wh = Warehouse(src, backend=src_backend)
     dst_wh = Warehouse(dst, backend=dst_backend)
     counts: dict[str, int] = {}
     try:
-        for table in _TABLE_NAMES:
+        for table in target_tables:
+            # Defensive re-check: even when ``tables is None`` the name
+            # comes from the registry, but assert anyway so future
+            # callers cannot bypass the guard by mutating the iterable
+            # mid-loop.
+            if table not in allowed:
+                raise ValueError(
+                    f"migrate_warehouse refusing unregistered table {table!r}. "
+                    "Register the table via storage.register_tables(...) before invoking migrate."
+                )
             try:
                 df = src_wh._backend.read_sql(f"SELECT * FROM {table}")
             except Exception:
@@ -1630,4 +1999,11 @@ def migrate_warehouse(
     return counts
 
 
-__all__ = ["SCHEMA_STATEMENTS", "Warehouse", "migrate_warehouse"]
+__all__ = [
+    "SCHEMA_STATEMENTS",
+    "TableSpec",
+    "Warehouse",
+    "migrate_warehouse",
+    "register_tables",
+    "registered_tables",
+]
