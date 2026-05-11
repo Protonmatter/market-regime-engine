@@ -389,6 +389,8 @@ def _mount_fixed_income_router() -> None:
     try:
         from market_regime_engine.fixed_income.api import (
             _build_rate_limiter,
+        )
+        from market_regime_engine.fixed_income.api import (
             build_router as _fi_build_router,
         )
 
@@ -405,9 +407,7 @@ def _mount_fixed_income_router() -> None:
 
                 app.state.limiter = limiter
 
-                async def _rate_limit_handler(
-                    request: _RLRequest, exc: RateLimitExceeded
-                ) -> _RLJSONResponse:
+                async def _rate_limit_handler(request: _RLRequest, exc: RateLimitExceeded) -> _RLJSONResponse:
                     return _RLJSONResponse(
                         {"detail": f"rate limit exceeded: {exc.detail}"},
                         status_code=429,

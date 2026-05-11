@@ -63,12 +63,8 @@ def ingest_marketaxess_rfq(
     Returns the :class:`IngestReport` so callers can react to drop
     counts / warnings (REVIEW.md §3.6 PR-9 schema-drift assertion).
     """
-    MARKETAXESS_RFQ_CONTRACT.assert_no_unknown_columns(
-        df, level="error" if strict_unknown else "warn"
-    )
-    out_df, report = MARKETAXESS_RFQ_CONTRACT.validate(
-        df, strict_unknown=strict_unknown
-    )
+    MARKETAXESS_RFQ_CONTRACT.assert_no_unknown_columns(df, level="error" if strict_unknown else "warn")
+    out_df, report = MARKETAXESS_RFQ_CONTRACT.validate(df, strict_unknown=strict_unknown)
     if report.passed and not out_df.empty:
         write_df = out_df.copy()
         if "metadata_json" not in write_df.columns:

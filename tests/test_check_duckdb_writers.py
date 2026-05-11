@@ -8,9 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
-
 _TOOL = Path(__file__).resolve().parents[1] / "tools" / "check_duckdb_writers.py"
 
 

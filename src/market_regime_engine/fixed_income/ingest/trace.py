@@ -54,9 +54,7 @@ def ingest_trace(
     Returns the :class:`IngestReport` so callers can surface
     drop-counts to dashboards / CI.
     """
-    TRACE_CONTRACT.assert_no_unknown_columns(
-        df, level="error" if strict_unknown else "warn"
-    )
+    TRACE_CONTRACT.assert_no_unknown_columns(df, level="error" if strict_unknown else "warn")
     out_df, report = TRACE_CONTRACT.validate(df, strict_unknown=strict_unknown)
     if report.passed and not out_df.empty:
         # Map TRACE 'size' to the warehouse 'size' (already aligned).

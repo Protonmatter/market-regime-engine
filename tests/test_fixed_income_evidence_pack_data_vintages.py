@@ -17,9 +17,9 @@ import pytest
 
 import market_regime_engine.fixed_income  # noqa: F401  - register FI tables
 from market_regime_engine.fixed_income.evidence_pack import (
+    build_evidence_pack,
     capture_data_vintages,
     write_evidence_pack,
-    build_evidence_pack,
 )
 from market_regime_engine.storage import Warehouse
 
@@ -112,7 +112,7 @@ def test_capture_data_vintages_includes_all_fi_tables(warehouse: Warehouse) -> N
     safely look up ``vintages["trace_trades"]`` without ``KeyError``.
     """
     vintages = capture_data_vintages(warehouse)
-    assert _FI_SOURCE_TABLES <= set(vintages.keys())
+    assert set(vintages.keys()) >= _FI_SOURCE_TABLES
     for value in vintages.values():
         assert value.endswith("Z")
     assert vintages["trace_trades"] == "1970-01-01T00:00:00Z"
@@ -136,9 +136,7 @@ def test_capture_data_vintages_uses_asof_filter(warehouse: Warehouse) -> None:
     assert vintages2["trace_trades"] == "1970-01-01T00:00:00Z"
 
 
-def test_evidence_pack_persists_data_vintages_dict(
-    warehouse: Warehouse, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_evidence_pack_persists_data_vintages_dict(warehouse: Warehouse, monkeypatch: pytest.MonkeyPatch) -> None:
     """``write_evidence_pack`` round-trips the dict through DuckDB."""
     _seed_trace_trades(warehouse)
     vintages = capture_data_vintages(warehouse)

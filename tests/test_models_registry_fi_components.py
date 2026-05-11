@@ -64,7 +64,4 @@ def test_fi_baseline_aliases_normalise_via_normalize_model_name() -> None:
 
     # Hyphen and underscore should both resolve to the canonical name
     # via the existing normaliser.
-    assert (
-        normalize_model_name("FI-credit-regime-baseline")
-        == "fi_credit_regime_baseline"
-    )
+    assert normalize_model_name("FI-credit-regime-baseline") == "fi_credit_regime_baseline"
