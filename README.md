@@ -1,8 +1,29 @@
-# Market Regime Engine v1.4.1
+# Market Regime Engine v1.5.0
 
 Python-first, Rust-ready probabilistic macro/market regime intelligence
-engine with a 2026-2027-frontier modeling layer.
+engine with a 2026-2027-frontier modeling layer **and the v1.5
+Fixed-Income RCIE / X-Pro Auto-X adapter**.
 
+> **v1.5.0** ships the Fixed-Income RCIE / X-Pro Auto-X adapter on
+> top of v1.4.1: a deterministic credit-spread regime scorer, a
+> per-scope liquidity-stress index, an execution-confidence service
+> with fail-closed governance, regime-aware TCA segmentation, and a
+> tamper-evident HMAC-signed evidence pack. The 13 new FI tables,
+> 6 FI API endpoints, and 7 `mre fi-*` CLI commands sit alongside
+> the existing macro/regime engine. See
+> [`docs/V1_5_FIXED_INCOME_RCIE.md`](docs/V1_5_FIXED_INCOME_RCIE.md)
+> for the full release notes,
+> [`docs/V1_5_AUTOX_CONTRACT.md`](docs/V1_5_AUTOX_CONTRACT.md) for
+> the Auto-X consumer contract,
+> [`docs/V1_5_HMAC_OPERATIONS.md`](docs/V1_5_HMAC_OPERATIONS.md) for
+> the HMAC operating playbook, and
+> [`docs/V1_5_BREAKING_CHANGES.md`](docs/V1_5_BREAKING_CHANGES.md)
+> for the (small) v1.4 → v1.5 behavioural deltas. The seven `mre
+> fi-*` commands are: `fi-build-features`, `fi-score-credit-regime`,
+> `fi-score-liquidity`, `fi-score-execution-confidence`,
+> `fi-tca-segment`, `fi-evidence-pack`, `fi-report` (plus the
+> rotation-tooling extra `mre fi-evidence-resign`).
+>
 > **v1.4.1** is a release-integrity patch on top of v1.4.0. It closes the
 > audit-grade hygiene gaps a third-party reviewer found in v1.4: the README
 > identity drift (and the matching wheel-METADATA `Description` first-line
