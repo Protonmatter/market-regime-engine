@@ -69,7 +69,7 @@ class BoundedHistogram:
     stays bounded at 32 KB per histogram (4096 × 8 bytes float64).
     """
 
-    __slots__ = ("_buffer", "_count", "_sum", "_rng", "_size")
+    __slots__ = ("_buffer", "_count", "_rng", "_size", "_sum")
 
     def __init__(self, reservoir_size: int = _DEFAULT_RESERVOIR_SIZE, *, seed: int = 0) -> None:
         if reservoir_size <= 0:
@@ -139,9 +139,7 @@ class MetricsRegistry:
         self._lock = Lock()
         self._counters: defaultdict[tuple[str, frozenset], float] = defaultdict(float)
         self._reservoir_size = int(reservoir_size)
-        self._histograms: defaultdict[tuple[str, frozenset], BoundedHistogram] = defaultdict(
-            self._make_histogram
-        )
+        self._histograms: defaultdict[tuple[str, frozenset], BoundedHistogram] = defaultdict(self._make_histogram)
 
     def _make_histogram(self) -> BoundedHistogram:
         return BoundedHistogram(reservoir_size=self._reservoir_size)
@@ -229,7 +227,7 @@ _OTEL_HISTOGRAMS: dict[str, object] = {}
 
 def _otel_available() -> bool:
     try:
-        import opentelemetry  # type: ignore[import-not-found]  # noqa: F401
+        import opentelemetry  # noqa: F401
     except Exception:
         return False
     return True
@@ -310,7 +308,7 @@ def configure_otel(
         metric_exporter = ConsoleMetricExporter()
 
     reader = PeriodicExportingMetricReader(
-        metric_exporter,  # type: ignore[arg-type]
+        metric_exporter,
         export_interval_millis=60_000,
     )
     meter_provider = MeterProvider(resource=resource, metric_readers=[reader])

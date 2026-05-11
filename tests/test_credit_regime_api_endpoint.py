@@ -166,6 +166,8 @@ def test_all_fi_endpoints_live_in_pr7(tmp_path: Path) -> None:
         write_credit_regime_score(wh, out)
     finally:
         wh.close()
+    import contextlib
+
     # PR-7: GET /v1/evidence-pack/{run_id} is live; unknown run_id → 404.
     wh1 = Warehouse(str(db_path))
     try:
@@ -175,10 +177,8 @@ def test_all_fi_endpoints_live_in_pr7(tmp_path: Path) -> None:
         assert resp.json()["detail"] == "evidence_pack_not_found"
     finally:
         # Handler may have closed the warehouse already; tolerate it.
-        try:
+        with contextlib.suppress(Exception):
             wh1.close()
-        except Exception:
-            pass
     # PR-6: /v1/tca/regime-segments/latest is live; empty warehouse → 503.
     wh2 = Warehouse(str(db_path))
     try:
@@ -187,10 +187,8 @@ def test_all_fi_endpoints_live_in_pr7(tmp_path: Path) -> None:
         assert resp.status_code == 503, resp.status_code
         assert resp.json()["detail"] == "no_data"
     finally:
-        try:
+        with contextlib.suppress(Exception):
             wh2.close()
-        except Exception:
-            pass
     # PR-5: POST /v1/execution_confidence is live; an empty body should
     # 422 (Pydantic validation), not 501.
     resp = client.post("/v1/execution_confidence", json={})

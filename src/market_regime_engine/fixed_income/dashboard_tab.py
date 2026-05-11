@@ -21,6 +21,7 @@ lazy so the module is importable on any environment.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -78,10 +79,8 @@ def load_fi_tables(db_path: str) -> dict[str, pd.DataFrame]:
             if df is not None:
                 out[table] = df
     finally:
-        try:
+        with contextlib.suppress(Exception):
             db.close()
-        except Exception:
-            pass
     return out
 
 
@@ -92,23 +91,15 @@ def fi_dashboard_summary(fi_data: dict[str, pd.DataFrame]) -> dict[str, Any]:
     underlying numbers without invoking Streamlit.
     """
     summary: dict[str, Any] = {
-        "credit_regime_rows": int(len(fi_data.get("credit_regime_scores", pd.DataFrame()))),
+        "credit_regime_rows": len(fi_data.get("credit_regime_scores", pd.DataFrame())),
         "liquidity_scopes": int(
-            fi_data.get("liquidity_stress_scores", pd.DataFrame())
-            .get("scope_id", pd.Series(dtype=str))
-            .nunique()
+            fi_data.get("liquidity_stress_scores", pd.DataFrame()).get("scope_id", pd.Series(dtype=str)).nunique()
             if not fi_data.get("liquidity_stress_scores", pd.DataFrame()).empty
             else 0
         ),
-        "execution_predictions": int(
-            len(fi_data.get("execution_confidence_predictions", pd.DataFrame()))
-        ),
-        "release_gate_rows": int(
-            len(fi_data.get("release_gates", pd.DataFrame()))
-        ),
-        "evidence_pack_rows": int(
-            len(fi_data.get("fixed_income_evidence_packs", pd.DataFrame()))
-        ),
+        "execution_predictions": len(fi_data.get("execution_confidence_predictions", pd.DataFrame())),
+        "release_gate_rows": len(fi_data.get("release_gates", pd.DataFrame())),
+        "evidence_pack_rows": len(fi_data.get("fixed_income_evidence_packs", pd.DataFrame())),
     }
     cr = fi_data.get("credit_regime_scores", pd.DataFrame())
     if not cr.empty:
@@ -138,13 +129,9 @@ def render_fi_tab(fi_data: dict[str, pd.DataFrame]) -> None:
     cols = st.columns(4)
     cols[0].metric(
         "Credit regime score",
-        f"{summary.get('latest_regime_score', float('nan')):.1f}"
-        if "latest_regime_score" in summary
-        else "n/a",
+        f"{summary.get('latest_regime_score', float('nan')):.1f}" if "latest_regime_score" in summary else "n/a",
     )
-    cols[1].metric(
-        "Liquidity scopes", summary.get("liquidity_scopes", 0)
-    )
+    cols[1].metric("Liquidity scopes", summary.get("liquidity_scopes", 0))
     cols[2].metric(
         "Execution predictions",
         summary.get("execution_predictions", 0),
@@ -200,18 +187,12 @@ def render_fi_tab(fi_data: dict[str, pd.DataFrame]) -> None:
     if not exec_pred.empty:
         st.subheader("Execution confidence")
         if not exec_out.empty:
-            joined = exec_pred.merge(
-                exec_out, on="request_id", how="inner", suffixes=("_p", "_o")
-            )
+            joined = exec_pred.merge(exec_out, on="request_id", how="inner", suffixes=("_p", "_o"))
             if not joined.empty:
                 joined["filled"] = joined["filled_quantity"].fillna(0).astype(float) > 0
-                joined["timestamp"] = pd.to_datetime(
-                    joined["timestamp_p"], errors="coerce"
-                )
+                joined["timestamp"] = pd.to_datetime(joined["timestamp_p"], errors="coerce")
                 joined = joined.sort_values("timestamp")
-                joined["rolling_fill_rate"] = (
-                    joined["filled"].rolling(20, min_periods=1).mean()
-                )
+                joined["rolling_fill_rate"] = joined["filled"].rolling(20, min_periods=1).mean()
                 st.line_chart(
                     joined.set_index("timestamp")[["rolling_fill_rate"]],
                     use_container_width=True,

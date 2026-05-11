@@ -41,9 +41,7 @@ _FI_COMMANDS: frozenset[str] = frozenset(
     }
 )
 
-CUSTOM_COMMANDS = frozenset(
-    {"pit-audit", "snapshot-build", "snapshot-verify"} | _FI_COMMANDS
-)
+CUSTOM_COMMANDS = frozenset({"pit-audit", "snapshot-build", "snapshot-verify"} | _FI_COMMANDS)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

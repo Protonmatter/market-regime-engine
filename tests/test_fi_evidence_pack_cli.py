@@ -31,9 +31,7 @@ def _seed_credit_regime_score(wh: Warehouse, *, model_run_id: str) -> None:
                 "regime_label": "Watch / Transition",
                 "confidence": 0.88,
                 "drivers_json": json.dumps(["spreads", "volatility"]),
-                "component_scores_json": json.dumps(
-                    {"spreads": 50.0, "volatility": 45.0}, sort_keys=True
-                ),
+                "component_scores_json": json.dumps({"spreads": 50.0, "volatility": 45.0}, sort_keys=True),
                 "release_gate": 1,
                 "artifact_hash": "sha256:" + "a" * 64,
                 "metadata_json": "{}",
@@ -102,9 +100,7 @@ def test_fi_evidence_pack_cli_builds_pack_for_model_run(tmp_path: Path) -> None:
     assert df.iloc[-1]["request_id"] == "req-cli-1"
 
 
-def test_fi_evidence_pack_cli_signs_pack_in_production_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_fi_evidence_pack_cli_signs_pack_in_production_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "ev-cli-prod.duckdb"
     wh = Warehouse(str(db_path))
     try:
@@ -167,9 +163,7 @@ def test_fi_evidence_pack_cli_refuses_unsigned_in_production_mode_when_no_keys(
     assert payload["governance"] == "production_requires_hmac"
 
 
-def test_fi_evidence_pack_cli_handles_unknown_run_id(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_fi_evidence_pack_cli_handles_unknown_run_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     db_path = tmp_path / "ev-cli-missing.duckdb"
     Warehouse(str(db_path)).close()
     rc = fi_cli_run(
@@ -188,9 +182,7 @@ def test_fi_evidence_pack_cli_handles_unknown_run_id(
     assert payload["status"] == "not_found"
 
 
-def test_fi_evidence_pack_cli_signs_when_sign_true(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_fi_evidence_pack_cli_signs_when_sign_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``--sign true`` with keys configured produces a signed pack."""
     db_path = tmp_path / "ev-sign-true.duckdb"
     wh = Warehouse(str(db_path))

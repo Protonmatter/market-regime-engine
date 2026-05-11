@@ -108,9 +108,7 @@ def test_cache_invalidates_when_latest_regime_score_advances(tmp_path: Path) -> 
 
     wh_writer = Warehouse(str(db_path))
     try:
-        wh_writer.write_credit_regime_score(
-            pd.DataFrame([_row("2026-05-08T17:00:00Z", 60.0)])
-        )
+        wh_writer.write_credit_regime_score(pd.DataFrame([_row("2026-05-08T17:00:00Z", 60.0)]))
     finally:
         wh_writer.close()
 

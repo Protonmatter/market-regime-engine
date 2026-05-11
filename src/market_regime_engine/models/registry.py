@@ -43,9 +43,9 @@ _MODEL_REGISTRY: dict[str, type[ForecastModel]] = {
     # discover them by canonical name. Live scoring goes through
     # market_regime_engine.fixed_income; the registry shim raises if
     # someone tries to fit/predict here.
-    "fi_credit_regime_baseline": FiCreditRegimeBaseline,  # type: ignore[dict-item]
-    "fi_liquidity_stress_baseline": FiLiquidityStressBaseline,  # type: ignore[dict-item]
-    "fi_execution_confidence_baseline": FiExecutionConfidenceBaseline,  # type: ignore[dict-item]
+    "fi_credit_regime_baseline": FiCreditRegimeBaseline,
+    "fi_liquidity_stress_baseline": FiLiquidityStressBaseline,
+    "fi_execution_confidence_baseline": FiExecutionConfidenceBaseline,
 }
 
 _ALIASES: dict[str, str] = {

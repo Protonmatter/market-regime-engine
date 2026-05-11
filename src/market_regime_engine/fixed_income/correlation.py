@@ -80,6 +80,7 @@ class CorrelationIdMiddleware:
             request_id = uuid.uuid4().hex
         token = _REQUEST_ID_CTX.set(request_id)
         try:
+
             async def _send_with_header(message: dict[str, Any]) -> None:
                 if message.get("type") == "http.response.start":
                     response_headers = list(message.get("headers") or [])
@@ -102,9 +103,7 @@ class CorrelationIdMiddleware:
             _REQUEST_ID_CTX.reset(token)
 
     @staticmethod
-    def _header_value(
-        headers: list[tuple[bytes, bytes]], target: bytes
-    ) -> bytes | None:
+    def _header_value(headers: list[tuple[bytes, bytes]], target: bytes) -> bytes | None:
         target_lower = target.lower()
         for raw_key, raw_value in headers:
             if raw_key.lower() == target_lower:

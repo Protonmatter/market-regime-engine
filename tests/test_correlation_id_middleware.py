@@ -18,7 +18,6 @@ from market_regime_engine.fixed_income.correlation import (
     set_request_id,
 )
 
-
 _UUID4_REGEX = re.compile(r"^[0-9a-f]{32}$")
 
 

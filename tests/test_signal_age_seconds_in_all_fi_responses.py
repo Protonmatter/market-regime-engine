@@ -6,7 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -71,15 +70,15 @@ def test_credit_regime_response_includes_signal_age(tmp_path: Path) -> None:
         _seed_credit(wh)
     finally:
         wh.close()
+    import contextlib
+
     wh2 = Warehouse(str(db_path))
     try:
         client = TestClient(_build_app(wh2))
         resp = client.get("/v1/regime_index/latest")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             wh2.close()
-        except Exception:
-            pass
     assert resp.status_code == 200
     body = resp.json()
     assert "metadata" in body
@@ -88,6 +87,8 @@ def test_credit_regime_response_includes_signal_age(tmp_path: Path) -> None:
 
 
 def test_liquidity_stress_response_includes_signal_age(tmp_path: Path) -> None:
+    import contextlib
+
     db_path = tmp_path / "sig-age-liq.duckdb"
     wh = Warehouse(str(db_path))
     try:
@@ -99,10 +100,8 @@ def test_liquidity_stress_response_includes_signal_age(tmp_path: Path) -> None:
         client = TestClient(_build_app(wh2))
         resp = client.get("/v1/liquidity_index/latest")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             wh2.close()
-        except Exception:
-            pass
     assert resp.status_code == 200
     body = resp.json()
     assert "metadata" in body
@@ -154,7 +153,5 @@ def test_signal_age_seconds_helper_uses_utc() -> None:
     # A timestamp 60 seconds in the past should give a positive age.
     now = pd.Timestamp.now(tz="UTC")
     sixty_s_ago = now - pd.Timedelta(seconds=60)
-    age = _signal_age_seconds_now(
-        sixty_s_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
+    age = _signal_age_seconds_now(sixty_s_ago.strftime("%Y-%m-%dT%H:%M:%SZ"))
     assert age >= 50.0  # tolerance for clock skew between assertion and call

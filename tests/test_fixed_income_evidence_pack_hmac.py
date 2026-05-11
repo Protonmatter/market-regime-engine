@@ -48,23 +48,23 @@ from market_regime_engine.fixed_income.evidence_pack import (
 
 
 def _make_pack(**overrides):
-    base = dict(
-        model_run_id="run-1",
-        component_name="credit_regime",
-        model_version="0.1.0",
-        code_sha="abcdef0",
-        model_hash="sha256:model",
-        input_features_hash="sha256:in",
-        output_hash="sha256:out",
-        release_gate=True,
-        data_vintages={"trace_trades": "2026-05-10T15:00:00Z"},
-        validation_results={"calibration_error": 0.05},
-        random_seeds={"numpy": 7},
-        lockfile_hash="sha256:lock",
-        timestamp="2026-05-10T16:00:00Z",
-        python_version="3.13.4",
-        metadata={"k": "v"},
-    )
+    base = {
+        "model_run_id": "run-1",
+        "component_name": "credit_regime",
+        "model_version": "0.1.0",
+        "code_sha": "abcdef0",
+        "model_hash": "sha256:model",
+        "input_features_hash": "sha256:in",
+        "output_hash": "sha256:out",
+        "release_gate": True,
+        "data_vintages": {"trace_trades": "2026-05-10T15:00:00Z"},
+        "validation_results": {"calibration_error": 0.05},
+        "random_seeds": {"numpy": 7},
+        "lockfile_hash": "sha256:lock",
+        "timestamp": "2026-05-10T16:00:00Z",
+        "python_version": "3.13.4",
+        "metadata": {"k": "v"},
+    }
     base.update(overrides)
     return build_evidence_pack(**base)
 

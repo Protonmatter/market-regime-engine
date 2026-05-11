@@ -8,7 +8,6 @@ import json
 import secrets
 from pathlib import Path
 
-import pandas as pd
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -104,9 +103,7 @@ def test_get_evidence_pack_returns_404_for_unknown_run_id(tmp_path: Path) -> Non
     assert payload["detail"] == "evidence_pack_not_found"
 
 
-def test_get_evidence_pack_includes_hmac_signature_when_signed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_evidence_pack_includes_hmac_signature_when_signed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": _b64()}))
     db_path = tmp_path / "ep-api-signed.duckdb"
     wh = Warehouse(str(db_path))

@@ -70,9 +70,7 @@ def _signal_age_seconds(asof: pd.Timestamp, ts: pd.Timestamp | str | None) -> fl
     return float((asof - parsed).total_seconds())
 
 
-def _credit_regime_section(
-    df: pd.DataFrame, *, asof: pd.Timestamp
-) -> FiReportSection:
+def _credit_regime_section(df: pd.DataFrame, *, asof: pd.Timestamp) -> FiReportSection:
     if df is None or df.empty:
         return FiReportSection(
             heading="Credit Regime Index",
@@ -145,8 +143,7 @@ def _execution_confidence_section(
         f"- **Total predictions** (last {len(head)}): {len(head)}",
         f"- **Auto-X allowed**: {int(actions.get('Auto-X allowed', 0))}",
         f"- **Auto-X caution**: {int(actions.get('Auto-X caution / trader confirm', 0))}",
-        f"- **Manual review required**: "
-        f"{int(actions.get('Manual review required', 0))}",
+        f"- **Manual review required**: {int(actions.get('Manual review required', 0))}",
     ]
     if outcomes is not None and not outcomes.empty:
         joined = predictions.merge(
@@ -157,9 +154,7 @@ def _execution_confidence_section(
             suffixes=("_pred", "_out"),
         )
         if not joined.empty:
-            joined["filled"] = (
-                joined["filled_quantity"].fillna(0).astype(float) > 0
-            )
+            joined["filled"] = joined["filled_quantity"].fillna(0).astype(float) > 0
             success_rate = float(joined["filled"].mean())
             lines.append(f"- **Filled rate** (predictions ∩ outcomes): {success_rate:.1%}")
             lines.append(f"- **Sample size**: {len(joined)}")
@@ -235,21 +230,13 @@ def _evidence_pack_section(df: pd.DataFrame) -> FiReportSection:
             heading="Evidence Packs",
             body="_No evidence packs have been recorded yet._\n",
         )
-    by_component = (
-        df.sort_values("timestamp")
-        .groupby("component_name", as_index=False)
-        .tail(1)
-    )
+    by_component = df.sort_values("timestamp").groupby("component_name", as_index=False).tail(1)
     lines = [
         "| Component | Model run | Request | Signed | Timestamp |",
         "|---|---|---|---|---|",
     ]
     for _, row in by_component.iterrows():
-        signed = (
-            str(row.get("hmac_signature", "")).split(":", 1)[0]
-            if str(row.get("hmac_signature", ""))
-            else "no"
-        )
+        signed = str(row.get("hmac_signature", "")).split(":", 1)[0] if str(row.get("hmac_signature", "")) else "no"
         lines.append(
             f"| {row['component_name']} | `{row['model_run_id']}` | "
             f"`{row['request_id']}` | {signed} | {row['timestamp']} |"
@@ -285,7 +272,7 @@ def _render_html(markdown_body: str) -> str:
     dep.
     """
     try:
-        import markdown  # type: ignore[import-not-found]
+        import markdown
 
         html_body = markdown.markdown(
             markdown_body,
@@ -293,7 +280,7 @@ def _render_html(markdown_body: str) -> str:
         )
         return (
             "<!DOCTYPE html>\n"
-            "<html lang=\"en\"><head><meta charset=\"utf-8\">"
+            '<html lang="en"><head><meta charset="utf-8">'
             "<title>Fixed-Income RCIE Report</title></head><body>"
             f"{html_body}</body></html>\n"
         )
@@ -302,7 +289,7 @@ def _render_html(markdown_body: str) -> str:
 
         return (
             "<!DOCTYPE html>\n"
-            "<html lang=\"en\"><head><meta charset=\"utf-8\">"
+            '<html lang="en"><head><meta charset="utf-8">'
             "<title>Fixed-Income RCIE Report</title></head><body>"
             f"<pre>{escape(markdown_body)}</pre>"
             "</body></html>\n"
