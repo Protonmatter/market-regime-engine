@@ -25,7 +25,6 @@ The contracts verified are:
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -399,8 +398,8 @@ def test_fi_appender_bulk_write_under_2s(tmp_path: Path) -> None:
         rows = wh.write_trace_trades(df)
         elapsed = time.perf_counter() - t0
         assert rows == n
-        # Generous 2s budget — v1.4's 6600× speedup put 10k rows under 2s;
-        # 5k rows on the FI table set must fit the same envelope.
+        # Generous 2s budget: v1.4's 6600x speedup put 10k rows under
+        # 2s; 5k rows on the FI table set must fit the same envelope.
         assert elapsed < 2.0, f"FI bulk-write took {elapsed:.2f}s, exceeds 2s budget"
     finally:
         wh.close()

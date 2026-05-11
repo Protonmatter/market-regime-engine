@@ -1195,7 +1195,17 @@ def e_value_test_cmd(args: argparse.Namespace) -> None:
 
 
 def warehouse_migrate_cmd(args: argparse.Namespace) -> None:
-    """Copy every warehouse table from one backend to another (v1.3 item D)."""
+    """Copy every warehouse table from one backend to another (v1.3 item D).
+
+    v1.5 (PR-2): import the fixed_income package before invoking
+    ``migrate_warehouse`` so the 13 FI tables are registered with the
+    storage registry. Without this import the CLI would only migrate
+    the 34 core macro tables and a fresh ``data/test.duckdb`` would
+    miss the FI surface area.
+    """
+
+    import market_regime_engine.fixed_income  # noqa: F401  - register FI tables
+
     counts = migrate_warehouse(
         src=args.src,
         dst=args.dst,

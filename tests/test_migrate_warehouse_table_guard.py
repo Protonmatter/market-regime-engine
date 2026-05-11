@@ -6,7 +6,6 @@ SQL-injection foot-gun flagged at storage.py:1588 in the pre-PR-2 code.
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
