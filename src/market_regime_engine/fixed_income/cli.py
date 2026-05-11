@@ -45,7 +45,13 @@ CLI_COMMANDS: tuple[str, ...] = (
 
 # Commands fully implemented in this PR. Stub-emitting commands fall
 # back to ``_emit_stub`` below.
-_LIVE_COMMANDS: frozenset[str] = frozenset({"fi-score-credit-regime", "fi-score-liquidity"})
+_LIVE_COMMANDS: frozenset[str] = frozenset(
+    {
+        "fi-score-credit-regime",
+        "fi-score-liquidity",
+        "fi-score-execution-confidence",
+    }
+)
 
 
 def _emit_stub(command: str) -> int:
@@ -180,9 +186,40 @@ def _build_fi_score_execution_confidence(sub: argparse._SubParsersAction) -> Non
     parser.add_argument(
         "--input",
         help="Path to the ExecutionConfidenceRequest JSON payload.",
-        required=False,
+        required=True,
     )
-    parser.add_argument("--out-json", help="Optional path to write the scoring envelope.")
+    parser.add_argument(
+        "--output-json",
+        help="Optional path to write the scoring envelope JSON.",
+        dest="output_json",
+    )
+    # PR-1 alias kept for back-compat.
+    parser.add_argument(
+        "--out-json",
+        help=argparse.SUPPRESS,
+        dest="out_json_legacy",
+    )
+    parser.add_argument(
+        "--profile",
+        help="Operating profile (production | default).",
+        default="production",
+    )
+    parser.add_argument(
+        "--release-gate",
+        help="Inbound governance flag (default: true).",
+        default="true",
+        choices=["true", "false"],
+    )
+    parser.add_argument(
+        "--request-id",
+        help="Composite-PK request id (PR-15). Auto-generated UUID4 if omitted.",
+        dest="request_id",
+    )
+    parser.add_argument(
+        "--model-run-id",
+        help="Explicit model_run_id (auto-generated if omitted).",
+        dest="model_run_id",
+    )
 
 
 def _build_fi_tca_segment(sub: argparse._SubParsersAction) -> None:
@@ -281,7 +318,9 @@ def _cmd_fi_score_credit_regime(ns: argparse.Namespace) -> int:
     wh = Warehouse(ns.db)
     try:
         try:
-            features = build_credit_features(wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504)))
+            features = build_credit_features(
+                wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504))
+            )
         except PitViolationError as exc:
             print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
             return 2
@@ -412,17 +451,23 @@ def _cmd_fi_score_liquidity(ns: argparse.Namespace) -> int:
         Literal["market", "sector", "rating", "cusip"], scope_type_raw
     )
     scope_id = getattr(ns, "scope_id", "ALL") or "ALL"
-    prev_from_wh = (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
+    prev_from_wh = (
+        (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
+    )
     use_hier = bool(getattr(ns, "use_hierarchical", False))
 
     wh = Warehouse(ns.db)
     prev_label: LiquidityLabel | None = None
     try:
         if prev_from_wh:
-            prev = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+            prev = latest_liquidity_stress_score(
+                wh, scope_type=scope_type, scope_id=scope_id
+            )
             if prev is not None and prev.liquidity_label:
                 try:
-                    prev_label = next(lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label)
+                    prev_label = next(
+                        lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label
+                    )
                 except StopIteration:
                     prev_label = None
         try:
@@ -493,15 +538,150 @@ def _write_optional_json(path: str, payload: dict[str, Any]) -> None:
     p.write_text(json.dumps(payload, sort_keys=True, indent=2), encoding="utf-8")
 
 
+def _envelope_from_execution_confidence(output: Any) -> dict[str, Any]:
+    """Stdout envelope for ``score_execution_confidence`` results."""
+    return {
+        "timestamp": output.timestamp,
+        "cusip": output.cusip,
+        "side": output.side,
+        "notional": float(output.notional),
+        "protocol": output.protocol,
+        "confidence_score": float(output.confidence_score),
+        "expected_slippage_bps": (
+            float(output.expected_slippage_bps)
+            if output.expected_slippage_bps is not None
+            else None
+        ),
+        "confidence_interval": [
+            output.confidence_interval_low,
+            output.confidence_interval_high,
+        ],
+        "recommended_action": output.recommended_action,
+        "human_review_required": bool(output.human_review_required),
+        "model_run_id": output.model_run_id,
+        "release_gate": bool(output.release_gate),
+        "artifact_hash": output.artifact_hash,
+        "metadata": dict(output.metadata),
+    }
+
+
+def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
+    """Run :func:`score_execution_confidence` end-to-end for a JSON order.
+
+    Workflow:
+
+    1. Read ``--input`` JSON, route through the Pydantic v2 boundary
+       model so naive timestamps / oversized notionals / non-alphanumeric
+       cusips surface with exit code 2.
+    2. Open the DuckDB warehouse at ``--db``.
+    3. Score via :func:`score_execution_confidence`.
+    4. Persist via :func:`write_execution_confidence_prediction` keyed by
+       ``--request-id`` (auto-generated UUID4 if omitted).
+    5. Print + optionally write the envelope to ``--output-json``.
+
+    Exit codes: 0 on clean run (including release_gate=false stale-signal
+    fail-closed), 2 on input / PIT / audit failure.
+    """
+    import uuid as _uuid
+
+    from market_regime_engine.fixed_income.api import ExecutionConfidenceRequestModel
+    from market_regime_engine.fixed_income.execution_confidence import (
+        score_execution_confidence,
+        write_execution_confidence_prediction,
+    )
+    from market_regime_engine.fixed_income.pit_guard import PitViolationError
+    from market_regime_engine.frontier.data_cleaning import PitAuditFailure
+    from market_regime_engine.storage import Warehouse
+
+    input_path = getattr(ns, "input", None)
+    if not input_path:
+        print(
+            json.dumps(
+                {"status": "error", "detail": "--input is required"}, sort_keys=True
+            )
+        )
+        return 2
+    try:
+        raw = Path(input_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
+        return 2
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
+        return 2
+
+    request_id = getattr(ns, "request_id", None) or _uuid.uuid4().hex
+    # ``request_id`` is required on the Pydantic model; inject ours if the
+    # caller did not include it in the JSON payload.
+    payload.setdefault("request_id", request_id)
+    try:
+        body = ExecutionConfidenceRequestModel(**payload)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"status": "validation_error", "detail": str(exc)}, sort_keys=True
+            )
+        )
+        return 2
+
+    release_gate = (
+        (getattr(ns, "release_gate", "true") or "true").lower() != "false"
+    )
+    profile = getattr(ns, "profile", "production")
+
+    wh = Warehouse(ns.db)
+    try:
+        try:
+            output = score_execution_confidence(
+                body.to_dataclass(),
+                warehouse=wh,
+                release_gate=release_gate,
+                profile=profile,
+                model_run_id=getattr(ns, "model_run_id", None),
+            )
+        except PitViolationError as exc:
+            print(
+                json.dumps(
+                    {"status": "pit_violation", "detail": str(exc)}, sort_keys=True
+                )
+            )
+            return 2
+        except PitAuditFailure as exc:
+            print(
+                json.dumps(
+                    {"status": "pit_audit_failed", "detail": str(exc)}, sort_keys=True
+                )
+            )
+            return 2
+        write_execution_confidence_prediction(
+            wh, output, request_id=body.request_id
+        )
+    finally:
+        wh.close()
+
+    envelope = _envelope_from_execution_confidence(output)
+    envelope["request_id"] = body.request_id
+    print(json.dumps(envelope, sort_keys=True, default=str))
+    output_path = getattr(ns, "output_json", None) or getattr(
+        ns, "out_json_legacy", None
+    )
+    if output_path:
+        _write_optional_json(output_path, envelope)
+    return 0
+
+
 def run(args: Sequence[str]) -> int:
     """Dispatch an ``fi-*`` subcommand.
 
-    Returns the subprocess exit code. Stub commands (PR-4..PR-7)
+    Returns the subprocess exit code. Stub commands (PR-6/PR-7)
     return 0 + a ``not_yet_implemented`` JSON payload so downstream
     automation can detect the placeholder state via ``status`` rather
-    than a non-zero exit. The PR-3 ``fi-score-credit-regime`` command
-    runs the real workflow and returns 0 on success, 2 on PIT or
-    audit failure.
+    than a non-zero exit. The PR-3 ``fi-score-credit-regime``, PR-4
+    ``fi-score-liquidity`` and PR-5 ``fi-score-execution-confidence``
+    commands run the real workflow and return 0 on success, 2 on
+    PIT or audit failure.
     """
     parser = _build_parser()
     ns = parser.parse_args(list(args))
@@ -510,6 +690,8 @@ def run(args: Sequence[str]) -> int:
         return _cmd_fi_score_credit_regime(ns)
     if command == "fi-score-liquidity":
         return _cmd_fi_score_liquidity(ns)
+    if command == "fi-score-execution-confidence":
+        return _cmd_fi_score_execution_confidence(ns)
     if command in CLI_COMMANDS:
         return _emit_stub(command)
     parser.error(f"unsupported fi-* command: {command}")
