@@ -8,6 +8,8 @@ through :class:`walk_forward.PurgedWalkForward` to drop the leak.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -37,11 +39,17 @@ def _synthetic_panel(n: int = 180, seed: int = 0) -> tuple[pd.DataFrame, pd.Seri
 
 
 def test_horizon_parser_extracts_integer_months() -> None:
-    assert _parse_horizon_months("3m") == 3
-    assert _parse_horizon_months("12m") == 12
-    assert _parse_horizon_months("forward_18m_extreme") == 18
-    assert _parse_horizon_months("garbage") == 1
-    assert _parse_horizon_months("") == 1
+    # v1.5 PR-5 (AF-10): _parse_horizon_months is deprecated in favour of
+    # _parse_horizon_periods(cadence='monthly'); the shim preserves the
+    # v1.4 permissive fallback behaviour. Silence the deprecation
+    # warning here so the legacy contract pin stays a regression check.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        assert _parse_horizon_months("3m") == 3
+        assert _parse_horizon_months("12m") == 12
+        assert _parse_horizon_months("forward_18m_extreme") == 18
+        assert _parse_horizon_months("garbage") == 1
+        assert _parse_horizon_months("") == 1
 
 
 def test_binary_backtest_returns_non_empty_predictions_and_validation() -> None:
