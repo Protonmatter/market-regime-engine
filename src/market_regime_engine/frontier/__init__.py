@@ -17,6 +17,7 @@ from __future__ import annotations
 __all__ = [
     "bayesian_msvar",
     "conformal_ts",
+    "data_cleaning",
     "deep_kernel",
     "dfm_mq",
     "distributional",

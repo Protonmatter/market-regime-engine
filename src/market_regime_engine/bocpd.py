@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import itertools
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+
+from market_regime_engine.frontier.data_cleaning import NanPolicy, clean_with_policy
 
 # ---------------------------------------------------------------------------
 # numerical helpers
@@ -123,7 +125,23 @@ class DiagonalStudentTBOCPD:
     prior_var: float = 1.0
     min_prob: float = 1e-12
 
-    def score(self, x: pd.DataFrame) -> pd.DataFrame:
+    def score(
+        self,
+        x: pd.DataFrame,
+        *,
+        nan_policy: NanPolicy = NanPolicy.NAN_TO_ZERO,
+        column_policies: Mapping[str, NanPolicy] | None = None,
+    ) -> pd.DataFrame:
+        """Score the BOCPD posterior.
+
+        v1.5 (PR-3 ASK-5/AF-8): the legacy ``ffill().fillna(0.0)``
+        cleaner is now a per-column NaN policy. The default
+        ``NanPolicy.NAN_TO_ZERO`` is bit-for-bit identical to the v1.4
+        cleaner so existing macro fixtures keep passing.
+        FI callers override to :attr:`NanPolicy.NAN_FAILS_PIT_AUDIT` so
+        a missing CUSIP-level feature trips release_gate=false instead
+        of silently zero-filling.
+        """
         if x.empty:
             return pd.DataFrame(
                 columns=[
@@ -135,7 +153,7 @@ class DiagonalStudentTBOCPD:
                 ]
             )
 
-        frame = x.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0).astype(float)
+        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
         arr = frame.to_numpy(float)
         dim = arr.shape[1]
 
@@ -347,7 +365,20 @@ class MultivariateNIWBOCPD:
     prior_psi_scale: float = 1.0
     min_prob: float = 1e-12
 
-    def score(self, x: pd.DataFrame) -> pd.DataFrame:
+    def score(
+        self,
+        x: pd.DataFrame,
+        *,
+        nan_policy: NanPolicy = NanPolicy.NAN_TO_ZERO,
+        column_policies: Mapping[str, NanPolicy] | None = None,
+    ) -> pd.DataFrame:
+        """Score the NIW BOCPD posterior.
+
+        v1.5 (PR-3 ASK-5/AF-8): same ``nan_policy`` plumbing as
+        :class:`DiagonalStudentTBOCPD`. Default ``NAN_TO_ZERO``
+        preserves v1.4 numerics; FI callers pass
+        :attr:`NanPolicy.NAN_FAILS_PIT_AUDIT`.
+        """
         if x.empty:
             return pd.DataFrame(
                 columns=[
@@ -359,7 +390,7 @@ class MultivariateNIWBOCPD:
                 ]
             )
 
-        frame = x.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0).astype(float)
+        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
         arr = frame.to_numpy(float)
         dim = arr.shape[1]
 

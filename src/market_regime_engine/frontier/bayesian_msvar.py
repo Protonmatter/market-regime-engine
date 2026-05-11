@@ -41,12 +41,14 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
+from market_regime_engine.frontier.data_cleaning import NanPolicy, clean_with_policy
 from market_regime_engine.hmm import DOMAIN_COLUMNS, REGIME_STATES
 
 _INSTALL_HINT = (
@@ -73,12 +75,23 @@ def _require_numpyro() -> tuple[Any, Any, Any, Any, Any]:
     )
 
 
-def _coerce_panel(panel: pd.DataFrame, domains: list[str]) -> np.ndarray:
-    """Project ``panel`` into the ``domains`` order, ffill+0-fill missing.
+def _coerce_panel(
+    panel: pd.DataFrame,
+    domains: list[str],
+    *,
+    nan_policy: NanPolicy = NanPolicy.NAN_TO_ZERO,
+    column_policies: Mapping[str, NanPolicy] | None = None,
+) -> np.ndarray:
+    """Project ``panel`` into the ``domains`` order; apply per-column NaN policy.
 
     Mirrors the cleaner used by :class:`MarkovSwitchingVAR.fit` so the
     EM-vs-Bayes parity test isn't biased by different missing-data
     handling.
+
+    v1.5 (PR-3 ASK-5/AF-8): the legacy ``ffill().fillna(0.0)`` is
+    routed through :func:`clean_with_policy`. Default
+    ``NanPolicy.NAN_TO_ZERO`` is bit-for-bit identical to the v1.4
+    cleaner, so the existing fixtures keep passing.
     """
     if panel is None or panel.empty:
         return np.zeros((0, len(domains)), dtype=float)
@@ -86,7 +99,9 @@ def _coerce_panel(panel: pd.DataFrame, domains: list[str]) -> np.ndarray:
     for d in domains:
         if d not in frame:
             frame[d] = 0.0
-    return frame[domains].replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0).to_numpy(dtype=float)
+    return clean_with_policy(frame[domains], default_policy=nan_policy, column_policies=column_policies).to_numpy(
+        dtype=float
+    )
 
 
 def _logsumexp(arr: np.ndarray, axis: int | None = None) -> np.ndarray:
@@ -410,7 +425,13 @@ class BayesianMSVAR:
         log_alpha = log_alpha - log_norm
         return np.exp(log_alpha)
 
-    def score(self, panel: pd.DataFrame) -> pd.DataFrame:
+    def score(
+        self,
+        panel: pd.DataFrame,
+        *,
+        nan_policy: NanPolicy = NanPolicy.NAN_TO_ZERO,
+        column_policies: Mapping[str, NanPolicy] | None = None,
+    ) -> pd.DataFrame:
         """Return per-step regime probabilities + credible bands.
 
         Columns mirror :meth:`MarkovSwitchingVAR.score`:
@@ -431,6 +452,12 @@ class BayesianMSVAR:
         When only posterior-mean parameters are available (SVI path) we
         fall back to re-running the Hamilton filter at the posterior
         mean.
+
+        v1.5 (PR-3 ASK-5/AF-8): ``nan_policy`` defaults to
+        :attr:`NanPolicy.NAN_TO_ZERO` to preserve v1.4 numerics; FI
+        callers may pass :attr:`NanPolicy.NAN_FAILS_PIT_AUDIT` so a
+        missing FI feature aborts the score rather than silently
+        zero-filling.
         """
         cols = (
             ["date", "msvar_regime", "msvar_confidence"]
@@ -440,7 +467,7 @@ class BayesianMSVAR:
         if not self.fitted or panel is None or panel.empty:
             return pd.DataFrame(columns=cols)
         frame = panel.copy()
-        Y = _coerce_panel(panel, self.domains)
+        Y = _coerce_panel(panel, self.domains, nan_policy=nan_policy, column_policies=column_policies)
         n = Y.shape[0]
         if n == 0:
             return pd.DataFrame(columns=cols)
