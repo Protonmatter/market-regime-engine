@@ -79,6 +79,13 @@ dev = [
   "fakeredis>=2.20",
   "responses>=0.25",
   "requests-mock>=1.11",
+  # v1.5 (PR-2 task I.2): httpx is the transport that
+  # fastapi.testclient.TestClient drives under the hood. Before PR-5
+  # adds the POST /v1/execution_confidence Pydantic body validation
+  # tests the FI dev profile already pulls it in for the api_v1 hardening
+  # suite; pin here so a clean ``pip install -e .[dev]`` runs the test
+  # client without an out-of-band ``pip install httpx`` step.
+  "httpx>=0.27",
 ]
 
 [project.scripts]
