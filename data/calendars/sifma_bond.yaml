@@ -1,0 +1,254 @@
+# SIFMA U.S. bond market trading calendar (2020-2030).
+#
+# Source: hand-curated from
+#   https://www.sifma.org/resources/general/holiday-schedule/
+# Cross-checked against U.S. federal holidays + the SIFMA US fixed-income
+# bond-market recommended close schedule. Early-close dates do NOT close
+# the market; they are flagged separately so PIT enforcement still
+# permits trade timestamps on those days.
+#
+# Format expected by `fixed_income.calendars`:
+#   calendar: sifma_bond
+#   years:
+#     - year: <YYYY>
+#       closures:
+#         - {date: "YYYY-MM-DD", name: "..."}
+#       early_closes:
+#         - {date: "YYYY-MM-DD", name: "...", close_time: "HH:MM"}
+#
+# Notes on rules used to materialise the dates below:
+# - When a federal holiday lands on a Saturday, US bond markets close
+#   the preceding Friday (per SIFMA US Treasury observed rule).
+# - When a federal holiday lands on a Sunday, US bond markets close the
+#   following Monday.
+# - Juneteenth (Jun 19) is observed only from 2022 onward.
+# - Good Friday and the day before Independence Day / Christmas Eve /
+#   New Year's Eve are scheduled early closes (typically 14:00 ET / 12:00
+#   ET respectively) when the underlying day is a regular weekday.
+calendar: sifma_bond
+years:
+  - year: 2020
+    closures:
+      - {date: "2020-01-01", name: "New Year's Day"}
+      - {date: "2020-01-20", name: "Martin Luther King Jr. Day"}
+      - {date: "2020-02-17", name: "Presidents' Day"}
+      - {date: "2020-04-10", name: "Good Friday"}
+      - {date: "2020-05-25", name: "Memorial Day"}
+      - {date: "2020-07-03", name: "Independence Day (observed Fri 7/3 — Jul 4 falls on Saturday)"}
+      - {date: "2020-09-07", name: "Labor Day"}
+      - {date: "2020-10-12", name: "Columbus Day"}
+      - {date: "2020-11-11", name: "Veterans Day"}
+      - {date: "2020-11-26", name: "Thanksgiving"}
+      - {date: "2020-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2020-04-09", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2020-05-22", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2020-07-02", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2020-11-27", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2020-12-24", name: "Christmas Eve early close", close_time: "14:00"}
+      - {date: "2020-12-31", name: "New Year's Eve early close", close_time: "14:00"}
+  - year: 2021
+    closures:
+      - {date: "2021-01-01", name: "New Year's Day"}
+      - {date: "2021-01-18", name: "Martin Luther King Jr. Day"}
+      - {date: "2021-02-15", name: "Presidents' Day"}
+      - {date: "2021-04-02", name: "Good Friday"}
+      - {date: "2021-05-31", name: "Memorial Day"}
+      - {date: "2021-07-05", name: "Independence Day observed (Jul 4 falls on Sunday)"}
+      - {date: "2021-09-06", name: "Labor Day"}
+      - {date: "2021-10-11", name: "Columbus Day"}
+      - {date: "2021-11-11", name: "Veterans Day"}
+      - {date: "2021-11-25", name: "Thanksgiving"}
+      - {date: "2021-12-24", name: "Christmas Day observed (Dec 25 falls on Saturday)"}
+    early_closes:
+      - {date: "2021-04-01", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2021-05-28", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2021-07-02", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2021-11-26", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2021-12-23", name: "Christmas Eve early close (Dec 24 observed)", close_time: "14:00"}
+      - {date: "2021-12-31", name: "New Year's Eve early close", close_time: "14:00"}
+  - year: 2022
+    closures:
+      - {date: "2022-01-17", name: "Martin Luther King Jr. Day"}
+      - {date: "2022-02-21", name: "Presidents' Day"}
+      - {date: "2022-04-15", name: "Good Friday"}
+      - {date: "2022-05-30", name: "Memorial Day"}
+      - {date: "2022-06-20", name: "Juneteenth observed (first SIFMA observance; Jun 19 falls on Sunday)"}
+      - {date: "2022-07-04", name: "Independence Day"}
+      - {date: "2022-09-05", name: "Labor Day"}
+      - {date: "2022-10-10", name: "Columbus Day"}
+      - {date: "2022-11-11", name: "Veterans Day"}
+      - {date: "2022-11-24", name: "Thanksgiving"}
+      - {date: "2022-12-26", name: "Christmas Day observed (Dec 25 falls on Sunday)"}
+    early_closes:
+      - {date: "2022-04-14", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2022-05-27", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2022-07-01", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2022-11-25", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2022-12-23", name: "Christmas Eve early close", close_time: "14:00"}
+      - {date: "2022-12-30", name: "New Year's Eve early close (Dec 31 falls on Saturday)", close_time: "14:00"}
+  - year: 2023
+    closures:
+      - {date: "2023-01-02", name: "New Year's Day observed (Jan 1 falls on Sunday)"}
+      - {date: "2023-01-16", name: "Martin Luther King Jr. Day"}
+      - {date: "2023-02-20", name: "Presidents' Day"}
+      - {date: "2023-04-07", name: "Good Friday"}
+      - {date: "2023-05-29", name: "Memorial Day"}
+      - {date: "2023-06-19", name: "Juneteenth"}
+      - {date: "2023-07-04", name: "Independence Day"}
+      - {date: "2023-09-04", name: "Labor Day"}
+      - {date: "2023-10-09", name: "Columbus Day"}
+      - {date: "2023-11-23", name: "Thanksgiving"}
+      - {date: "2023-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2023-04-06", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2023-05-26", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2023-07-03", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2023-11-24", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2023-12-22", name: "Christmas Eve early close (Dec 24 falls on Sunday)", close_time: "14:00"}
+      - {date: "2023-12-29", name: "New Year's Eve early close (Dec 31 falls on Sunday)", close_time: "14:00"}
+  - year: 2024
+    closures:
+      - {date: "2024-01-01", name: "New Year's Day"}
+      - {date: "2024-01-15", name: "Martin Luther King Jr. Day"}
+      - {date: "2024-02-19", name: "Presidents' Day"}
+      - {date: "2024-03-29", name: "Good Friday"}
+      - {date: "2024-05-27", name: "Memorial Day"}
+      - {date: "2024-06-19", name: "Juneteenth"}
+      - {date: "2024-07-04", name: "Independence Day"}
+      - {date: "2024-09-02", name: "Labor Day"}
+      - {date: "2024-10-14", name: "Columbus Day"}
+      - {date: "2024-11-11", name: "Veterans Day"}
+      - {date: "2024-11-28", name: "Thanksgiving"}
+      - {date: "2024-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2024-03-28", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2024-05-24", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2024-07-03", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2024-11-29", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2024-12-24", name: "Christmas Eve early close", close_time: "14:00"}
+      - {date: "2024-12-31", name: "New Year's Eve early close", close_time: "14:00"}
+  - year: 2025
+    closures:
+      - {date: "2025-01-01", name: "New Year's Day"}
+      - {date: "2025-01-20", name: "Martin Luther King Jr. Day"}
+      - {date: "2025-02-17", name: "Presidents' Day"}
+      - {date: "2025-04-18", name: "Good Friday"}
+      - {date: "2025-05-26", name: "Memorial Day"}
+      - {date: "2025-06-19", name: "Juneteenth"}
+      - {date: "2025-07-04", name: "Independence Day"}
+      - {date: "2025-09-01", name: "Labor Day"}
+      - {date: "2025-10-13", name: "Columbus Day"}
+      - {date: "2025-11-11", name: "Veterans Day"}
+      - {date: "2025-11-27", name: "Thanksgiving"}
+      - {date: "2025-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2025-04-17", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2025-05-23", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2025-07-03", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2025-11-28", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2025-12-24", name: "Christmas Eve early close", close_time: "14:00"}
+      - {date: "2025-12-31", name: "New Year's Eve early close", close_time: "14:00"}
+  - year: 2026
+    closures:
+      - {date: "2026-01-01", name: "New Year's Day"}
+      - {date: "2026-01-19", name: "Martin Luther King Jr. Day"}
+      - {date: "2026-02-16", name: "Presidents' Day"}
+      - {date: "2026-04-03", name: "Good Friday"}
+      - {date: "2026-05-25", name: "Memorial Day"}
+      - {date: "2026-06-19", name: "Juneteenth"}
+      - {date: "2026-07-03", name: "Independence Day observed (Jul 4 falls on Saturday)"}
+      - {date: "2026-09-07", name: "Labor Day"}
+      - {date: "2026-10-12", name: "Columbus Day"}
+      - {date: "2026-11-11", name: "Veterans Day"}
+      - {date: "2026-11-26", name: "Thanksgiving"}
+      - {date: "2026-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2026-04-02", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2026-05-22", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2026-07-02", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2026-11-27", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2026-12-24", name: "Christmas Eve early close", close_time: "14:00"}
+      - {date: "2026-12-31", name: "New Year's Eve early close", close_time: "14:00"}
+  - year: 2027
+    closures:
+      - {date: "2027-01-01", name: "New Year's Day"}
+      - {date: "2027-01-18", name: "Martin Luther King Jr. Day"}
+      - {date: "2027-02-15", name: "Presidents' Day"}
+      - {date: "2027-03-26", name: "Good Friday"}
+      - {date: "2027-05-31", name: "Memorial Day"}
+      - {date: "2027-06-18", name: "Juneteenth observed (Jun 19 falls on Saturday)"}
+      - {date: "2027-07-05", name: "Independence Day observed (Jul 4 falls on Sunday)"}
+      - {date: "2027-09-06", name: "Labor Day"}
+      - {date: "2027-10-11", name: "Columbus Day"}
+      - {date: "2027-11-11", name: "Veterans Day"}
+      - {date: "2027-11-25", name: "Thanksgiving"}
+      - {date: "2027-12-24", name: "Christmas Day observed (Dec 25 falls on Saturday)"}
+    early_closes:
+      - {date: "2027-03-25", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2027-05-28", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2027-07-02", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2027-11-26", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2027-12-23", name: "Christmas Eve early close (Dec 24 observed)", close_time: "14:00"}
+      - {date: "2027-12-31", name: "New Year's Eve early close", close_time: "14:00"}
+  - year: 2028
+    closures:
+      - {date: "2028-01-17", name: "Martin Luther King Jr. Day"}
+      - {date: "2028-02-21", name: "Presidents' Day"}
+      - {date: "2028-04-14", name: "Good Friday"}
+      - {date: "2028-05-29", name: "Memorial Day"}
+      - {date: "2028-06-19", name: "Juneteenth"}
+      - {date: "2028-07-04", name: "Independence Day"}
+      - {date: "2028-09-04", name: "Labor Day"}
+      - {date: "2028-10-09", name: "Columbus Day"}
+      - {date: "2028-11-23", name: "Thanksgiving"}
+      - {date: "2028-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2028-04-13", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2028-05-26", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2028-07-03", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2028-11-24", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2028-12-22", name: "Christmas Eve early close (Dec 24 falls on Sunday)", close_time: "14:00"}
+      - {date: "2028-12-29", name: "New Year's Eve early close (Dec 31 falls on Sunday)", close_time: "14:00"}
+  - year: 2029
+    closures:
+      - {date: "2029-01-01", name: "New Year's Day"}
+      - {date: "2029-01-15", name: "Martin Luther King Jr. Day"}
+      - {date: "2029-02-19", name: "Presidents' Day"}
+      - {date: "2029-03-30", name: "Good Friday"}
+      - {date: "2029-05-28", name: "Memorial Day"}
+      - {date: "2029-06-19", name: "Juneteenth"}
+      - {date: "2029-07-04", name: "Independence Day"}
+      - {date: "2029-09-03", name: "Labor Day"}
+      - {date: "2029-10-08", name: "Columbus Day"}
+      - {date: "2029-11-12", name: "Veterans Day observed (Nov 11 falls on Sunday)"}
+      - {date: "2029-11-22", name: "Thanksgiving"}
+      - {date: "2029-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2029-03-29", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2029-05-25", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2029-07-03", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2029-11-23", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2029-12-24", name: "Christmas Eve early close", close_time: "14:00"}
+      - {date: "2029-12-31", name: "New Year's Eve early close", close_time: "14:00"}
+  - year: 2030
+    closures:
+      - {date: "2030-01-01", name: "New Year's Day"}
+      - {date: "2030-01-21", name: "Martin Luther King Jr. Day"}
+      - {date: "2030-02-18", name: "Presidents' Day"}
+      - {date: "2030-04-19", name: "Good Friday"}
+      - {date: "2030-05-27", name: "Memorial Day"}
+      - {date: "2030-06-19", name: "Juneteenth"}
+      - {date: "2030-07-04", name: "Independence Day"}
+      - {date: "2030-09-02", name: "Labor Day"}
+      - {date: "2030-10-14", name: "Columbus Day"}
+      - {date: "2030-11-11", name: "Veterans Day"}
+      - {date: "2030-11-28", name: "Thanksgiving"}
+      - {date: "2030-12-25", name: "Christmas"}
+    early_closes:
+      - {date: "2030-04-18", name: "Day before Good Friday early close", close_time: "14:00"}
+      - {date: "2030-05-24", name: "Day before Memorial Day early close", close_time: "14:00"}
+      - {date: "2030-07-03", name: "Day before Independence Day early close", close_time: "14:00"}
+      - {date: "2030-11-29", name: "Day after Thanksgiving early close", close_time: "14:00"}
+      - {date: "2030-12-24", name: "Christmas Eve early close", close_time: "14:00"}
+      - {date: "2030-12-31", name: "New Year's Eve early close", close_time: "14:00"}
