@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import time
 from collections import defaultdict
 from collections.abc import Iterator
@@ -68,7 +69,7 @@ class BoundedHistogram:
     stays bounded at 32 KB per histogram (4096 × 8 bytes float64).
     """
 
-    __slots__ = ("_buffer", "_count", "_rng", "_size", "_sum")
+    __slots__ = ("_buffer", "_count", "_sum", "_rng", "_size")
 
     def __init__(self, reservoir_size: int = _DEFAULT_RESERVOIR_SIZE, *, seed: int = 0) -> None:
         if reservoir_size <= 0:
@@ -138,7 +139,9 @@ class MetricsRegistry:
         self._lock = Lock()
         self._counters: defaultdict[tuple[str, frozenset], float] = defaultdict(float)
         self._reservoir_size = int(reservoir_size)
-        self._histograms: defaultdict[tuple[str, frozenset], BoundedHistogram] = defaultdict(self._make_histogram)
+        self._histograms: defaultdict[tuple[str, frozenset], BoundedHistogram] = defaultdict(
+            self._make_histogram
+        )
 
     def _make_histogram(self) -> BoundedHistogram:
         return BoundedHistogram(reservoir_size=self._reservoir_size)
@@ -198,15 +201,242 @@ def metrics() -> MetricsRegistry:
     return _GLOBAL
 
 
+# ---------------------------------------------------------------------------
+# v1.5 PR-7 §E — OpenTelemetry SDK migration (AF-4 / P1)
+# ---------------------------------------------------------------------------
+#
+# The legacy ``_GLOBAL`` registry stays as the always-available
+# in-process backend. When ``configure_otel(...)`` is called and the
+# OpenTelemetry SDK is installed (``[observability]`` extra), every
+# ``incr`` / ``record_histogram`` / ``time_block`` call is mirrored to
+# OTel counters / histograms keyed by the same name. Operators can
+# scrape via the OTLP exporter, Prometheus exporter, or the legacy
+# ``prometheus_text()``; cross-worker aggregation is now possible
+# because OTel handles fan-in at the collector level.
+#
+# Pre-registered FI metric instruments live in
+# :mod:`market_regime_engine.fixed_income.observability_ext` so a fresh
+# warehouse without any ingest still exposes the canonical counters at
+# a 0 starting value (matches the AGENT.md PR-7 dashboard contract).
+
+_OTEL_ENABLED: bool = False
+_OTEL_METER: object | None = None
+_OTEL_TRACER: object | None = None
+_OTEL_LOCK = Lock()
+_OTEL_COUNTERS: dict[str, object] = {}
+_OTEL_HISTOGRAMS: dict[str, object] = {}
+
+
+def _otel_available() -> bool:
+    try:
+        import opentelemetry  # type: ignore[import-not-found]  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def configure_otel(
+    *,
+    service_name: str = "market-regime-engine",
+    exporter_endpoint: str | None = None,
+    enabled: bool | None = None,
+) -> bool:
+    """Initialise the OpenTelemetry SDK with an OTLP exporter.
+
+    Parameters
+    ----------
+    service_name
+        ``service.name`` resource attribute.
+    exporter_endpoint
+        OTLP collector URL. Defaults to the OTel-standard
+        ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var.
+    enabled
+        ``True`` to force-enable, ``False`` to force-disable. ``None``
+        (default) enables when the SDK is installed and otherwise
+        soft-degrades to the in-process backend.
+
+    Returns ``True`` when OTel is now active, ``False`` otherwise.
+    Calling this function more than once is safe — the second call
+    replaces the meter / tracer providers.
+    """
+    global _OTEL_ENABLED, _OTEL_METER, _OTEL_TRACER
+
+    want_enabled = bool(enabled) if enabled is not None else _otel_available()
+    if not want_enabled:
+        with _OTEL_LOCK:
+            _OTEL_ENABLED = False
+            _OTEL_METER = None
+            _OTEL_TRACER = None
+            _OTEL_COUNTERS.clear()
+            _OTEL_HISTOGRAMS.clear()
+        return False
+    if not _otel_available():
+        log.warning(
+            "configure_otel(enabled=True) requested but the opentelemetry "
+            "package is not installed; falling back to the in-process "
+            "MetricsRegistry. Install via `pip install "
+            "market-regime-engine[observability]` to enable OTLP."
+        )
+        return False
+    try:
+        from opentelemetry import metrics as otel_metrics
+        from opentelemetry import trace as otel_trace
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import (
+            ConsoleMetricExporter,
+            PeriodicExportingMetricReader,
+        )
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+    except Exception as exc:  # pragma: no cover - import path
+        log.warning("configure_otel SDK import failed: %s", exc)
+        return False
+
+    resource = Resource.create({"service.name": service_name})
+
+    # Choose exporter: OTLP if endpoint env / arg set, else console.
+    endpoint = exporter_endpoint or None
+    try:
+        if endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                OTLPMetricExporter,
+            )
+
+            metric_exporter: object = OTLPMetricExporter(endpoint=endpoint)
+        else:
+            metric_exporter = ConsoleMetricExporter()
+    except Exception as exc:  # pragma: no cover - exporter import
+        log.warning("OTLP metric exporter unavailable (%s); using console.", exc)
+        metric_exporter = ConsoleMetricExporter()
+
+    reader = PeriodicExportingMetricReader(
+        metric_exporter,  # type: ignore[arg-type]
+        export_interval_millis=60_000,
+    )
+    meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
+    otel_metrics.set_meter_provider(meter_provider)
+
+    tracer_provider = TracerProvider(resource=resource)
+    otel_trace.set_tracer_provider(tracer_provider)
+
+    with _OTEL_LOCK:
+        _OTEL_ENABLED = True
+        _OTEL_METER = otel_metrics.get_meter("market_regime_engine")
+        _OTEL_TRACER = otel_trace.get_tracer("market_regime_engine")
+        _OTEL_COUNTERS.clear()
+        _OTEL_HISTOGRAMS.clear()
+    log.info("OpenTelemetry SDK configured: service=%s endpoint=%s", service_name, endpoint)
+    return True
+
+
+def get_meter() -> object | None:
+    """Return the configured OTel ``Meter``, or ``None`` when disabled."""
+    return _OTEL_METER
+
+
+def get_tracer() -> object | None:
+    """Return the configured OTel ``Tracer``, or ``None`` when disabled."""
+    return _OTEL_TRACER
+
+
+def otel_enabled() -> bool:
+    """Whether ``configure_otel`` has lit up the OTLP routing path."""
+    return _OTEL_ENABLED
+
+
+def _otel_counter(name: str) -> object | None:
+    if not _OTEL_ENABLED or _OTEL_METER is None:
+        return None
+    counter = _OTEL_COUNTERS.get(name)
+    if counter is not None:
+        return counter
+    with _OTEL_LOCK:
+        counter = _OTEL_COUNTERS.get(name)
+        if counter is not None:
+            return counter
+        try:
+            counter = _OTEL_METER.create_counter(  # type: ignore[attr-defined]
+                name=name,
+                description=name,
+            )
+        except Exception as exc:  # pragma: no cover - sdk path
+            log.warning("OTel counter create failed (%s): %s", name, exc)
+            counter = None
+        if counter is not None:
+            _OTEL_COUNTERS[name] = counter
+    return counter
+
+
+def _otel_histogram(name: str) -> object | None:
+    if not _OTEL_ENABLED or _OTEL_METER is None:
+        return None
+    hist = _OTEL_HISTOGRAMS.get(name)
+    if hist is not None:
+        return hist
+    with _OTEL_LOCK:
+        hist = _OTEL_HISTOGRAMS.get(name)
+        if hist is not None:
+            return hist
+        try:
+            hist = _OTEL_METER.create_histogram(  # type: ignore[attr-defined]
+                name=name,
+                description=name,
+            )
+        except Exception as exc:  # pragma: no cover - sdk path
+            log.warning("OTel histogram create failed (%s): %s", name, exc)
+            hist = None
+        if hist is not None:
+            _OTEL_HISTOGRAMS[name] = hist
+    return hist
+
+
+def incr(name: str, value: float = 1.0, **labels: str) -> None:
+    """Increment a counter on the legacy registry AND OTel when enabled.
+
+    Adapter shim per AF-4: existing callers continue using
+    ``metrics().incr(...)`` (legacy in-process); a new top-level
+    :func:`incr` is also exposed so FI components can route through one
+    canonical entry point that mirrors to OTel.
+    """
+    _GLOBAL.incr(name, value, **labels)
+    counter = _otel_counter(name)
+    if counter is not None:
+        try:
+            counter.add(  # type: ignore[attr-defined]
+                value, attributes=dict(labels) if labels else None
+            )
+        except Exception as exc:  # pragma: no cover - sdk path
+            log.warning("OTel counter add failed (%s): %s", name, exc)
+
+
+def record_histogram(name: str, value: float, **labels: str) -> None:
+    """Record a histogram observation on the legacy registry AND OTel."""
+    _GLOBAL.observe(name, value, **labels)
+    hist = _otel_histogram(name)
+    if hist is not None:
+        try:
+            hist.record(  # type: ignore[attr-defined]
+                value, attributes=dict(labels) if labels else None
+            )
+        except Exception as exc:  # pragma: no cover - sdk path
+            log.warning("OTel histogram record failed (%s): %s", name, exc)
+
+
 @contextlib.contextmanager
 def time_block(name: str, **labels: str) -> Iterator[None]:
-    """Context manager recording the elapsed seconds in a histogram."""
+    """Context manager recording the elapsed seconds in a histogram.
+
+    v1.5 PR-7 §E: also routes the observation to the OTel histogram
+    when ``configure_otel(...)`` is active. Legacy in-process recording
+    is unchanged so dashboards built on ``prometheus_text()`` continue
+    to render.
+    """
     start = time.perf_counter()
     try:
         yield
     finally:
         elapsed = time.perf_counter() - start
-        _GLOBAL.observe(name, elapsed, **labels)
+        record_histogram(name, elapsed, **labels)
 
 
 def _split_key(key: str) -> tuple[str, str]:
@@ -274,4 +504,16 @@ def prometheus_text() -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["BoundedHistogram", "MetricsRegistry", "metrics", "prometheus_text", "time_block"]
+__all__ = [
+    "BoundedHistogram",
+    "MetricsRegistry",
+    "configure_otel",
+    "get_meter",
+    "get_tracer",
+    "incr",
+    "metrics",
+    "otel_enabled",
+    "prometheus_text",
+    "record_histogram",
+    "time_block",
+]
