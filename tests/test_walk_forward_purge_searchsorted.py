@@ -39,12 +39,8 @@ def _random_inputs(seed: int) -> tuple[np.ndarray, np.ndarray, int, int]:
 @pytest.mark.parametrize("seed", range(50))
 def test_searchsorted_matches_legacy_dense_mask(seed: int) -> None:
     train_idx, test_idx, horizon, embargo = _random_inputs(seed)
-    legacy = _legacy_purge_and_embargo(
-        train_idx, test_idx, horizon=horizon, embargo=embargo
-    )
-    new = purge_and_embargo_searchsorted(
-        train_idx, test_idx, horizon=horizon, embargo=embargo
-    )
+    legacy = _legacy_purge_and_embargo(train_idx, test_idx, horizon=horizon, embargo=embargo)
+    new = purge_and_embargo_searchsorted(train_idx, test_idx, horizon=horizon, embargo=embargo)
     np.testing.assert_array_equal(legacy, new)
 
 

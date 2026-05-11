@@ -266,7 +266,13 @@ def build_credit_features(
         If any feature row's ``source_timestamp`` is after ``asof`` or
         falls on a closed trading day.
     """
-    asof_utc = to_utc(asof) if isinstance(asof, str) else pd.Timestamp(asof, tz="UTC") if pd.Timestamp(asof).tzinfo is None else pd.Timestamp(asof).tz_convert("UTC")
+    asof_utc = (
+        to_utc(asof)
+        if isinstance(asof, str)
+        else pd.Timestamp(asof, tz="UTC")
+        if pd.Timestamp(asof).tzinfo is None
+        else pd.Timestamp(asof).tz_convert("UTC")
+    )
     if asof_utc is None:
         raise ValueError("asof is required and must not be None")
 
@@ -498,17 +504,12 @@ def build_liquidity_features(
         ``{"market", "sector", "rating", "cusip"}``.
     """
     if scope_type not in {"market", "sector", "rating", "cusip"}:
-        raise ValueError(
-            "scope_type must be one of {'market', 'sector', 'rating', 'cusip'}; "
-            f"got {scope_type!r}"
-        )
+        raise ValueError(f"scope_type must be one of {{'market', 'sector', 'rating', 'cusip'}}; got {scope_type!r}")
 
     asof_utc = _coerce_asof_utc(asof)
     lower = asof_utc - pd.Timedelta(days=int(lookback_days))
 
-    cusip_filter: set[str] | None = _resolve_scope_cusips(
-        warehouse, asof_utc, scope_type=scope_type, scope_id=scope_id
-    )
+    cusip_filter: set[str] | None = _resolve_scope_cusips(warehouse, asof_utc, scope_type=scope_type, scope_id=scope_id)
 
     trades = _filter_microstructure(
         _safe_read(warehouse, "read_trace_trades"),
@@ -720,9 +721,7 @@ def _emit_volume_over_adv_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def _emit_time_since_last_trade_rows(
-    trades: pd.DataFrame, *, asof: pd.Timestamp
-) -> list[dict[str, Any]]:
+def _emit_time_since_last_trade_rows(trades: pd.DataFrame, *, asof: pd.Timestamp) -> list[dict[str, Any]]:
     """Emit one row at ``asof`` carrying minutes since the most recent trade.
 
     The scorer's ``_latest`` reads only the final non-NaN value, so a
@@ -760,15 +759,11 @@ def _emit_rfq_rows(rfqs: pd.DataFrame) -> list[dict[str, Any]]:
     if "dealers_requested" in r.columns:
         daily_req = r.groupby("date")["dealers_requested"].sum().astype(float)
         for ts, v in daily_req.items():
-            out.append(
-                _emit_row(date=ts, feature_name="dealers_requested", value=float(v), source_timestamp=ts)
-            )
+            out.append(_emit_row(date=ts, feature_name="dealers_requested", value=float(v), source_timestamp=ts))
     if "dealers_responded" in r.columns:
         daily_resp = r.groupby("date")["dealers_responded"].sum().astype(float)
         for ts, v in daily_resp.items():
-            out.append(
-                _emit_row(date=ts, feature_name="quotes_received", value=float(v), source_timestamp=ts)
-            )
+            out.append(_emit_row(date=ts, feature_name="quotes_received", value=float(v), source_timestamp=ts))
             out.append(
                 _emit_row(
                     date=ts,
@@ -815,9 +810,7 @@ def _emit_amihud_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
     grouped = t.groupby("date").apply(
         lambda g: pd.Series(
             {
-                "vwap": (g["price"] * g["size"]).sum() / g["size"].sum()
-                if g["size"].sum() > 0
-                else float("nan"),
+                "vwap": (g["price"] * g["size"]).sum() / g["size"].sum() if g["size"].sum() > 0 else float("nan"),
                 "volume": float(g["size"].sum()),
             }
         ),
@@ -827,9 +820,7 @@ def _emit_amihud_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
         return []
     grouped = grouped.sort_index()
     grouped["return"] = grouped["vwap"].pct_change().abs()
-    grouped["amihud"] = (grouped["return"] / grouped["volume"]).replace(
-        [float("inf"), -float("inf")], float("nan")
-    )
+    grouped["amihud"] = (grouped["return"] / grouped["volume"]).replace([float("inf"), -float("inf")], float("nan"))
     grouped = grouped.dropna(subset=["amihud"])
     return [
         _emit_row(date=ts, feature_name="amihud_illiquidity", value=float(v), source_timestamp=ts)
@@ -837,9 +828,7 @@ def _emit_amihud_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def _emit_axe_freshness_rows(
-    quotes: pd.DataFrame, *, asof: pd.Timestamp
-) -> list[dict[str, Any]]:
+def _emit_axe_freshness_rows(quotes: pd.DataFrame, *, asof: pd.Timestamp) -> list[dict[str, Any]]:
     """Seconds between ``asof`` and the most recent dealer quote (proxy for axe staleness)."""
     if quotes.empty or "timestamp" not in quotes.columns:
         return []
@@ -909,10 +898,7 @@ def _enforce_pit_liquidity(
             vintage_timestamp=vintage_ts,
             label=str(row["feature_name"]),
         )
-        if (
-            str(row["feature_name"]) in _LIQUIDITY_TRADING_DAY_FEATURES
-            and not is_trading_day(source_ts, calendar)
-        ):
+        if str(row["feature_name"]) in _LIQUIDITY_TRADING_DAY_FEATURES and not is_trading_day(source_ts, calendar):
             raise PitViolationError(
                 f"liquidity feature {row['feature_name']!r} reports on closed trading day "
                 f"{source_ts.isoformat()} per calendar {calendar.value}"

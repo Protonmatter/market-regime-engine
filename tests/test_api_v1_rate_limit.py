@@ -104,9 +104,7 @@ def test_rate_limit_fires_after_quota_exceeded(client) -> None:
             # Retry-After header should be present.
             assert resp.headers.get("retry-after") is not None
             return
-    pytest.fail(
-        f"expected 429 after the 3/second budget was exceeded; last_status={last_status}"
-    )
+    pytest.fail(f"expected 429 after the 3/second budget was exceeded; last_status={last_status}")
 
 
 def test_rate_limit_is_per_api_key(client) -> None:

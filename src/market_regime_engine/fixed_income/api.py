@@ -34,12 +34,11 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -133,9 +132,7 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(
-                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
-            )
+            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
         return v
 
     @field_validator("cusip")
@@ -241,7 +238,7 @@ def _build_rate_limiter() -> Any | None:
     so a vanilla install does not have to install slowapi.
     """
     try:
-        from slowapi import Limiter  # type: ignore[import-not-found]
+        from slowapi import Limiter
     except Exception:
         log.warning(
             "slowapi not installed; POST /v1/execution_confidence will not be rate-limited. "
@@ -363,13 +360,9 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(
-                    wh, scope_type=scope_type, scope_id=scope_id
-                )
+                latest = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
             except Exception as exc:
-                log.exception(
-                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
-                )
+                log.exception("liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc)
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
                     detail={"detail": "no_data", "release_gate": False},
@@ -437,9 +430,7 @@ def build_router(
                     },
                 ) from exc
             try:
-                write_execution_confidence_prediction(
-                    wh, response, request_id=body.request_id
-                )
+                write_execution_confidence_prediction(wh, response, request_id=body.request_id)
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",

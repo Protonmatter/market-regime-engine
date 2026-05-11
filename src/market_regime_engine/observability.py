@@ -68,7 +68,7 @@ class BoundedHistogram:
     stays bounded at 32 KB per histogram (4096 × 8 bytes float64).
     """
 
-    __slots__ = ("_buffer", "_count", "_sum", "_rng", "_size")
+    __slots__ = ("_buffer", "_count", "_rng", "_size", "_sum")
 
     def __init__(self, reservoir_size: int = _DEFAULT_RESERVOIR_SIZE, *, seed: int = 0) -> None:
         if reservoir_size <= 0:
@@ -102,7 +102,7 @@ class BoundedHistogram:
             return 0.0
         n = min(self._count, self._size)
         view = np.sort(self._buffer[:n])
-        idx = int(round(float(q) * (n - 1)))
+        idx = round(float(q) * (n - 1))
         idx = max(0, min(n - 1, idx))
         return float(view[idx])
 
@@ -138,9 +138,7 @@ class MetricsRegistry:
         self._lock = Lock()
         self._counters: defaultdict[tuple[str, frozenset], float] = defaultdict(float)
         self._reservoir_size = int(reservoir_size)
-        self._histograms: defaultdict[tuple[str, frozenset], BoundedHistogram] = defaultdict(
-            self._make_histogram
-        )
+        self._histograms: defaultdict[tuple[str, frozenset], BoundedHistogram] = defaultdict(self._make_histogram)
 
     def _make_histogram(self) -> BoundedHistogram:
         return BoundedHistogram(reservoir_size=self._reservoir_size)
