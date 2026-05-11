@@ -101,12 +101,17 @@ def test_public_symbols_are_importable() -> None:
 
 
 def test_console_script_entrypoint_resolves() -> None:
-    """``mre`` must resolve to ``market_regime_engine.cli:main`` per
-    pyproject ``[project.scripts]`` so the wheel exposes the CLI."""
+    """``mre`` must resolve to ``market_regime_engine.cli_dispatch:main``
+    per pyproject ``[project.scripts]`` so the wheel exposes the CLI.
+
+    v1.5 (PR-1 dispatch landing): the entry point flipped from
+    ``cli:main`` to ``cli_dispatch:main`` so the FI ``fi-*`` fast-path
+    can route before delegating to the legacy ``cli.main`` for the
+    macro commands. The test now pins the new value.
+    """
     from importlib import metadata
 
     eps = metadata.entry_points()
-    # Filter to console_scripts; ``select`` API for Python 3.10+.
     if hasattr(eps, "select"):
         scripts = list(eps.select(group="console_scripts"))
     else:  # pragma: no cover - we require 3.11+ but be defensive
@@ -114,4 +119,4 @@ def test_console_script_entrypoint_resolves() -> None:
     names = [ep.name for ep in scripts]
     assert "mre" in names, f"console_scripts missing 'mre' entry; saw {names!r}"
     mre_ep = next(ep for ep in scripts if ep.name == "mre")
-    assert mre_ep.value == "market_regime_engine.cli:main"
+    assert mre_ep.value == "market_regime_engine.cli_dispatch:main"
