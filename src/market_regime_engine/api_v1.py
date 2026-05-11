@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import contextlib
 import hmac
+import json
 import logging
 import os
 import pickle  # nosec B403 - cache values are produced by this module only
@@ -40,7 +41,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
-from typing import Protocol
+from typing import Any, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
 
@@ -158,13 +159,57 @@ class _LocalTTLCache:
                 self._store.popitem(last=False)
 
 
+# v1.5 PR-5 (AF-5 / ASK-10): the Redis cache historically used ``pickle``
+# for serialization. Pickle gives an attacker who controls the Redis
+# instance (or who can inject keys into a shared Redis) arbitrary-code-
+# execution on the FastAPI worker. PR-5 switches the default to JSON; the
+# pickle path is gated behind the explicit opt-in env var
+# ``MRE_CACHE_ALLOW_PICKLE=1`` for callers who need to store non-JSON
+# native objects.
+
+_PICKLE_OPT_IN_ENV = "MRE_CACHE_ALLOW_PICKLE"
+
+
+def _pickle_opt_in() -> bool:
+    return os.getenv(_PICKLE_OPT_IN_ENV) == "1"
+
+
+def _serialize_cache_value(value: Any) -> bytes:
+    """Encode ``value`` for storage in Redis.
+
+    Default: ``json.dumps(value, default=str)``. ``default=str`` keeps the
+    encoder forgiving for pandas Timestamp / numpy scalars without
+    requiring callers to pre-coerce.
+
+    Opt-in (``MRE_CACHE_ALLOW_PICKLE=1``): pickled. Use only when the
+    cache value is not JSON-serialisable and the operator accepts the
+    attack-surface trade-off.
+    """
+    if _pickle_opt_in():
+        return pickle.dumps(value)
+    return json.dumps(value, default=str, separators=(",", ":")).encode("utf-8")
+
+
+def _deserialize_cache_value(blob: bytes) -> Any:
+    """Decode the cache value written by :func:`_serialize_cache_value`."""
+    if _pickle_opt_in():
+        try:
+            return pickle.loads(blob)  # nosec B301 - opt-in only
+        except Exception:
+            # Allow opt-in callers to read JSON entries written before the
+            # env-var was set, so an in-place toggle does not invalidate
+            # the cache.
+            return json.loads(blob.decode("utf-8"))
+    return json.loads(blob.decode("utf-8"))
+
+
 class _RedisTTLCache:
     """Shared cache backend for multi-worker uvicorn deployments.
 
-    Keys are scoped under ``mre:cache:`` so a Redis instance can be
-    safely shared across services. Values are pickled (the cache only
-    stores objects produced by this module — never user-supplied
-    payloads — so the pickle attack surface is zero).
+    Keys are scoped under ``mre:cache:`` so a Redis instance can be safely
+    shared across services. v1.5 PR-5 (AF-5 / ASK-10): values are
+    serialised through :func:`_serialize_cache_value` which defaults to
+    JSON; pickle is gated behind ``MRE_CACHE_ALLOW_PICKLE=1``.
     """
 
     name = "redis"
@@ -197,7 +242,7 @@ class _RedisTTLCache:
         if raw is None:
             return None
         try:
-            return pickle.loads(raw)  # nosec B301 - trusted producer (this module)
+            return _deserialize_cache_value(raw)
         except Exception:  # pragma: no cover - corrupt entry
             return None
 
@@ -205,7 +250,7 @@ class _RedisTTLCache:
         try:
             self.client.set(
                 self._scoped(key),
-                pickle.dumps(value),
+                _serialize_cache_value(value),
                 ex=int(_ttl_seconds()),
             )
         except Exception as exc:  # pragma: no cover - transport failure
@@ -244,22 +289,53 @@ def _build_cache_backend() -> _CacheBackend:
 # instantiates ``_TTLCache`` directly always gets the local backend.
 _TTLCache = _LocalTTLCache
 
-_CACHE: _CacheBackend = _build_cache_backend()
+# v1.5 PR-5 (AF-5): the cache backend is lazily constructed on first use
+# so that ``import market_regime_engine.api_v1`` does not attempt a Redis
+# connection at module load. ``_CACHE`` is reset to ``None`` by
+# ``reset_cache()`` (test helper) so env-var changes between requests
+# take effect.
+_CACHE: _CacheBackend | None = None
+_CACHE_LOCK = threading.RLock()
+
+
+def _get_cache() -> _CacheBackend:
+    """Lazy, thread-safe accessor for the API cache backend.
+
+    First call constructs via :func:`_build_cache_backend`; subsequent
+    calls return the same instance. ``reset_cache()`` clears the slot so
+    operators (and tests) can pick up an updated ``MRE_CACHE_BACKEND`` /
+    ``MRE_REDIS_URL`` env var without restarting the worker.
+    """
+    global _CACHE
+    if _CACHE is not None:
+        return _CACHE
+    with _CACHE_LOCK:
+        if _CACHE is None:
+            _CACHE = _build_cache_backend()
+        return _CACHE
+
+
+def reset_cache() -> None:
+    """Drop the cache backend so the next ``_get_cache()`` re-resolves env vars."""
+    global _CACHE
+    with _CACHE_LOCK:
+        _CACHE = None
 
 
 def _read(name: str, fn: Callable[[Warehouse], object]) -> object:
-    cached = _CACHE.get(name)
+    cache = _get_cache()
+    cached = cache.get(name)
     if cached is not None:
         metrics().incr("mre_api_cache_hits_total", endpoint=name)
         return cached
     metrics().incr("mre_api_cache_misses_total", endpoint=name)
     # v1.5 PR-5 (ASK-8): pooled per-process Warehouse so the FastAPI hot
     # path no longer pays DuckDB catalog + WAL teardown per request. The
-    # pool is closed on shutdown (see ``_on_shutdown_close_pool`` below).
+    # pool is closed on shutdown (see ``_lifespan`` below).
     db = get_pooled_warehouse(_db_path())
     with time_block("mre_api_read_seconds", endpoint=name):
         value = fn(db)
-    _CACHE.set(name, value)
+    cache.set(name, value)
     return value
 
 
@@ -407,6 +483,10 @@ __all__ = [
     "_RedisTTLCache",
     "_TTLCache",
     "_build_cache_backend",
+    "_deserialize_cache_value",
+    "_get_cache",
+    "_serialize_cache_value",
     "app",
     "require_api_key",
+    "reset_cache",
 ]
