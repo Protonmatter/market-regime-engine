@@ -34,10 +34,76 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from enum import Enum
 
 import pandas as pd
 
 from market_regime_engine.features import build_features, monthly_panel
+
+
+class Cadence(str, Enum):
+    """Round-tripable cadence labels used by :func:`_resolve_asof_grid`.
+
+    The v1.4.1 implementation hard-coded ``freq="MS"`` (month-start),
+    which is correct for the existing macro panels but blocks every
+    Fixed-Income feature builder that operates intraday or on a daily
+    business-day grid (ASK-2 / P0 in
+    :file:`market-regime-engine-review/REVIEW.md`).
+
+    Values map to the pandas frequency strings used by
+    :func:`pandas.date_range`. ``MIN_15`` / ``MIN_1`` use the lowercase
+    ``"min"`` alias that pandas 2.x recommends over the legacy ``T``.
+
+    PR-1 lands the enum + a default-preserving ``freq=`` kwarg on
+    :func:`_resolve_asof_grid`; PR-3 / PR-4 wire FI callers through
+    explicit ``Cadence.DAILY`` / ``Cadence.MIN_15`` selections.
+    """
+
+    MONTHLY = "MS"
+    DAILY = "D"
+    HOURLY = "h"
+    MIN_15 = "15min"
+    MIN_1 = "1min"
+
+    @classmethod
+    def from_pandas_freq(cls, freq: str) -> "Cadence":
+        """Coerce a pandas frequency alias into a :class:`Cadence` member.
+
+        Accepts the canonical aliases (``"MS"``, ``"D"``, ``"h"``,
+        ``"15min"``, ``"1min"``) and a small set of legacy synonyms
+        (``"H"`` → ``HOURLY``, ``"T"``/``"min"`` → ``MIN_1``,
+        ``"15T"`` → ``MIN_15``). Anything else raises ``ValueError`` so
+        callers do not silently fall through to monthly.
+        """
+        if freq is None:
+            raise ValueError("freq is required (got None)")
+        normalised = str(freq).strip()
+        # Direct hit first; pandas accepts both ``"h"`` and ``"H"`` so we
+        # tolerate either case for the single-letter aliases.
+        for member in cls:
+            if member.value == normalised:
+                return member
+        legacy_map = {
+            "M": cls.MONTHLY,
+            "BMS": cls.MONTHLY,
+            "B": cls.DAILY,
+            "H": cls.HOURLY,
+            "T": cls.MIN_1,
+            "min": cls.MIN_1,
+            "15T": cls.MIN_15,
+        }
+        if normalised in legacy_map:
+            return legacy_map[normalised]
+        raise ValueError(f"Unknown cadence freq: {freq!r}")
+
+
+# v1.4.1 monthly-equivalent shift mapping. The legacy
+# ``_resolve_asof_grid(df, min_history_months)`` shifted by
+# ``pd.DateOffset(months=min_history_months)`` regardless of cadence.
+# For sub-daily / daily callers, we still anchor on a monthly-equivalent
+# horizon so the "min_history" parameter keeps the same semantic
+# (years-of-data warmup) — only the grid spacing changes.
+_DEFAULT_HISTORY_OFFSET_MONTHS = 1
 
 _OUTPUT_COLUMNS = [
     "as_of_date",
@@ -134,14 +200,48 @@ def latest_vintage_observations_per_asof_grid(
     return pd.concat(rows, ignore_index=True)
 
 
-def _resolve_asof_grid(df: pd.DataFrame, min_history_months: int) -> list[pd.Timestamp]:
+def _resolve_asof_grid(
+    df: pd.DataFrame,
+    min_history_months: int,
+    freq: str = "MS",
+) -> list[pd.Timestamp]:
+    """Build the as-of grid used by :func:`materialize_feature_asof_values`.
+
+    v1.4.1 hard-coded ``freq="MS"`` (REVIEW.md ASK-2 / P0). v1.5 adds
+    the ``freq`` kwarg with the same default so existing monthly
+    callers stay byte-for-byte identical; FI callers pass an explicit
+    ``Cadence.DAILY.value`` / ``Cadence.MIN_15.value`` to drive
+    sub-daily PIT materialisation.
+
+    For monthly grids the warmup is the legacy
+    ``min_history_months``-month offset. For sub-daily / daily grids
+    we keep the monthly-equivalent shift so the warmup window stays a
+    function of calendar months (a 36-month warmup at daily cadence
+    still requires ~3 years of history before the first as-of, the
+    grid is just denser inside that window).
+    """
     vmin = df["vintage_date"].min()
     vmax = df["vintage_date"].max()
     if pd.isna(vmin) or pd.isna(vmax):
         return []
     start = max(vmin, df["observation_date"].min() + pd.DateOffset(months=min_history_months))
-    asof_idx = pd.date_range(start=start, end=vmax, freq="MS")
-    return [pd.Timestamp(d).normalize() for d in asof_idx]
+    # Resolve the cadence so we can decide whether to normalise to
+    # midnight. Day-grained cadences keep the v1.4.1 ``.normalize()``
+    # behaviour so existing monthly/daily callers get bit-identical
+    # output; intraday cadences preserve the wall-clock time so an FI
+    # 15-min grid does not collapse to midnight.
+    try:
+        cadence: Cadence | None = Cadence.from_pandas_freq(freq)
+    except ValueError:
+        # Fall through to pandas so a niche pandas alias still works;
+        # pandas will raise if the freq is truly invalid.
+        cadence = None
+    resolved_freq = cadence.value if cadence is not None else freq
+    asof_idx = pd.date_range(start=start, end=vmax, freq=resolved_freq)
+    day_grained = cadence in (Cadence.MONTHLY, Cadence.DAILY, None)
+    if day_grained:
+        return [pd.Timestamp(d).normalize() for d in asof_idx]
+    return [pd.Timestamp(d) for d in asof_idx]
 
 
 def _materialize_no_revisions(
