@@ -467,3 +467,225 @@ failure / naive `--asof`.
 - Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md` §6.2
 - Review thread: §3.2 ASK-9 (GP-BOCPD ring buffer)
 - Deep-research report: §2 (hierarchical Bayesian liquidity)
+
+## PR-5 surface (this release)
+
+The PR-5 scope is the **bond-level execution confidence model** plus
+seven cross-cutting engine improvements the FI scale workload needs.
+
+### 1. Execution-confidence deterministic logistic baseline
+
+`fixed_income/execution_confidence.score_execution_confidence` blends
+the latest credit-regime + cusip-scoped liquidity-stress signals
+(falling back to market scope when the cusip-specific row is missing)
+with order attributes through a closed-form logit:
+
+| Component | Magnitude | Notes |
+|---|---:|---|
+| `base_intercept` | +0.5 | conservative prior |
+| `liquidity_penalty` | -0.01 × liquidity_index | higher stress → lower confidence |
+| `notional_penalty` | -0.15 × max(0, log10(notional) − 6) | scales above $1M |
+| `regime_penalty` | -0.008 × regime_score | higher credit stress → lower confidence |
+| `protocol_bonus` | Auto-X +0.10, RFQ +0.05, Manual −0.10 | |
+| `urgency_penalty` | low 0, normal −0.05, high −0.15 | |
+| `rating_bonus` | IG +0.10, HY −0.10 | |
+| `limit_distance_penalty` | -0.05 × max(0, \|limit − mid\| − 10) bps | only when caller supplies `metadata.mid_price` |
+
+`confidence_score = sigmoid(sum(...))` clipped to `[0.05, 0.95]`.
+`expected_slippage_bps = 5 + 30·(1 − confidence) + 0.5·liquidity_index`,
+floored at 1 bps and capped at 200 bps. Confidence interval is the
+heuristic `[score − 0.10, score + 0.10]`; v1.5.1 swaps this for a
+calibrated quantile output. The metadata blob records the top-3 logit
+components by absolute magnitude as the explainability surface.
+
+The baseline is intentionally conservative (per AGENT.md "explainable
+baselines first") so AUTO_X_ALLOWED is effectively reserved for the
+v1.5.1 calibrated successor; the deterministic path tops out near the
+AUTO_X_CAUTION band on a clean signal.
+
+**Decision rule** (INSTRUCTIONS.md §6.3):
+
+```text
+release_gate=False
+    → "Manual review required" + human_review_required=True
+score ≥ 0.80 AND liquidity NOT IN {Severe Stress, Crisis Liquidity}
+    → "Auto-X allowed"
+score ≥ 0.60
+    → "Auto-X caution / trader confirm"
+otherwise
+    → "Manual review required"
+```
+
+**Stale-signal soft-fail.** When either the credit-regime or
+liquidity feed is older than `MRE_FI_MAX_SIGNAL_STALENESS_SEC`
+(default 900s = 15 minutes), the scorer returns
+`recommended_action="Unavailable — stale signal"` with
+`release_gate=False` without raising. Both
+`signal_age_seconds_credit_regime` and `signal_age_seconds_liquidity`
+remain in the metadata blob for telemetry.
+
+### 2. POST /v1/execution_confidence
+
+| Endpoint | Status |
+|---|---|
+| `GET /v1/regime_index/latest` | PR-3 |
+| `GET /v1/liquidity_index/latest` | PR-4 |
+| `GET /v1/liquidity_index/{scope_type}/{scope_id}` | PR-4 |
+| `POST /v1/execution_confidence` | **PR-5** |
+| `GET /v1/tca/regime-segments/latest` | 501 (PR-6) |
+| `GET /v1/evidence-pack/{model_run_id}` | 501 (PR-7) |
+
+The POST endpoint accepts an `ExecutionConfidenceRequestModel`
+(Pydantic v2 with `extra="forbid"`), validates ISO-8601 UTC timestamps
+and alphanumeric CUSIPs, caps the body at 32 KB (413 on oversize),
+and is rate-limited per API key via `slowapi`
+(`MRE_FI_EXEC_CONF_RATE_LIMIT`, default `100/second`; 429 carries
+`Retry-After: 1`). The handler reads through the per-process pooled
+warehouse (§5 below), runs `score_execution_confidence`, and persists
+the prediction keyed by `request_id` (PR-15 composite PK).
+
+**Load smoke** (`tests/test_api_v1_load_smoke.py`, marked `slow`): 1000
+sequential POSTs across 10 cusips with varied protocol / urgency /
+notional measured **p50 = 27.57ms, p99 = 40.05ms** on the dev laptop —
+well under the 500ms budget the plan specifies.
+
+### 3. CLI: `mre fi-score-execution-confidence`
+
+```text
+mre fi-score-execution-confidence \
+    --db data/mre.duckdb \
+    --input examples/sample_order.json \
+    [--output-json data/exec_conf.json] \
+    [--profile production] \
+    [--release-gate true] \
+    [--request-id <id>] \
+    [--model-run-id <id>]
+```
+
+The JSON input is validated by the same Pydantic model the API uses,
+so the CLI surfaces the same naive-timestamp / oversized-notional /
+non-alphanumeric-cusip errors with exit code 2. `--request-id` is
+auto-generated as a UUID4 hex when omitted so the warehouse row
+always has a value on the PR-15 composite PK.
+
+### 4. Walk-forward improvements (ASK-1 / AF-11 / ASK-13)
+
+- **ASK-1: searchsorted purge** —
+  `purge_and_embargo_searchsorted(train_idx, test_idx, horizon, embargo)`
+  replaces the v1.3 dense `(n_train, n_test)` bool mask with a
+  `np.searchsorted` form. Memory bound goes from
+  `O(n_train · n_test)` (~1 GB transient on n=2000 / n_blocks=8 / k=2)
+  to `O(n_train + n_test)`. Bit-for-bit equivalent to the legacy path
+  — pinned by a 50-seed parity test against the preserved
+  `_legacy_purge_and_embargo` reference.
+- **AF-11: `min_train_after_purge`** —
+  `PurgedWalkForward.min_train_after_purge` makes the hard-coded
+  `min_train // 2` skip threshold explicit. `None` (default) preserves
+  v1.4 behaviour bit-for-bit; supplying an integer makes the rail
+  tunable and emits an INFO log when a fold is skipped.
+- **ASK-13: model-class factory** — `evaluate_walk_forward` accepts
+  `model_class=` / `model_kwargs=` and instantiates a fresh estimator
+  inside every fold via `_model_factory_default`. The closure-capture
+  `predict_fn` path remains for back-compat; the docstring documents
+  why the new class-based form prevents cross-fold state leakage.
+
+### 5. Cross-cutting engine improvements
+
+- **ASK-8 — Per-process pooled Warehouse**.
+  `storage.get_pooled_warehouse(path)` returns the per-process
+  `Warehouse` keyed by resolved absolute path. The FastAPI hot path no
+  longer pays DuckDB catalog + WAL teardown per request. Writes
+  serialise via `pooled_warehouse_write_lock` (re-entrant); reads run
+  concurrently under DuckDB MVCC. The pool is drained on the FastAPI
+  lifespan-shutdown event so a uvicorn reload cycle does not leak
+  file handles.
+- **AF-5 / ASK-10 — Lazy cache init + Redis JSON**.
+  `_CACHE` is no longer constructed at module import time;
+  `_get_cache()` lazily constructs on first use and `reset_cache()`
+  lets operators pick up env-var changes between requests. The Redis
+  cache defaults to JSON (`json.dumps(default=str)`); pickle is gated
+  behind the opt-in env var `MRE_CACHE_ALLOW_PICKLE=1`. Closes the
+  CVE-style attack surface where an attacker with write access to the
+  shared Redis instance could land arbitrary-code execution via
+  `pickle.loads` on the FastAPI worker.
+- **AF-3 — Bounded observability histograms**.
+  `observability.BoundedHistogram` (reservoir sampler, Algorithm R,
+  4096-slot default) replaces the unbounded `list[float]` per
+  metric key. Exact `count` and `sum` are preserved; approximate
+  quantiles match the true sample quantile within a few percentage
+  points on a stationary uniform distribution. Resident memory stays
+  bounded at 32 KB per histogram on a 1M-insert hot path.
+- **AF-10 — Cadence-strict horizon parsing**.
+  `_parse_horizon_periods(horizon, cadence=...)` requires an explicit
+  cadence (monthly / daily / intraday) and rejects mismatched
+  suffixes — so `"12m"` with `cadence="daily"` now raises
+  `ValueError` instead of silently mis-parsing as 12 months. The
+  legacy `_parse_horizon_months` shim preserves v1.4 macro-backtest
+  behaviour with a DeprecationWarning.
+
+### 6. Validation primitives (Q-5 / deep research §"Validation & metrics")
+
+Three Bailey–López de Prado primitives ship in
+`market_regime_engine.validation`:
+
+- **Deflated Sharpe Ratio** (`deflated_sharpe`). Adjusts the observed
+  Sharpe for multiple-testing selection bias across `n_trials`
+  candidate strategies and non-normality of returns (sample
+  skew / excess kurtosis or operator-supplied values). Returns the
+  probability that the true Sharpe exceeds `sharpe_target`.
+- **Probability of Backtest Overfitting**
+  (`probability_of_backtest_overfitting`). Combinatorial-purged-CV
+  per BBLZ 2017: splits the time axis into `n_partitions` halves,
+  ranks strategies in-sample, and measures how often the in-sample
+  winner ranks below median out-of-sample.
+- **Minimum Track Record Length**
+  (`minimum_track_record_length`). Closed-form `n*` per BLP 2014
+  eq. (8) so operators can plan how long a strategy must run before
+  its Sharpe edge becomes defensible.
+
+All three primitives are scipy-free (Beasley–Springer–Moro normal
+inverse-CDF inlined) so the macro engine does not pick up a new hard
+dependency.
+
+**Release-gate integration.** The `production` profile gains:
+
+- `min_dsr=0.5` — DSR ≥ 0.5 required to release.
+- `max_pbo=0.05` — PBO ≤ 5% required to release.
+
+Both columns are *optional* on the `confidence` frame; absence skips
+the rail entirely so v1.4.1 callers without DSR / PBO emit the same
+release decision. The `default` profile leaves both `None`.
+
+### 7. RNG seed namespace contract (Q-3 / Q-11)
+
+`ReproEnvelope.rng_seeds` carries the canonical namespace dict. The
+class-level docstring documents the recommended keys
+(`numpy`, `jax`, `torch`, `sklearn`) and the registered namespaces
+per component (FI execution_confidence baseline → empty; v1.5.1
+calibrated successor → `{numpy, sklearn}`; Bayesian MS-VAR →
+`{numpy, jax}`; PatchTST → `{numpy, torch}`).
+
+### Back-compat guarantees (PR-5)
+
+- The pre-PR-5 `CombinatorialPurgedCV._purge_and_embargo` routes
+  through the new `purge_and_embargo_searchsorted` and emits
+  bit-for-bit identical outputs (pinned by a 50-seed parity test).
+- `PurgedWalkForward(min_train_after_purge=None)` preserves the
+  v1.4 fold count exactly.
+- `_parse_horizon_months(...)` keeps working as a deprecation shim
+  (DeprecationWarning fired, fold semantics unchanged).
+- `Warehouse(path)` direct construction still works (pooled access
+  is opt-in via `get_pooled_warehouse`).
+- The macro release gate behaviour is unchanged when the
+  `confidence` frame lacks `dsr` / `pbo` columns.
+- `_CACHE` is now lazily constructed; callers that previously
+  reached for `api_v1._CACHE` directly should switch to
+  `_get_cache()`.
+
+### Reference (PR-5)
+
+- Plan: `.cursor/plans/fi_v1.5_implementation_plan_bcda9355.plan.md` §5 PR-5
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_AGENT.md` "PR 5 — execution confidence"
+- Markdown pack: `markdown-pack/MRE_FIXED_INCOME_INSTRUCTIONS.md` §6.3
+- Review thread: §3.1 AF-3 / AF-5 / AF-10 / AF-11; §3.2 ASK-1 / ASK-8 / ASK-10 / ASK-13; §3.4 Q-3 / Q-5 / Q-11; §3.6 PR-1 / PR-2 / PR-13
+- Deep-research report: §3 (execution confidence); §"Validation & metrics" (DSR / PBO / MTRL)

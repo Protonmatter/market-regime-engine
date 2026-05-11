@@ -14,6 +14,8 @@ PR-5 adds ``model_class`` / ``model_kwargs`` so the caller can pass a
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -36,14 +38,16 @@ def _synthetic_panel(n: int = 120, seed: int = 0) -> tuple[pd.DataFrame, pd.Seri
 class _CountingModel:
     """Tiny stand-in for an sklearn estimator that records its construction."""
 
-    instances: list["_CountingModel"] = []
+    # Class-level instance log so the cross-fold-state rail can assert
+    # one fresh instance per fold. The mutable default is intentional.
+    instances: ClassVar[list[_CountingModel]] = []
 
     def __init__(self, *, ridge: float = 1.0) -> None:
         self.ridge = ridge
         self.coef_: np.ndarray | None = None
         type(self).instances.append(self)
 
-    def fit(self, X: pd.DataFrame, y: pd.Series) -> "_CountingModel":
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> _CountingModel:
         Xm = X.to_numpy(dtype=float)
         ym = y.to_numpy(dtype=float)
         # Simple closed-form ridge so we can pin the coefficient per fold.
@@ -114,7 +118,7 @@ def test_model_factory_class_picks_positive_column_for_binary_predict_proba() ->
     class), mirroring v1.4 ``ProbabilityModel.predict_proba``."""
 
     class _Stub:
-        def fit(self, X: pd.DataFrame, y: pd.Series) -> "_Stub":
+        def fit(self, X: pd.DataFrame, y: pd.Series) -> _Stub:
             return self
 
         def predict_proba(self, X: pd.DataFrame) -> np.ndarray:

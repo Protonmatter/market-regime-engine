@@ -108,15 +108,11 @@ def _parse_horizon_periods(horizon: str, *, cadence: Cadence) -> int:
     if horizon is None or str(horizon).strip() == "":
         raise ValueError("horizon must not be empty")
     if cadence not in _HORIZON_UNITS:
-        raise ValueError(
-            f"unknown cadence {cadence!r}; expected one of {sorted(_HORIZON_UNITS)}"
-        )
+        raise ValueError(f"unknown cadence {cadence!r}; expected one of {sorted(_HORIZON_UNITS)}")
 
     match = _HORIZON_RE_FULL.match(str(horizon))
     if match is None:
-        raise ValueError(
-            f"horizon {horizon!r} is not of the form N<unit> (e.g. '12m', '1d', '15min')"
-        )
+        raise ValueError(f"horizon {horizon!r} is not of the form N<unit> (e.g. '12m', '1d', '15min')")
     n = int(match.group(1))
     suffix = match.group(2).lower().strip()
     if n <= 0:
@@ -131,10 +127,7 @@ def _parse_horizon_periods(horizon: str, *, cadence: Cadence) -> int:
             return n * multiplier
 
     accepted = sorted({u for u, _ in candidates})
-    raise ValueError(
-        f"horizon suffix {suffix!r} is not valid for cadence={cadence!r}; "
-        f"accepted units: {accepted!r}"
-    )
+    raise ValueError(f"horizon suffix {suffix!r} is not valid for cadence={cadence!r}; accepted units: {accepted!r}")
 
 
 def _parse_horizon_months(horizon: str, fallback: int = 1) -> int:
@@ -150,8 +143,7 @@ def _parse_horizon_months(horizon: str, fallback: int = 1) -> int:
     rather than raise.
     """
     warnings.warn(
-        "_parse_horizon_months is deprecated; "
-        "use _parse_horizon_periods(horizon, cadence='monthly') instead.",
+        "_parse_horizon_months is deprecated; use _parse_horizon_periods(horizon, cadence='monthly') instead.",
         DeprecationWarning,
         stacklevel=2,
     )

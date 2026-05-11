@@ -340,11 +340,7 @@ def _lockfile_hashes_dict(root: Path | None = None) -> dict[str, str | None]:
     out: dict[str, str | None] = {}
     for name in _LOCKFILE_FILES:
         candidate = root / name
-        out[name] = (
-            hashlib.sha256(candidate.read_bytes()).hexdigest()
-            if candidate.exists()
-            else None
-        )
+        out[name] = hashlib.sha256(candidate.read_bytes()).hexdigest() if candidate.exists() else None
     # Pick up any additional lockfiles via glob; sort for determinism.
     known = set(_LOCKFILE_FILES)
     for extra in sorted(root.glob("requirements-lock*.txt")):

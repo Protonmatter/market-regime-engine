@@ -1,0 +1,12 @@
+{
+  "timestamp": "2026-05-01T16:00:30Z",
+  "cusip": "00206RGB6",
+  "side": "buy",
+  "notional": 1000000,
+  "protocol": "Auto-X",
+  "urgency": "normal",
+  "request_id": "sample-order-001",
+  "sector": "Industrials",
+  "rating": "BBB+",
+  "maturity_bucket": "5y"
+}
