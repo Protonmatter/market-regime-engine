@@ -39,15 +39,31 @@ from fastapi.responses import JSONResponse
 from market_regime_engine.fixed_income.credit_spread_regime import (
     latest_credit_regime_score,
 )
-from market_regime_engine.fixed_income.schemas import CreditRegimeOutput
+from market_regime_engine.fixed_income.liquidity_stress import (
+    latest_liquidity_stress_score,
+)
+from market_regime_engine.fixed_income.liquidity_stress import (
+    output_to_dict as liquidity_output_to_dict,
+)
+from market_regime_engine.fixed_income.schemas import (
+    CreditRegimeOutput,
+    LiquidityStressOutput,
+)
 
 log = logging.getLogger(__name__)
 
 _NOT_YET = "not_yet_implemented"
 _HTTP_NOT_IMPLEMENTED = 501
+_HTTP_NOT_FOUND = 404
 _HTTP_SERVICE_UNAVAILABLE = 503
 
-__all__ = ["build_router", "credit_regime_output_to_dict"]
+_VALID_SCOPE_TYPES: frozenset[str] = frozenset({"market", "sector", "rating", "cusip"})
+
+__all__ = [
+    "build_router",
+    "credit_regime_output_to_dict",
+    "liquidity_stress_output_to_dict",
+]
 
 
 def _stub_response(endpoint: str) -> JSONResponse:
@@ -68,6 +84,17 @@ def credit_regime_output_to_dict(output: CreditRegimeOutput) -> dict[str, Any]:
     out = asdict(output)
     out["drivers"] = list(output.drivers)
     return out
+
+
+def liquidity_stress_output_to_dict(output: LiquidityStressOutput) -> dict[str, Any]:
+    """JSON-serialisable dict form of :class:`LiquidityStressOutput`.
+
+    Re-export of :func:`fixed_income.liquidity_stress.output_to_dict`
+    on the API namespace so FastAPI handlers and downstream consumers
+    have a single canonical converter without crossing module
+    boundaries.
+    """
+    return liquidity_output_to_dict(output)
 
 
 def _resolve_db_path() -> str:
@@ -143,11 +170,79 @@ def build_router(
 
     @router.get("/liquidity_index/latest")
     async def liquidity_index_latest() -> JSONResponse:
-        return _stub_response("GET /v1/liquidity_index/latest")
+        """Return the most recent liquidity_stress_scores row across ALL scopes.
+
+        - **200** with the full :class:`LiquidityStressOutput` JSON
+          (including ``release_gate=False`` rows so consumers can fail
+          closed downstream per AGENT.md non-negotiable 8).
+        - **503** ``{"detail": "no_data", "release_gate": false}`` when
+          the warehouse has no liquidity rows yet.
+        """
+        wh = factory()
+        try:
+            try:
+                latest = latest_liquidity_stress_score(wh)
+            except Exception as exc:
+                log.exception("liquidity_index/latest read failed: %s", exc)
+                raise HTTPException(
+                    status_code=_HTTP_SERVICE_UNAVAILABLE,
+                    detail={"detail": "no_data", "release_gate": False},
+                ) from exc
+        finally:
+            close = getattr(wh, "close", None)
+            if callable(close):
+                close()
+        if latest is None:
+            return JSONResponse(
+                {"detail": "no_data", "release_gate": False},
+                status_code=_HTTP_SERVICE_UNAVAILABLE,
+            )
+        return JSONResponse(liquidity_stress_output_to_dict(latest), status_code=200)
 
     @router.get("/liquidity_index/{scope_type}/{scope_id}")
     async def liquidity_index_scoped(scope_type: str, scope_id: str) -> JSONResponse:
-        return _stub_response(f"GET /v1/liquidity_index/{scope_type}/{scope_id}")
+        """Return the most recent liquidity row for ``(scope_type, scope_id)``.
+
+        - **404** when ``scope_type`` is not in
+          ``{"market", "sector", "rating", "cusip"}``.
+        - **503** ``{"detail": "no_data", "release_gate": false}`` when
+          no row exists for the requested scope.
+        - **200** with the full output payload otherwise. Rows where
+          ``release_gate=false`` are still returned with the flag set
+          so consumers can fail closed downstream.
+        """
+        if scope_type not in _VALID_SCOPE_TYPES:
+            return JSONResponse(
+                {
+                    "detail": "invalid_scope_type",
+                    "valid_scope_types": sorted(_VALID_SCOPE_TYPES),
+                },
+                status_code=_HTTP_NOT_FOUND,
+            )
+        wh = factory()
+        try:
+            try:
+                latest = latest_liquidity_stress_score(
+                    wh, scope_type=scope_type, scope_id=scope_id
+                )
+            except Exception as exc:
+                log.exception(
+                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
+                )
+                raise HTTPException(
+                    status_code=_HTTP_SERVICE_UNAVAILABLE,
+                    detail={"detail": "no_data", "release_gate": False},
+                ) from exc
+        finally:
+            close = getattr(wh, "close", None)
+            if callable(close):
+                close()
+        if latest is None:
+            return JSONResponse(
+                {"detail": "no_data", "release_gate": False},
+                status_code=_HTTP_SERVICE_UNAVAILABLE,
+            )
+        return JSONResponse(liquidity_stress_output_to_dict(latest), status_code=200)
 
     @router.post("/execution_confidence")
     async def execution_confidence() -> JSONResponse:
