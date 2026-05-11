@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -35,33 +35,112 @@ def _logsumexp(arr: np.ndarray) -> float:
     return float(m + math.log(float(np.sum(np.exp(arr - m)))))
 
 
-@dataclass
 class _GPRun:
-    """One GP segment: stores a window of recent observations to predict the next."""
+    """Single GP run-length state.
 
-    xs: list[np.ndarray] = field(default_factory=list)
-    length_scale: float = 1.0
-    noise_var: float = 0.1
-    signal_var: float = 1.0
+    v1.5 (PR-4 ASK-9): switched the per-segment observation store from
+    a Python ``list`` (copy-on-append) to a fixed-size ``np.ndarray``
+    ring buffer with ``max_run`` slots. The ring keeps the same
+    insertion order on read via :attr:`xs`, so the kernel matrix
+    constructed in :meth:`predictive_logpdf` is bit-for-bit identical
+    to the v1.4 implementation for any panel processed by
+    :class:`GPBOCPD.score` (proof: the BOCPD inner loop never appends
+    past ``max_run`` observations onto the same segment — at iteration
+    ``t = max_run + 1`` the truncation ``runs[: self.max_run]`` already
+    drops the longest run, so no eviction wraps inside ``score``).
+
+    The ring buffer is exposed independently so tests can directly
+    exercise eviction behaviour past ``max_run`` (where the legacy
+    implementation would have grown unbounded).
+
+    Cost: ``update`` is ``O(max_run × d)`` (one buffer copy + one slot
+    write) versus ``O(n × d)`` in the legacy list-copy path, where
+    ``n`` grows with the segment length up to ``max_run``. For the
+    typical FI configuration ``max_run = 96`` and ``T = 1000`` the new
+    path saves the per-step cost from quadratic-in-n to constant in
+    the buffer size.
+    """
+
+    __slots__ = (
+        "_buffer",
+        "_head",
+        "_max_run",
+        "_n",
+        "length_scale",
+        "noise_var",
+        "signal_var",
+    )
+
+    def __init__(
+        self,
+        *,
+        max_run: int,
+        d: int,
+        length_scale: float = 1.0,
+        noise_var: float = 0.1,
+        signal_var: float = 1.0,
+    ) -> None:
+        if max_run <= 0:
+            raise ValueError(f"max_run must be positive; got {max_run!r}")
+        if d <= 0:
+            raise ValueError(f"d must be positive; got {d!r}")
+        self._buffer: np.ndarray = np.empty((max_run, d), dtype=np.float64)
+        self._head: int = 0
+        self._n: int = 0
+        self._max_run: int = int(max_run)
+        self.length_scale: float = float(length_scale)
+        self.noise_var: float = float(noise_var)
+        self.signal_var: float = float(signal_var)
 
     def update(self, x: np.ndarray) -> _GPRun:
-        new_xs = [*self.xs, x.copy()]
-        return _GPRun(new_xs, self.length_scale, self.noise_var, self.signal_var)
+        """Return a new ``_GPRun`` with ``x`` appended.
+
+        Immutability is preserved (a fresh buffer copy is made) because
+        ``GPBOCPD.score`` keeps multiple per-timestep states that may
+        share a prefix. Once the ring is full, the oldest observation
+        is evicted in FIFO order.
+        """
+        new = _GPRun.__new__(_GPRun)
+        new._buffer = self._buffer.copy()
+        new._head = self._head
+        new._n = self._n
+        new._max_run = self._max_run
+        new.length_scale = self.length_scale
+        new.noise_var = self.noise_var
+        new.signal_var = self.signal_var
+        new._buffer[new._head] = np.asarray(x, dtype=np.float64)
+        new._head = (new._head + 1) % new._max_run
+        new._n = min(new._n + 1, new._max_run)
+        return new
+
+    @property
+    def xs(self) -> np.ndarray:
+        """Return valid entries in insertion order (oldest first).
+
+        Returns a *view* into the underlying buffer when the ring is
+        still filling (``_n < _max_run``) and a freshly-concatenated
+        ``(_max_run, d)`` ndarray once the ring has wrapped. Either
+        way the result is a 2D ``(n, d)`` ndarray that drops in for
+        the legacy ``np.stack(self.xs)`` call site.
+        """
+        if self._n == 0:
+            return self._buffer[:0]
+        if self._n < self._max_run:
+            return self._buffer[: self._n]
+        return np.concatenate([self._buffer[self._head :], self._buffer[: self._head]])
 
     def predictive_logpdf(self, x: np.ndarray) -> float:
-        """Log predictive pdf of ``x`` under a GP fitted on ``self.xs``."""
-        if not self.xs:
+        """Log predictive pdf of ``x`` under a GP fitted on :attr:`xs`."""
+        Y = self.xs
+        n = Y.shape[0]
+        if n == 0:
             d = len(x)
             var = self.noise_var + self.signal_var
             return float(
                 -0.5 * d * math.log(2 * math.pi * max(var, 1e-9)) - 0.5 * float(np.sum((x**2) / max(var, 1e-9)))
             )
-        Y = np.stack(self.xs)
-        # Index segment positions as the GP input (1..n).
-        n = Y.shape[0]
         t = np.arange(n, dtype=float).reshape(-1, 1)
         t_star = np.array([[float(n)]])
-        # RBF kernel matrices.
         diff = t[:, None, :] - t[None, :, :]
         K = self.signal_var * np.exp(-0.5 * np.sum(diff**2, axis=-1) / max(self.length_scale**2, 1e-9))
         K += self.noise_var * np.eye(n)
@@ -139,7 +218,9 @@ class GPBOCPD:
                     "predictive_log_likelihood",
                 ]
             )
-        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
+        frame = clean_with_policy(
+            x, default_policy=nan_policy, column_policies=column_policies
+        ).astype(float)
         arr = frame.to_numpy(float)
         # v1.4: lazily build the deep-kernel adapter when auto-training
         # is requested. We construct on first ``score`` so the fit sees
@@ -163,7 +244,10 @@ class GPBOCPD:
             with contextlib.suppress(Exception):
                 arr = np.asarray(self.deep_kernel(arr), dtype=float)
         ls = _median_heuristic_lengthscale(arr)
-        runs: list[_GPRun] = [_GPRun(length_scale=ls, noise_var=0.1, signal_var=1.0)]
+        d = int(arr.shape[1]) if arr.ndim > 1 else 1
+        runs: list[_GPRun] = [
+            _GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)
+        ]
         log_joint = np.array([0.0], dtype=float)
         h = float(self.hazard)
         log_h = math.log(max(h, self.min_prob))
@@ -187,9 +271,9 @@ class GPBOCPD:
             mean_run = float(np.sum(run_lengths * probs))
             map_run = int(np.argmax(probs))
             ll = float(_logsumexp(log_joint + pred_logs))
-            new_runs = [_GPRun(length_scale=ls, noise_var=0.1, signal_var=1.0)] + [
-                r.update(xt) for r in runs[: self.max_run]
-            ]
+            new_runs = [
+                _GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)
+            ] + [r.update(xt) for r in runs[: self.max_run]]
             new_runs = new_runs[: len(probs)]
             log_joint = np.log(np.maximum(probs, self.min_prob))
             runs = new_runs
