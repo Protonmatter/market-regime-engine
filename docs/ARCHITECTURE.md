@@ -101,6 +101,59 @@
         └─────────────────────────────────────────┘
 ```
 
+## Fixed-Income lane (v1.5)
+
+Per [V1_5_FIXED_INCOME_RCIE.md](V1_5_FIXED_INCOME_RCIE.md), v1.5
+adds a Fixed-Income RCIE / X-Pro Auto-X adapter that sits alongside
+the macro lane:
+
+```text
+                 (vendor feeds)
+                       |
+                       v
+     IngestContract.validate            (TRACE / MarketAxess RFQ -
+                       |                 schema-drift + bounds)
+                       v
+            Warehouse.write_*           (DuckDB - 13 FI tables)
+                       |
+        +--------------+--------------+
+        v              v              v
+ score_credit   score_liquidity  score_execution
+   _regime        _stress         _confidence
+        |              |              |
+        v              v              v
+  credit_regime   liquidity_   execution_
+    _scores        stress_       confidence_
+                   scores        predictions
+        |              |              |
+        +--------------+--------------+
+                       v
+            tag_trade_with_regime_context
+                       |
+                       v
+                tca_regime_segments
+                       |
+                       v
+            build_evidence_pack ->
+            sign_pack (HMAC-SHA-256) ->
+            write_evidence_pack
+                       |
+                       v
+             fixed_income_evidence_packs
+                       |
+                       v
+                  GET /v1/evidence-pack/{id}
+                  mre verify-run --model-run-id <id>
+                  mre fi-report
+```
+
+The FI lane shares the warehouse (`storage.register_tables` adds 13
+FI tables on top of the 33 macro tables), the v1 API app (FI router
+mounted on `api_v1.app`), the CLI dispatcher (`mre fi-*` routes
+through `cli_dispatch._FI_COMMANDS`), the observability registry
+(legacy + OTel adapters), and the model registry (three FI baselines
+registered per FLAG F-20).
+
 ## Formal forecast target
 
 ```text
