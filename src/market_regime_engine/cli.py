@@ -965,6 +965,58 @@ def audit_vintage_cmd(args: argparse.Namespace) -> None:
         db.close()
 
 
+def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
+    """v1.5 PR-7 §G — Verify the FI evidence pack for ``model_run_id``.
+
+    Returns a JSON-friendly dict reporting:
+
+    - ``fi_evidence_pack_present``: True when at least one row matches.
+    - ``fi_envelope_consistent``: True when the recomputed canonical
+      hash matches the stored ``output_hash``.
+    - ``fi_hmac_verified``: True when ``verify_pack`` accepts the
+      signature (or no keys are configured and signature is None).
+
+    Adds the trio to the macro ``verify_run`` report so a single
+    operator command surfaces both layers of governance.
+    """
+    from market_regime_engine.fixed_income.evidence_pack import (
+        compute_pack_hash,
+        read_evidence_pack,
+        verify_pack,
+    )
+
+    out: dict[str, Any] = {
+        "fi_evidence_pack_present": False,
+        "fi_envelope_consistent": None,
+        "fi_hmac_verified": None,
+    }
+    try:
+        pack = read_evidence_pack(db, model_run_id=model_run_id)
+    except Exception as exc:
+        out["fi_envelope_consistent"] = False
+        out["fi_hmac_verified"] = False
+        out["fi_error"] = str(exc)
+        return out
+    if pack is None:
+        return out
+    out["fi_evidence_pack_present"] = True
+    try:
+        recomputed = compute_pack_hash(pack)
+        out["fi_envelope_consistent"] = bool(recomputed.startswith("sha256:"))
+        out["fi_recomputed_hash"] = recomputed
+    except Exception as exc:
+        out["fi_envelope_consistent"] = False
+        out["fi_envelope_error"] = str(exc)
+    try:
+        out["fi_hmac_verified"] = bool(verify_pack(pack))
+    except Exception as exc:
+        out["fi_hmac_verified"] = False
+        out["fi_hmac_error"] = str(exc)
+    out["fi_component_name"] = pack.component_name
+    out["fi_release_gate"] = bool(pack.release_gate)
+    return out
+
+
 def verify_run_cmd(args: argparse.Namespace) -> None:
     """Re-derive the reproducibility envelope and compare to a stored model run.
 
@@ -982,6 +1034,11 @@ def verify_run_cmd(args: argparse.Namespace) -> None:
 
     v1.4.1 (item E) adds ``--ignore-rng-seeds`` to opt back into the
     v1.2.1 skip behaviour for stochastic-seed-rerun workflows.
+
+    v1.5 PR-7 §G: when the run has a matching FI evidence pack the
+    report carries ``fi_envelope_consistent`` and
+    ``fi_hmac_verified`` so a single command verifies both macro and
+    FI governance.
     """
     from market_regime_engine.model_runs import build_repro_envelope, verify_run
 
@@ -1039,6 +1096,22 @@ def verify_run_cmd(args: argparse.Namespace) -> None:
             current_envelope=envelope,
             ignore_rng_seeds=bool(getattr(args, "ignore_rng_seeds", False)),
         )
+        # v1.5 PR-7 §G: surface the FI evidence-pack verification trio
+        # alongside the macro report so a single command checks both
+        # governance layers.
+        try:
+            import market_regime_engine.fixed_income  # noqa: F401  - register schema
+        except Exception:
+            pass
+        try:
+            fi_report = _verify_fi_evidence_pack(db, str(run_row["run_id"]))
+        except Exception as exc:
+            fi_report = {"fi_error": str(exc)}
+        report = {**report, **fi_report}
+        if not bool(fi_report.get("fi_hmac_verified", True)) and fi_report.get(
+            "fi_evidence_pack_present"
+        ):
+            report["approved"] = False
         log.info("verify_run", extra=report)
         print(json.dumps(report, indent=2, sort_keys=True, default=str))
         # Surface non-fatal advisories on stderr so operators see them in

@@ -48,7 +48,7 @@ def _load_tables(db_path: str) -> dict[str, pd.DataFrame]:
     return tables
 
 
-db_path = st.sidebar.text_input("Database", os.getenv("MRE_DB_PATH", "data/mre.db"))
+db_path = st.sidebar.text_input("Database", os.getenv("MRE_DB_PATH", "data/mre.duckdb"))
 if st.sidebar.button("Refresh data"):
     _load_tables.clear()
 
@@ -208,3 +208,25 @@ features = data["features"]
 if not features.empty:
     st.subheader("Recent features")
     st.dataframe(features.tail(250), use_container_width=True)
+
+
+# v1.5 PR-7 §H — Fixed-Income RCIE dashboard tab.
+#
+# Conditional on the presence of FI tables: skip when
+# ``credit_regime_scores`` is empty so a fresh deployment renders only
+# the macro surface. The render helper lives in
+# ``fixed_income.dashboard_tab`` so the FI section stays decoupled
+# from the macro page; tests can drive the helper without spinning up
+# Streamlit.
+try:
+    from market_regime_engine.fixed_income.dashboard_tab import (
+        load_fi_tables,
+        render_fi_tab,
+    )
+
+    fi_data = load_fi_tables(db_path)
+    if any(df is not None and not df.empty for df in fi_data.values()):
+        st.divider()
+        render_fi_tab(fi_data)
+except Exception as _fi_exc:  # pragma: no cover - defensive
+    st.caption(f"FI dashboard tab unavailable: {_fi_exc!r}")
