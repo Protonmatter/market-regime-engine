@@ -132,7 +132,9 @@ def require_columns(frame: pd.DataFrame, required: tuple[str, ...], *, table: st
         )
         for col in missing
     )
-    return ContractReport(table=table, rows=int(len(frame)), required_columns=required, missing_columns=missing, issues=issues)
+    return ContractReport(
+        table=table, rows=len(frame), required_columns=required, missing_columns=missing, issues=issues
+    )
 
 
 def coerce_datetime_columns(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
@@ -169,12 +171,12 @@ def null_datetime_issues(frame: pd.DataFrame, columns: tuple[str, ...], *, table
 
 
 __all__ = [
-    "ContractIssue",
-    "ContractReport",
     "FEATURE_DATETIME_COLUMNS",
     "LABEL_DATETIME_COLUMNS",
     "REQUIRED_FEATURE_COLUMNS",
     "REQUIRED_LABEL_COLUMNS",
+    "ContractIssue",
+    "ContractReport",
     "coerce_datetime_columns",
     "missing_columns",
     "null_datetime_issues",

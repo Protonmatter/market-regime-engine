@@ -122,8 +122,8 @@ def audit_pit_frames(features: pd.DataFrame, labels: pd.DataFrame) -> LeakageAud
     return LeakageAuditReport(
         schema=schema,
         issues=tuple(issues),
-        feature_rows=int(len(features)),
-        label_rows=int(len(labels)),
+        feature_rows=len(features),
+        label_rows=len(labels),
         matched_pairs=int(matched_pairs),
     )
 
@@ -145,8 +145,10 @@ def _cross_table_issues(features: pd.DataFrame, labels: pd.DataFrame) -> tuple[l
 
     feature_as_of_col = "as_of_feature" if "as_of_feature" in merged.columns else "as_of"
     if feature_as_of_col in merged.columns:
-        mask = merged[feature_as_of_col].notna() & merged["forecast_origin"].notna() & (
-            merged[feature_as_of_col] > merged["forecast_origin"]
+        mask = (
+            merged[feature_as_of_col].notna()
+            & merged["forecast_origin"].notna()
+            & (merged[feature_as_of_col] > merged["forecast_origin"])
         )
         for _, row in merged[mask].iterrows():
             issues.append(
@@ -164,8 +166,10 @@ def _cross_table_issues(features: pd.DataFrame, labels: pd.DataFrame) -> tuple[l
     for joined_col in ("joined_at", "label_joined_at", "as_of_label"):
         if joined_col not in merged.columns or "label_available_at" not in merged.columns:
             continue
-        mask = merged["label_available_at"].notna() & merged[joined_col].notna() & (
-            merged["label_available_at"] > merged[joined_col]
+        mask = (
+            merged["label_available_at"].notna()
+            & merged[joined_col].notna()
+            & (merged["label_available_at"] > merged[joined_col])
         )
         for _, row in merged[mask].iterrows():
             issues.append(
@@ -182,8 +186,10 @@ def _cross_table_issues(features: pd.DataFrame, labels: pd.DataFrame) -> tuple[l
 
     revision_col = _merged_revision_available_col(merged)
     if revision_col and feature_as_of_col in merged.columns:
-        mask = merged[revision_col].notna() & merged[feature_as_of_col].notna() & (
-            merged[revision_col] > merged[feature_as_of_col]
+        mask = (
+            merged[revision_col].notna()
+            & merged[feature_as_of_col].notna()
+            & (merged[revision_col] > merged[feature_as_of_col])
         )
         for _, row in merged[mask].iterrows():
             issues.append(
@@ -198,7 +204,7 @@ def _cross_table_issues(features: pd.DataFrame, labels: pd.DataFrame) -> tuple[l
                 )
             )
 
-    return issues, int(len(merged))
+    return issues, len(merged)
 
 
 def _merged_revision_available_col(frame: pd.DataFrame) -> str | None:

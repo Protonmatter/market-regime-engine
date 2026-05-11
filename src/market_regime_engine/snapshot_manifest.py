@@ -101,9 +101,7 @@ class SnapshotVerificationReport:
             lines.append("|---|---|---|---|---|")
             for issue in self.issues:
                 message = _markdown_cell(issue.message)
-                lines.append(
-                    f"| {issue.path} | {issue.check} | {issue.expected} | {issue.actual} | {message} |"
-                )
+                lines.append(f"| {issue.path} | {issue.check} | {issue.expected} | {issue.actual} | {message} |")
         return "\n".join(lines).rstrip() + "\n"
 
 
