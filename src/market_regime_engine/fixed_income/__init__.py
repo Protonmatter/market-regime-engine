@@ -25,8 +25,15 @@ Public surface (PR-1):
 - Helpers: :func:`assert_pit_safe`, :func:`canonical_sha256`.
 """
 
+from market_regime_engine.fixed_income.calendars import (
+    TradingCalendar,
+    is_trading_day,
+    next_trading_day,
+    previous_trading_day,
+    trading_days_between,
+)
 from market_regime_engine.fixed_income.hashing import canonical_sha256
-from market_regime_engine.fixed_income.pit_guard import assert_pit_safe
+from market_regime_engine.fixed_income.pit_guard import assert_pit_safe, assert_trading_day
 from market_regime_engine.fixed_income.posterior_mode import (
     FilteredPosterior,
     PosteriorMode,
@@ -66,6 +73,12 @@ __all__ = [
     "PosteriorMode",
     "RegimeLabel",
     "SmoothedPosterior",
+    "TradingCalendar",
     "assert_pit_safe",
+    "assert_trading_day",
     "canonical_sha256",
+    "is_trading_day",
+    "next_trading_day",
+    "previous_trading_day",
+    "trading_days_between",
 ]
