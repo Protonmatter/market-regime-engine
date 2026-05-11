@@ -150,11 +150,14 @@ def test_fi_router_mounted_on_api_v1_app() -> None:
 
 
 def test_other_fi_endpoints_still_return_501(populated_warehouse: Warehouse) -> None:
-    """Only regime_index/latest is real; the other 5 are still 501 stubs."""
+    """After PR-4, only the PR-5..PR-7 endpoints remain as 501 stubs.
+
+    PR-3 made ``/v1/regime_index/latest`` live; PR-4 (this PR) makes
+    ``/v1/liquidity_index/*`` live. The execution_confidence / TCA /
+    evidence-pack endpoints stay as stubs until their owning PR lands.
+    """
     client = TestClient(_app_with_warehouse(populated_warehouse))
     for path in (
-        "/v1/liquidity_index/latest",
-        "/v1/liquidity_index/sector/Tech",
         "/v1/tca/regime-segments/latest",
         "/v1/evidence-pack/run-x",
     ):
