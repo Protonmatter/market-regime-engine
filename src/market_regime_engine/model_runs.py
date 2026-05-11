@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import platform
 import subprocess
@@ -39,7 +40,29 @@ import pandas as pd
 
 from market_regime_engine.training_data import TrainingMode
 
+logger = logging.getLogger(__name__)
+
 _LOCKFILE_NAME = "requirements-lock.txt"
+
+# v1.5 (PR-1 AF-9 / P1): the reproducibility envelope hashes ALL five
+# platform lockfiles, not just the canonical one. The order below is
+# deterministic so the dict keys hash stably across runs; missing
+# files map to ``None``.
+_LOCKFILE_FILES: tuple[str, ...] = (
+    "requirements-lock.txt",
+    "requirements-lock.core.txt",
+    "requirements-lock.frontier-cpu-linux.txt",
+    "requirements-lock.bayesian-cpu-linux.txt",
+    "requirements-lock.dashboard.txt",
+)
+
+# v1.5 (PR-1 AF-13 / ASK-12): MRE_BUILD_SHA / MRE_BUILD_DIRTY env-var
+# overrides make the repro envelope buildable inside container images
+# where ``git`` is not on PATH. Truthy values follow the same set as
+# Docker / CI conventions.
+_BUILD_SHA_ENV = "MRE_BUILD_SHA"
+_BUILD_DIRTY_ENV = "MRE_BUILD_DIRTY"
+_TRUTHY = frozenset({"1", "true", "yes", "y", "on", "True", "TRUE", "Yes", "YES"})
 
 
 @dataclass(frozen=True)
@@ -60,7 +83,14 @@ class ModelRun:
 
 @dataclass(frozen=True)
 class ReproEnvelope:
-    """Full reproducibility envelope embedded into ``metadata_json``."""
+    """Full reproducibility envelope embedded into ``metadata_json``.
+
+    v1.5 (PR-1 AF-9): ``lockfile_hashes`` is the dict of per-lockfile
+    SHA-256 hashes covering all five platform lockfiles. ``lockfile_hash``
+    is preserved as the canonical ``requirements-lock.txt`` scalar
+    hash for v1.4-and-earlier consumers; new consumers should prefer
+    the dict for cross-platform reproducibility.
+    """
 
     code_version: str
     code_sha: str
@@ -73,6 +103,7 @@ class ReproEnvelope:
     vintage_payload: str
     rng_seeds: dict[str, int] = field(default_factory=dict)
     extra: dict[str, object] = field(default_factory=dict)
+    lockfile_hashes: dict[str, str | None] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -196,18 +227,46 @@ def _hash_frame(df: pd.DataFrame | None) -> str:
 
 
 def _git_revision(short: bool = True) -> str:
+    """Resolve the running build's git revision.
+
+    v1.5 (PR-1 AF-13 / ASK-12): consults ``MRE_BUILD_SHA`` first so a
+    container image baked at build time without ``git`` on PATH can
+    still produce a meaningful repro envelope. When the env var is
+    set, ``short=True`` truncates to 7 chars to match
+    ``git rev-parse --short HEAD``; ``short=False`` returns the full
+    string verbatim.
+
+    Falls back to ``git rev-parse`` then ``"unknown"`` with a
+    WARNING log so an operational outage (git missing, repo
+    detached) surfaces in the logs instead of silently degrading.
+    """
+    env_value = os.environ.get(_BUILD_SHA_ENV, "").strip()
+    if env_value:
+        return env_value[:7] if short else env_value
     args = ["git", "rev-parse", "--short", "HEAD"] if short else ["git", "rev-parse", "HEAD"]
     try:
         return subprocess.check_output(args, stderr=subprocess.DEVNULL, text=True).strip()
-    except Exception:
+    except Exception as exc:
+        logger.warning("git rev-parse failed (%s); returning 'unknown'", exc)
         return "unknown"
 
 
 def _git_dirty() -> bool:
+    """Detect uncommitted changes in the working tree.
+
+    v1.5 (PR-1 AF-13): consults ``MRE_BUILD_DIRTY`` first so a
+    pre-baked container image can declare its dirty bit explicitly.
+    Truthy values follow ``_TRUTHY``; anything else (including unset)
+    falls back to the ``git status --porcelain`` probe.
+    """
+    env_value = os.environ.get(_BUILD_DIRTY_ENV)
+    if env_value is not None and env_value != "":
+        return env_value in _TRUTHY
     try:
         out = subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.DEVNULL, text=True)
         return bool(out.strip())
-    except Exception:
+    except Exception as exc:
+        logger.warning("git status failed (%s); assuming clean", exc)
         return False
 
 
@@ -216,11 +275,55 @@ def _project_root() -> Path:
 
 
 def _lockfile_hash(root: Path | None = None) -> str:
+    """Return the canonical ``requirements-lock.txt`` SHA-256 hash.
+
+    Kept for v1.4 back-compat. Downstream consumers should prefer
+    :func:`_lockfile_hashes_dict` which covers all five platform
+    lockfiles (AF-9 / P1). Returns ``""`` when the canonical lockfile
+    is missing so the v1.4.1 ``verify_run`` comparison path keeps
+    its semantics.
+    """
     root = root or _project_root()
     candidate = root / _LOCKFILE_NAME
     if not candidate.exists():
         return ""
     return hashlib.sha256(candidate.read_bytes()).hexdigest()
+
+
+def _lockfile_hashes_dict(root: Path | None = None) -> dict[str, str | None]:
+    """Return SHA-256 hashes for all platform lockfiles in deterministic order.
+
+    Keys are the lockfile filenames (relative to the project root) and
+    values are the hex SHA-256 digests, or ``None`` when the file is
+    not present. Missing-file → ``None`` keeps the schema stable
+    across CI runners that ship only a subset of lockfiles (the
+    container build, for example, may only have ``requirements-lock.txt``
+    + ``requirements-lock.dashboard.txt``).
+
+    Any extra ``requirements-lock*.txt`` files discovered via glob
+    are appended after the canonical five in sorted order so a
+    future platform lockfile (e.g. ``requirements-lock.gpu-linux.txt``)
+    is captured automatically without a code change.
+
+    AF-9 / P1 (REVIEW.md section 3.1).
+    """
+    root = root or _project_root()
+    out: dict[str, str | None] = {}
+    for name in _LOCKFILE_FILES:
+        candidate = root / name
+        out[name] = (
+            hashlib.sha256(candidate.read_bytes()).hexdigest()
+            if candidate.exists()
+            else None
+        )
+    # Pick up any additional lockfiles via glob; sort for determinism.
+    known = set(_LOCKFILE_FILES)
+    for extra in sorted(root.glob("requirements-lock*.txt")):
+        name = extra.name
+        if name in known:
+            continue
+        out[name] = hashlib.sha256(extra.read_bytes()).hexdigest()
+    return out
 
 
 def _python_version() -> str:
@@ -261,6 +364,7 @@ def build_repro_envelope(
         vintage_payload=hasher(vintage_features),
         rng_seeds=dict(rng_seeds or {}),
         extra=dict(extra or {}),
+        lockfile_hashes=_lockfile_hashes_dict(),
     )
 
 
@@ -434,6 +538,25 @@ def verify_run(
     diffs: dict[str, object] = {}
     warnings_list: list[str] = []
     for key, stored_value in stored.items():
+        if key == "lockfile_hashes":
+            # v1.5 AF-9: dict comparison when both sides have the new
+            # field; non-fatal warning when only one side has it
+            # (legacy v1.4 envelopes still carry the scalar
+            # ``lockfile_hash`` only).
+            current_lh = getattr(current_envelope, "lockfile_hashes", {}) or {}
+            stored_lh = stored_value if isinstance(stored_value, dict) else {}
+            if not stored_lh and current_lh:
+                warnings_list.append("lockfile_hashes_legacy_envelope")
+                continue
+            if stored_lh and not current_lh:
+                warnings_list.append("lockfile_hashes_current_envelope_missing")
+                continue
+            if _canonicalise(stored_lh) != _canonicalise(current_lh):
+                diffs["lockfile_hashes"] = {
+                    "stored": stored_lh,
+                    "current": current_lh,
+                }
+            continue
         if key == "rng_seeds":
             if ignore_rng_seeds:
                 continue
