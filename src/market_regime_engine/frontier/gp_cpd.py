@@ -19,11 +19,13 @@ Public API mirrors :class:`market_regime_engine.bocpd_muse.BOCPDMuse`:
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+
+from market_regime_engine.frontier.data_cleaning import NanPolicy, clean_with_policy
 
 
 def _logsumexp(arr: np.ndarray) -> float:
@@ -114,7 +116,19 @@ class GPBOCPD:
     deep_kernel_hidden_dims: tuple[int, ...] = (64, 32)
     deep_kernel_epochs: int = 50
 
-    def score(self, x: pd.DataFrame) -> pd.DataFrame:
+    def score(
+        self,
+        x: pd.DataFrame,
+        *,
+        nan_policy: NanPolicy = NanPolicy.NAN_TO_ZERO,
+        column_policies: Mapping[str, NanPolicy] | None = None,
+    ) -> pd.DataFrame:
+        """Score the GP-BOCPD posterior.
+
+        v1.5 (PR-3 ASK-5/AF-8): ``nan_policy`` defaults to
+        :attr:`NanPolicy.NAN_TO_ZERO` to preserve v1.4 numerics; FI
+        callers may pass :attr:`NanPolicy.NAN_FAILS_PIT_AUDIT`.
+        """
         if x is None or x.empty:
             return pd.DataFrame(
                 columns=[
@@ -125,7 +139,7 @@ class GPBOCPD:
                     "predictive_log_likelihood",
                 ]
             )
-        frame = x.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0).astype(float)
+        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
         arr = frame.to_numpy(float)
         # v1.4: lazily build the deep-kernel adapter when auto-training
         # is requested. We construct on first ``score`` so the fit sees
