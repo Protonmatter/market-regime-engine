@@ -43,3 +43,5 @@ build/
 .ci-artifacts/
 .ci-artifacts-raw/
 *.egg-info/
+*.commit_msg
+.commit_msg
