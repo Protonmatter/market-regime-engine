@@ -14,7 +14,6 @@ synthetic frame must serialise on both backends.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pandas as pd

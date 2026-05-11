@@ -32,7 +32,8 @@ from market_regime_engine.fixed_income.posterior_mode import (
     PosteriorMode,
     SmoothedPosterior,
 )
-from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES, register as _register_fi_schema
+from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES
+from market_regime_engine.fixed_income.schema import register as _register_fi_schema
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
     ExecutionConfidenceRequest,

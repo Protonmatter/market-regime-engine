@@ -11,20 +11,19 @@ from __future__ import annotations
 
 import pytest
 
-from market_regime_engine import storage
-from market_regime_engine.storage import (
-    TableSpec,
-    register_tables,
-    registered_tables,
-)
-
 # Importing the FI package eagerly so the post-FI-registration view is
 # the one the legacy-aggregate tests inspect. PEP 562 module
 # __getattr__ resolves ``storage.SCHEMA_STATEMENTS`` and
 # ``storage._TABLE_PKS`` dynamically; the tests therefore reference
 # the names via the ``storage`` module rather than rebinding them at
 # import time (which would freeze the pre-FI snapshot).
-import market_regime_engine.fixed_income  # noqa: E402, F401
+import market_regime_engine.fixed_income  # noqa: F401
+from market_regime_engine import storage
+from market_regime_engine.storage import (
+    TableSpec,
+    register_tables,
+    registered_tables,
+)
 
 
 def test_register_tables_idempotent_on_name() -> None:
