@@ -90,6 +90,35 @@ class ReproEnvelope:
     is preserved as the canonical ``requirements-lock.txt`` scalar
     hash for v1.4-and-earlier consumers; new consumers should prefer
     the dict for cross-platform reproducibility.
+
+    rng_seeds contract (v1.5+ — REVIEW.md §3.4 Q-3 / Q-11)
+    ------------------------------------------------------
+    Keys are RNG namespace strings. Recommended namespaces:
+
+        "numpy"    → np.random.default_rng(seed)
+        "jax"      → jax.random.PRNGKey(seed)
+        "torch"    → torch.manual_seed(seed)
+        "sklearn"  → sklearn estimators that accept random_state=
+
+    Models using multiple namespaces MUST register all seeds in this
+    dict so :func:`verify_run` can detect a silent change in the RNG
+    source. Concretely the FI surface registers:
+
+    - **execution_confidence (PR-5 deterministic baseline)**: no random
+      state — the logit is closed-form. ``rng_seeds`` is left empty.
+    - **execution_confidence (v1.5.1 calibrated logistic, planned)**:
+      ``{"numpy", "sklearn"}``.
+    - **Bayesian MS-VAR (frontier.bayesian_msvar)**: ``{"numpy", "jax"}``.
+    - **PatchTST (frontier.patchtst_quantile, when enabled)**:
+      ``{"numpy", "torch"}``.
+    - **Hierarchical liquidity (frontier.hierarchical_liquidity)**:
+      ``{"numpy", "jax"}``.
+    - **HMM / BOCPD core (model_runs primary path)**: ``{"numpy"}``.
+
+    Down-stream ``verify_run`` rejects an envelope whose ``rng_seeds``
+    namespaces drift from the registered set on the same code SHA, so
+    operators can detect a quiet seed-namespace migration after the
+    fact.
     """
 
     code_version: str
@@ -311,7 +340,11 @@ def _lockfile_hashes_dict(root: Path | None = None) -> dict[str, str | None]:
     out: dict[str, str | None] = {}
     for name in _LOCKFILE_FILES:
         candidate = root / name
-        out[name] = hashlib.sha256(candidate.read_bytes()).hexdigest() if candidate.exists() else None
+        out[name] = (
+            hashlib.sha256(candidate.read_bytes()).hexdigest()
+            if candidate.exists()
+            else None
+        )
     # Pick up any additional lockfiles via glob; sort for determinism.
     known = set(_LOCKFILE_FILES)
     for extra in sorted(root.glob("requirements-lock*.txt")):
