@@ -261,6 +261,27 @@ def _read(name: str, fn: Callable[[Warehouse], object]) -> object:
 app = FastAPI(title="Market Regime Engine v1", version=__version__)
 
 
+def _mount_fixed_income_router() -> None:
+    """Mount the FI router on the v1 app (v1.5 PR-3).
+
+    The router from PR-1 was deliberately not mounted while every
+    handler still returned ``501 not_yet_implemented``. PR-3 ships
+    the first real handler (``GET /v1/regime_index/latest``); the
+    other 5 endpoints remain 501 stubs until their respective PRs.
+    Mounted via factory + late import so the FI subpackage is not
+    eagerly loaded when an operator only needs the macro routes.
+    """
+    try:
+        from market_regime_engine.fixed_income.api import build_router as _fi_build_router
+
+        app.include_router(_fi_build_router())
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("could not mount fixed_income router: %s", exc)
+
+
+_mount_fixed_income_router()
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "version": __version__}
