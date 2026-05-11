@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
+import threading
 import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -2028,7 +2029,9 @@ class Warehouse:
         )
 
     def read_dealer_response_stats(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start")
+        return self._backend.read_sql(
+            "SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start"
+        )
 
     def write_curve_snapshots(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2048,7 +2051,9 @@ class Warehouse:
         )
 
     def read_cds_curve_snapshots(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor")
+        return self._backend.read_sql(
+            "SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor"
+        )
 
     def write_credit_regime_score(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2091,7 +2096,9 @@ class Warehouse:
         )
 
     def read_liquidity_stress_scores(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id")
+        return self._backend.read_sql(
+            "SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id"
+        )
 
     def write_execution_confidence_prediction(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2118,7 +2125,9 @@ class Warehouse:
         )
 
     def read_execution_confidence_predictions(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id")
+        return self._backend.read_sql(
+            "SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id"
+        )
 
     def write_execution_outcome(self, df: pd.DataFrame) -> int:
         """Persist execution outcomes; enforces ``observed_at > decision_timestamp``.
@@ -2137,7 +2146,8 @@ class Warehouse:
         if bad.any():
             offenders = df.loc[bad, "request_id"].tolist()
             raise ValueError(
-                f"execution_outcomes requires observed_at > decision_timestamp; offending request_ids: {offenders!r}"
+                "execution_outcomes requires observed_at > decision_timestamp; "
+                f"offending request_ids: {offenders!r}"
             )
         return self._write_fi(
             "execution_outcomes",
@@ -2183,7 +2193,9 @@ class Warehouse:
         )
 
     def read_tca_regime_segments(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name")
+        return self._backend.read_sql(
+            "SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name"
+        )
 
     def write_evidence_pack(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2275,7 +2287,9 @@ def read_bond_reference_asof(
     # DuckDB parses it as TIMESTAMP, SQLite compares it as TEXT against
     # the same ISO-8601 strings written by the writer.
     asof_str = asof_ts.isoformat()
-    sql_filter = "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+    sql_filter = (
+        "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+    )
     params: tuple[Any, ...] = (asof_str, asof_str)
     if not include_survivorship_failures:
         sql_filter += " AND default_date IS NULL AND delisted_date IS NULL"
@@ -2414,10 +2428,119 @@ def migrate_warehouse(
     return counts
 
 
+# ---------------------------------------------------------------------------
+# v1.5 PR-5 (ASK-8): Per-process Warehouse singleton
+# ---------------------------------------------------------------------------
+
+# Pre-PR-5 every FastAPI request opened a fresh ``Warehouse(path)`` and closed
+# it in a ``try/finally`` (see ``api_v1._read`` / ``fixed_income.api``). On a
+# busy FI deployment that meant DuckDB tore down and rebuilt its catalog +
+# WAL file ~100 times/second, dominating wall-clock latency. PR-5 caches the
+# Warehouse per-process keyed by resolved path; reads run concurrently via
+# DuckDB's MVCC, and writes serialise via a per-path :class:`threading.RLock`
+# exposed through :func:`pooled_warehouse_write_lock` (DuckDB's Python
+# connection is **not** thread-safe for concurrent ``execute`` calls; the
+# pool provides a recommended write-serialization helper so the caller does
+# not need to roll their own).
+
+_POOLED_WAREHOUSES: dict[str, "Warehouse"] = {}
+_POOLED_LOCKS: dict[str, threading.RLock] = {}
+_POOL_LOCK = threading.RLock()
+
+
+def _resolve_pool_key(path: str | Path) -> str:
+    return str(Path(path).resolve())
+
+
+def get_pooled_warehouse(path: str | Path) -> "Warehouse":
+    """Return the per-process :class:`Warehouse` for ``path``.
+
+    Construction is serialised through ``_POOL_LOCK`` (re-entrant); after
+    that the same instance is returned on every call. Pooled instances are
+    keyed by the resolved absolute path so two callers passing
+    ``"./data/mre.duckdb"`` and ``"data/mre.duckdb"`` from the same cwd get
+    the same instance.
+
+    **DuckDB threading note:** the underlying DuckDB Python connection is
+    not safe for concurrent ``execute`` calls from multiple threads. Wrap
+    writes in :func:`pooled_warehouse_write_lock` (or hold the
+    :class:`threading.RLock` returned by it) when sharing the pooled
+    warehouse across threads — the lock is re-entrant so nested writers
+    inside the same thread do not deadlock.
+    """
+    path_str = _resolve_pool_key(path)
+    with _POOL_LOCK:
+        existing = _POOLED_WAREHOUSES.get(path_str)
+        if existing is None:
+            existing = Warehouse(path_str)
+            _POOLED_WAREHOUSES[path_str] = existing
+            _POOLED_LOCKS[path_str] = threading.RLock()
+        return existing
+
+
+@contextlib.contextmanager
+def pooled_warehouse_write_lock(path: str | Path):  # type: ignore[no-untyped-def]
+    """Context manager that holds the per-warehouse write lock.
+
+    Recommended usage::
+
+        wh = get_pooled_warehouse(path)
+        with pooled_warehouse_write_lock(path):
+            wh.write_credit_regime_score(df)
+
+    The lock is :class:`threading.RLock` so nested ``with`` blocks inside
+    the same thread do not deadlock; concurrent writers from different
+    threads serialise around the lock.
+    """
+    path_str = _resolve_pool_key(path)
+    with _POOL_LOCK:
+        lock = _POOLED_LOCKS.get(path_str)
+        if lock is None:
+            # Ensure the warehouse + lock pair are minted together so a
+            # caller can grab the lock before opening the warehouse.
+            get_pooled_warehouse(path)
+            lock = _POOLED_LOCKS[path_str]
+    with lock:
+        yield
+
+
+def close_pooled_warehouses() -> None:
+    """Close every pooled warehouse and clear the pool.
+
+    Intended for FastAPI shutdown handlers and test teardown. Idempotent;
+    on individual close failure the function still clears the pool so a
+    partial failure does not leak references, then re-raises the
+    aggregated error.
+    """
+    errors: list[Exception] = []
+    with _POOL_LOCK:
+        for wh in list(_POOLED_WAREHOUSES.values()):
+            try:
+                wh.close()
+            except Exception as exc:  # pragma: no cover - defensive
+                errors.append(exc)
+        _POOLED_WAREHOUSES.clear()
+        _POOLED_LOCKS.clear()
+    if errors:
+        raise RuntimeError(
+            f"close_pooled_warehouses encountered {len(errors)} errors: {errors!r}"
+        )
+
+
+def pooled_warehouse_paths() -> tuple[str, ...]:
+    """Inspect the current pool — used by tests for the singleton rail."""
+    with _POOL_LOCK:
+        return tuple(_POOLED_WAREHOUSES)
+
+
 __all__ = [
     "TableSpec",
     "Warehouse",
+    "close_pooled_warehouses",
+    "get_pooled_warehouse",
     "migrate_warehouse",
+    "pooled_warehouse_paths",
+    "pooled_warehouse_write_lock",
     "read_bond_reference_asof",
     "read_bond_reference_history",
     "register_tables",
