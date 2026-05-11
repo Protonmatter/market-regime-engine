@@ -573,12 +573,36 @@ def _parse_json_field(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _normalize_timestamp_for_roundtrip(value: Any) -> str:
+    """Return the timestamp in ISO-8601 ``Z`` form so a DuckDB roundtrip
+    is bit-identical to the signed canonical bytestream.
+
+    DuckDB's TIMESTAMP type drops the ``Z`` suffix and uses a space
+    separator on read, which would otherwise change the canonical
+    JSON and break HMAC verification. We re-emit the same shape that
+    :func:`build_evidence_pack` produces.
+    """
+    if value is None:
+        return ""
+    try:
+        ts = pd.Timestamp(value)
+    except Exception:
+        return str(value)
+    if pd.isna(ts):
+        return ""
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _row_to_pack(row: pd.Series) -> FixedIncomeEvidencePack:
     return FixedIncomeEvidencePack(
         model_run_id=str(row["model_run_id"]),
         component_name=str(row["component_name"]),
         model_version=str(row["model_version"]),
-        timestamp=str(row["timestamp"]),
+        timestamp=_normalize_timestamp_for_roundtrip(row["timestamp"]),
         code_sha=(None if pd.isna(row.get("code_sha")) else str(row["code_sha"])),
         model_hash=str(row["model_hash"]),
         input_features_hash=str(row["input_features_hash"]),

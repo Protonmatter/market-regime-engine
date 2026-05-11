@@ -358,6 +358,22 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Market Regime Engine v1", version=__version__, lifespan=_lifespan)
 
 
+# v1.5 PR-7 §I: install correlation-id middleware + log filter so every
+# request_id (X-Request-ID or generated UUID4) propagates through every
+# log line emitted in the request handler. Log lines pick up the id
+# automatically via the contextvars-backed CorrelationIdLogFilter.
+try:
+    from market_regime_engine.fixed_income.correlation import (
+        CorrelationIdMiddleware,
+        install_correlation_id_log_filter,
+    )
+
+    app.add_middleware(CorrelationIdMiddleware)
+    install_correlation_id_log_filter()
+except Exception as exc:  # pragma: no cover - defensive
+    log.warning("could not install correlation-id middleware: %s", exc)
+
+
 def _mount_fixed_income_router() -> None:
     """Mount the FI router on the v1 app (v1.5 PR-3).
 
@@ -373,8 +389,6 @@ def _mount_fixed_income_router() -> None:
     try:
         from market_regime_engine.fixed_income.api import (
             _build_rate_limiter,
-        )
-        from market_regime_engine.fixed_income.api import (
             build_router as _fi_build_router,
         )
 
@@ -391,7 +405,9 @@ def _mount_fixed_income_router() -> None:
 
                 app.state.limiter = limiter
 
-                async def _rate_limit_handler(request: _RLRequest, exc: RateLimitExceeded) -> _RLJSONResponse:
+                async def _rate_limit_handler(
+                    request: _RLRequest, exc: RateLimitExceeded
+                ) -> _RLJSONResponse:
                     return _RLJSONResponse(
                         {"detail": f"rate limit exceeded: {exc.detail}"},
                         status_code=429,

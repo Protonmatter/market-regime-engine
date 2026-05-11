@@ -183,21 +183,58 @@ def credit_regime_output_to_dict(output: CreditRegimeOutput) -> dict[str, Any]:
     Drivers are exposed as a list (not a tuple) so ``json.dumps`` does
     not need ``default=str``. Mirrors the AGENT.md §6.1 output example
     exactly.
+
+    PR-7 §N (PR-13): the response also exposes
+    ``metadata.signal_age_seconds`` (computed against the current UTC
+    clock) so Auto-X consumers can check the SLA without parsing the
+    timestamp twice.
     """
     out = asdict(output)
     out["drivers"] = list(output.drivers)
+    out.setdefault("metadata", {})
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
     return out
+
+
+def _signal_age_seconds_now(ts: str | None) -> float:
+    """Return seconds between ``ts`` (ISO-8601) and now (UTC).
+
+    Returns ``float('inf')`` when ``ts`` is ``None`` so consumers that
+    rely on the SLA gate (≤ MRE_FI_MAX_SIGNAL_STALENESS_SEC) trip
+    automatically on a missing timestamp.
+    """
+    if ts is None:
+        return float("inf")
+    try:
+        import pandas as pd
+
+        parsed = pd.Timestamp(ts)
+    except Exception:
+        return float("inf")
+    if parsed.tzinfo is None:
+        parsed = parsed.tz_localize("UTC")
+    else:
+        parsed = parsed.tz_convert("UTC")
+    now = pd.Timestamp.now(tz="UTC")
+    return float((now - parsed).total_seconds())
 
 
 def liquidity_stress_output_to_dict(output: LiquidityStressOutput) -> dict[str, Any]:
     """JSON-serialisable dict form of :class:`LiquidityStressOutput`.
 
     Re-export of :func:`fixed_income.liquidity_stress.output_to_dict`
-    on the API namespace so FastAPI handlers and downstream consumers
-    have a single canonical converter without crossing module
-    boundaries.
+    on the API namespace; PR-7 §N enriches the dict with
+    ``metadata.signal_age_seconds`` so Auto-X consumers see the same
+    staleness signal across all FI endpoints.
     """
-    return liquidity_output_to_dict(output)
+    out = liquidity_output_to_dict(output)
+    out.setdefault("metadata", {})
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
+    return out
 
 
 def _resolve_db_path() -> str:
@@ -211,6 +248,97 @@ def _resolve_db_path() -> str:
     """
     explicit = os.environ.get("MRE_DB_PATH")
     return explicit if explicit else "data/mre.duckdb"
+
+
+# ---------------------------------------------------------------------------
+# v1.5 PR-7 §L — Versioned cache key (REVIEW.md §3.6 PR-8)
+# ---------------------------------------------------------------------------
+#
+# The FI endpoints originally read fresh from DuckDB on every request.
+# Per plan §7 §L: include the latest data timestamp in the cache key so
+# a fresh score automatically invalidates the cache without waiting
+# for TTL. Cache is per-process (no Redis fan-out) — the cross-worker
+# OTel emit handles aggregation; this cache is purely a read-path
+# accelerator inside one worker.
+
+import threading as _fi_threading
+
+_FI_CACHE_LOCK = _fi_threading.RLock()
+_FI_CACHE: dict[tuple[str, str], tuple[str, Any]] = {}
+# (endpoint, warehouse_id) -> (latest_ts, payload)
+
+
+def _warehouse_identity(warehouse: Any) -> str:
+    """Return a stable identity string for the cache key.
+
+    Production: uses the resolved DuckDB / SQLite path so two FastAPI
+    workers pointing at the same DB share the cache key. Tests that
+    spawn ephemeral ``tmp_path`` warehouses get distinct keys
+    automatically; the per-test fixture isolation is preserved.
+    """
+    path = getattr(warehouse, "path", None)
+    if path is not None:
+        return str(path)
+    return f"id:{id(warehouse)}"
+
+
+def _fi_cache_get_or_compute(
+    *,
+    endpoint: str,
+    warehouse: Any,
+    latest_ts: str | None,
+    compute: Callable[[], Any],
+) -> Any:
+    """Return cached payload when latest_ts matches; else compute + cache.
+
+    ``latest_ts`` is the canonical version key (e.g. the most recent
+    ``credit_regime_scores.timestamp`` ISO-8601 string). When it
+    advances, the previous cached entry is dropped — a fresh score
+    invalidates the cache instantly per REVIEW.md §3.6 PR-8.
+    """
+    if latest_ts is None:
+        # No data: always recompute (cheap for empty-warehouse path).
+        return compute()
+    cache_key = (endpoint, _warehouse_identity(warehouse))
+    with _FI_CACHE_LOCK:
+        cached = _FI_CACHE.get(cache_key)
+        if cached is not None and cached[0] == latest_ts:
+            return cached[1]
+    value = compute()
+    with _FI_CACHE_LOCK:
+        _FI_CACHE[cache_key] = (latest_ts, value)
+    return value
+
+
+def reset_fi_cache() -> None:
+    """Drop every FI cache entry (test helper / operator handle)."""
+    with _FI_CACHE_LOCK:
+        _FI_CACHE.clear()
+
+
+def _latest_credit_regime_timestamp(warehouse: Any) -> str | None:
+    df = warehouse.read_credit_regime_scores()
+    if df is None or df.empty:
+        return None
+    return str(df.iloc[-1]["timestamp"])
+
+
+def _latest_liquidity_timestamp(
+    warehouse: Any,
+    *,
+    scope_type: str | None = None,
+    scope_id: str | None = None,
+) -> str | None:
+    df = warehouse.read_liquidity_stress_scores()
+    if df is None or df.empty:
+        return None
+    if scope_type is not None:
+        df = df[df["scope_type"] == scope_type]
+    if scope_id is not None:
+        df = df[df["scope_id"] == scope_id]
+    if df.empty:
+        return None
+    return str(df.iloc[-1]["timestamp"])
 
 
 def _warehouse_factory_default() -> Any:
@@ -306,11 +434,35 @@ def build_router(
         - Rows with ``release_gate=false`` are returned with that flag
           set so consumers can fail closed downstream (AGENT.md
           non-negotiable 8).
+
+        v1.5 PR-7 §L: the response is cached per-process keyed on the
+        latest ``credit_regime_scores.timestamp`` so a fresh score
+        automatically invalidates the cache.
         """
         wh = factory()
         try:
             try:
-                latest = latest_credit_regime_score(wh)
+                latest_ts = _latest_credit_regime_timestamp(wh)
+                if latest_ts is None:
+                    return JSONResponse(
+                        {"detail": "no_data", "release_gate": False},
+                        status_code=_HTTP_SERVICE_UNAVAILABLE,
+                    )
+
+                def _compute() -> dict[str, Any]:
+                    out = latest_credit_regime_score(wh)
+                    if out is None:
+                        return {"detail": "no_data", "release_gate": False, "_status": 503}
+                    payload = credit_regime_output_to_dict(out)
+                    payload["_status"] = 200
+                    return payload
+
+                payload = _fi_cache_get_or_compute(
+                    endpoint="regime_index/latest",
+                    warehouse=wh,
+                    latest_ts=latest_ts,
+                    compute=_compute,
+                )
             except Exception as exc:
                 log.exception("regime_index/latest read failed: %s", exc)
                 raise HTTPException(
@@ -321,12 +473,8 @@ def build_router(
             close = getattr(wh, "close", None)
             if callable(close):
                 close()
-        if latest is None:
-            return JSONResponse(
-                {"detail": "no_data", "release_gate": False},
-                status_code=_HTTP_SERVICE_UNAVAILABLE,
-            )
-        return JSONResponse(credit_regime_output_to_dict(latest), status_code=200)
+        status = int(payload.pop("_status", 200))
+        return JSONResponse(payload, status_code=status)
 
     @router.get("/liquidity_index/latest")
     async def liquidity_index_latest() -> JSONResponse:
@@ -337,11 +485,34 @@ def build_router(
           closed downstream per AGENT.md non-negotiable 8).
         - **503** ``{"detail": "no_data", "release_gate": false}`` when
           the warehouse has no liquidity rows yet.
+
+        v1.5 PR-7 §L: response cached per-process keyed on the latest
+        ``liquidity_stress_scores.timestamp``.
         """
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(wh)
+                latest_ts = _latest_liquidity_timestamp(wh)
+                if latest_ts is None:
+                    return JSONResponse(
+                        {"detail": "no_data", "release_gate": False},
+                        status_code=_HTTP_SERVICE_UNAVAILABLE,
+                    )
+
+                def _compute() -> dict[str, Any]:
+                    out = latest_liquidity_stress_score(wh)
+                    if out is None:
+                        return {"detail": "no_data", "release_gate": False, "_status": 503}
+                    payload = liquidity_stress_output_to_dict(out)
+                    payload["_status"] = 200
+                    return payload
+
+                payload = _fi_cache_get_or_compute(
+                    endpoint="liquidity_index/latest",
+                    warehouse=wh,
+                    latest_ts=latest_ts,
+                    compute=_compute,
+                )
             except Exception as exc:
                 log.exception("liquidity_index/latest read failed: %s", exc)
                 raise HTTPException(
@@ -352,12 +523,8 @@ def build_router(
             close = getattr(wh, "close", None)
             if callable(close):
                 close()
-        if latest is None:
-            return JSONResponse(
-                {"detail": "no_data", "release_gate": False},
-                status_code=_HTTP_SERVICE_UNAVAILABLE,
-            )
-        return JSONResponse(liquidity_stress_output_to_dict(latest), status_code=200)
+        status = int(payload.pop("_status", 200))
+        return JSONResponse(payload, status_code=status)
 
     @router.get("/liquidity_index/{scope_type}/{scope_id}")
     async def liquidity_index_scoped(scope_type: str, scope_id: str) -> JSONResponse:
