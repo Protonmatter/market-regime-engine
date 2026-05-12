@@ -383,6 +383,23 @@ except Exception as exc:  # pragma: no cover - defensive
     log.warning("could not install correlation-id middleware: %s", exc)
 
 
+# v1.5 PR-8 (Tier-2 fix B-Ask-1, REVIEW.md): install the body-size
+# ASGI middleware for ``/v1/execution_confidence`` so the 32 KB cap is
+# enforced BEFORE the route handler runs. Pre-fix the cap lived inside
+# the handler and was bypassed by chunked Transfer-Encoding requests
+# (no Content-Length means the header check is a no-op). The ASGI
+# middleware accumulates body bytes on ``receive`` and emits HTTP 413
+# directly once the running total exceeds the cap.
+try:
+    from market_regime_engine.fixed_income.middleware import (
+        install_max_body_size_middleware,
+    )
+
+    install_max_body_size_middleware(app)
+except Exception as exc:  # pragma: no cover - defensive
+    log.warning("could not install body-size middleware: %s", exc)
+
+
 def _mount_fixed_income_router() -> None:
     """Mount the FI router on the v1 app (v1.5 PR-3).
 

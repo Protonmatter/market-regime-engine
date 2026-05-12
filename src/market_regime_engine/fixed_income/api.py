@@ -633,8 +633,13 @@ def build_router(
           otherwise (including stale / fail-closed payloads — the consumer
           fails closed downstream on ``release_gate=false``).
         """
-        # Body size cap — re-check post-parse so a Pydantic-tolerated body
-        # still gets rejected if it crossed the cap on the wire.
+        # v1.5 PR-8 (Tier-2 fix B-Ask-1): the authoritative body-size
+        # cap is enforced by ``MaxBodySizeMiddleware`` in
+        # ``api_v1.app`` BEFORE this handler runs, so chunked
+        # transfer-encoding cannot bypass it. The in-handler
+        # Content-Length re-check below is kept as defense in depth
+        # for direct router mounts (test rigs that mount build_router
+        # on a fresh FastAPI without our middleware).
         cl_header = request.headers.get("content-length")
         if cl_header is not None:
             try:
