@@ -172,7 +172,11 @@ class PurgedWalkForward:
         # v1.5 PR-5 (AF-11): explicit min_train_after_purge takes precedence;
         # fall back to the legacy ``min_train // 2`` rail when None so the
         # pre-PR-5 callers keep their fold counts bit-for-bit.
-        min_train_after = self.min_train_after_purge if self.min_train_after_purge is not None else self.min_train // 2
+        min_train_after = (
+            self.min_train_after_purge
+            if self.min_train_after_purge is not None
+            else self.min_train // 2
+        )
         fold = 0
         i = self.min_train
         while i < n:
@@ -185,7 +189,8 @@ class PurgedWalkForward:
             train_lower = 0 if self.expanding else max(0, train_upper - self.min_train)
             if train_upper - train_lower < min_train_after:
                 logger.info(
-                    "walk_forward.skip_fold: insufficient_train_after_purge fold=%d size=%d threshold=%d",
+                    "walk_forward.skip_fold: insufficient_train_after_purge "
+                    "fold=%d size=%d threshold=%d",
                     fold,
                     train_upper - train_lower,
                     min_train_after,
@@ -244,10 +249,23 @@ class CombinatorialPurgedCV:
         the v1.3 path; the 50-seed regression test in
         ``tests/test_walk_forward_purge_searchsorted.py`` pins this.
 
-        The unified window predicate is
-        ``tau ∈ [t - horizon, t + embargo + 1)``, which is the union of the
-        legacy purge predicate ``tau ∈ [t+1, t+horizon]``, embargo
-        ``tau ∈ [t-embargo, t-1]``, and ``tau == t``.
+        The unified window predicate is — for each test point ``t`` —
+        ``tau ∈ [t - embargo, t + horizon + 1)``, which is the union of:
+
+        - the legacy purge predicate ``tau ∈ [t+1, t+horizon]``
+          (train rows in the "future after test" within the forecast
+          horizon);
+        - the legacy embargo predicate ``tau ∈ [t-embargo, t-1]``
+          (train rows in the embargo window immediately before test);
+        - the same-index conflict ``tau == t``.
+
+        v1.5 PR-8 (Tier-4 FLAG B-Auto-2, REVIEW.md): the prior
+        docstring had ``[t - horizon, t + embargo + 1)`` with purge
+        and embargo swapped. The implementation
+        (:func:`purge_and_embargo_searchsorted`,
+        ``test_sorted[lo] == train_idx - embargo``,
+        ``test_sorted[hi] == train_idx + horizon + 1``) was always
+        correct; only the docstring lied.
         """
         return purge_and_embargo_searchsorted(
             train_idx,
@@ -319,7 +337,9 @@ def _model_factory_default(
     if model_class is not None:
         kwargs = dict(model_kwargs or {})
 
-        def _factory_class(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame) -> np.ndarray:
+        def _factory_class(
+            X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame
+        ) -> np.ndarray:
             model = model_class(**kwargs)
             model.fit(X_train, y_train)
             if hasattr(model, "predict_proba"):
@@ -339,7 +359,9 @@ def _model_factory_default(
     if predict_fn is None:
         raise ValueError("either predict_fn or model_class must be provided")
 
-    def _factory_fn(X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame) -> np.ndarray:
+    def _factory_fn(
+        X_train: pd.DataFrame, y_train: pd.Series, X_test: pd.DataFrame
+    ) -> np.ndarray:
         return predict_fn(X_train, y_train, X_test)
 
     return _factory_fn
