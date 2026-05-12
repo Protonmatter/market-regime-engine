@@ -29,16 +29,22 @@ import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
 
 from market_regime_engine import __version__
 from market_regime_engine.evidence_common import (
     canonical_json as _shared_canonical_json,
+)
+from market_regime_engine.evidence_common import (
     git_dirty as _shared_git_dirty,
+)
+from market_regime_engine.evidence_common import (
     git_revision as _shared_git_revision,
+)
+from market_regime_engine.evidence_common import (
     hmac_sha256_hex,
 )
 from market_regime_engine.production import is_production_env

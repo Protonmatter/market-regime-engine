@@ -185,7 +185,7 @@ def export_governed_signals(
 
     return GovernedSignalExport(
         path=str(out),
-        rows=int(len(signals)),
+        rows=len(signals),
         format=fmt,
         columns=tuple(signals.columns),
     )
