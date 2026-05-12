@@ -465,10 +465,10 @@ def deflated_sharpe(
     kurt = float(kurt)
 
     # Non-normality adjustment per BLP eq. (5).
-    # `_sample_skew_kurt` returns *excess* kurtosis (γ_4 − 3), so BLP's
-    # Pearson-kurtosis form `(γ_4 − 1)/4` becomes `(γ_4_excess + 2)/4`.
+    # `_sample_skew_kurt` returns *excess* kurtosis (gamma_4 - 3), so BLP's
+    # Pearson-kurtosis form `(gamma_4 - 1)/4` becomes `(gamma_4_excess + 2)/4`.
     # For Gaussian iid returns this collapses to `var_term = 1 + 0.5·SR²`.
-    # Var(SR_hat) ≈ (1 − skew·SR + ((kurt + 2)/4)·SR²) / (n − 1).
+    # Var(SR_hat) ≈ (1 - skew·SR + ((kurt + 2)/4)·SR²) / (n - 1).
     var_term = 1.0 - skew * sharpe_hat + (kurt + 2.0) / 4.0 * sharpe_hat * sharpe_hat
     var_term = max(var_term, 1e-12)
     denom = math.sqrt(var_term / max(n - 1, 1))
@@ -476,7 +476,7 @@ def deflated_sharpe(
     # Deflated threshold per BLP eq. (9):
     #     SR* = sharpe_target + sqrt(Var(SR_hat)) · E[max_z(N)]
     # i.e. the multiple-testing inflation scales with the *moment-corrected*
-    # stderr, not with `1/sqrt(T−1)` alone. The v1.5.1 form dropped the
+    # stderr, not with `1/sqrt(T-1)` alone. The v1.5.1 form dropped the
     # `sqrt(var_term)` factor — the v1.5.2 A3 fix re-introduces it so the
     # threshold tracks the same non-normality penalty as the denominator
     # below.
@@ -688,7 +688,7 @@ def minimum_track_record_length(
         return float("inf")
     z = _normal_ppf(confidence)
     # BLP eq. (5) variance term using the excess-kurtosis convention
-    # (Gaussian γ_4_excess = 0). Equivalent to `(γ_4 − 1)/4` when γ_4 is
+    # (Gaussian gamma_4_excess = 0). Equivalent to `(gamma_4 - 1)/4` when gamma_4 is
     # the Pearson (full) kurtosis. See `deflated_sharpe` for derivation.
     var_term = 1.0 - skew * sharpe_observed + (excess_kurt + 2.0) / 4.0 * sharpe_observed * sharpe_observed
     var_term = max(var_term, 1e-12)
