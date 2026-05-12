@@ -6,7 +6,7 @@ import threading
 import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -828,7 +828,7 @@ class _Backend(Protocol):
     ) -> None: ...
     def execute(self, sql: str, params: tuple = ()) -> None: ...
     def commit(self) -> None: ...
-    def read_sql(self, sql: str) -> pd.DataFrame: ...
+    def read_sql(self, sql: str, params: tuple | list | None = None) -> pd.DataFrame: ...
     def close(self) -> None: ...
     def column_names(self, table: str) -> set[str]: ...
 
@@ -930,8 +930,10 @@ class _SqliteBackend:
     def commit(self) -> None:
         self.conn.commit()
 
-    def read_sql(self, sql: str) -> pd.DataFrame:
-        return pd.read_sql_query(sql, self.conn)
+    def read_sql(self, sql: str, params: tuple | list | None = None) -> pd.DataFrame:
+        if params is None:
+            return pd.read_sql_query(sql, self.conn)
+        return pd.read_sql_query(sql, self.conn, params=tuple(params))
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
@@ -1102,8 +1104,10 @@ class _DuckDBBackend:
         with contextlib.suppress(Exception):
             self.conn.commit()
 
-    def read_sql(self, sql: str) -> pd.DataFrame:
-        return self.conn.execute(sql).fetchdf()
+    def read_sql(self, sql: str, params: tuple | list | None = None) -> pd.DataFrame:
+        if params is None:
+            return self.conn.execute(sql).fetchdf()
+        return self.conn.execute(sql, list(params)).fetchdf()
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
@@ -1122,6 +1126,46 @@ class _DuckDBBackend:
 # ---------------------------------------------------------------------------
 # Warehouse facade
 # ---------------------------------------------------------------------------
+
+
+def _normalise_asof_for_sql(value: Any) -> str | None:
+    """Coerce ``value`` (``None``, ``datetime``, ``pd.Timestamp``, str) → ISO-8601.
+
+    v1.5.1 (PR-9 FIX 2): the new indexed-SQL ``latest_*`` reads on the
+    :class:`Warehouse` use parameter binding for the ``asof`` cap. SQLite
+    and DuckDB both accept an ISO-8601 string compared against the
+    ``timestamp`` column lexicographically (matching the table writers
+    which emit ISO-8601 ``Z`` form), so we route every input through a
+    single normaliser to keep the SQL deterministic.
+
+    Returns ``None`` when ``value`` is ``None`` (meaning "no upper bound").
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        ts = pd.Timestamp(value)
+    except Exception:
+        return str(value)
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _is_duckdb_backend(backend: Any) -> bool:
+    """True when the backend is the DuckDB facade.
+
+    v1.5.1 (PR-9 FIX 2): used by
+    :meth:`Warehouse.enrich_execution_requests_asof` to gate the
+    DuckDB-specific ``ASOF LEFT JOIN`` path; SQLite callers stay on
+    the existing pandas merge_asof.
+    """
+    return backend.__class__.__name__ == "_DuckDBBackend"
 
 
 def _select_backend(path: Path, backend: BackendName) -> _Backend:
@@ -2029,7 +2073,9 @@ class Warehouse:
         )
 
     def read_dealer_response_stats(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start")
+        return self._backend.read_sql(
+            "SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start"
+        )
 
     def write_curve_snapshots(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2049,7 +2095,9 @@ class Warehouse:
         )
 
     def read_cds_curve_snapshots(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor")
+        return self._backend.read_sql(
+            "SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor"
+        )
 
     def write_credit_regime_score(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2072,6 +2120,43 @@ class Warehouse:
     def read_credit_regime_scores(self) -> pd.DataFrame:
         return self._backend.read_sql("SELECT * FROM credit_regime_scores ORDER BY timestamp, model_run_id")
 
+    def latest_credit_regime_score(
+        self, asof: datetime | pd.Timestamp | str | None = None
+    ) -> pd.DataFrame | None:
+        """Return at most one row from ``credit_regime_scores`` as of ``asof``.
+
+        v1.5.1 (PR-9 FIX 2): mirrors the indexed SQL fast path that
+        :func:`latest_credit_regime_score_identity` already uses, but
+        returns the full row so the FI scorer can build a
+        :class:`CreditRegimeOutput` without a follow-up read. Falls back
+        to ``None`` (caller decides 503 vs fail-closed) when the table
+        is empty for the ``asof`` slice.
+
+        Implementation uses a parameterised ``SELECT ... WHERE
+        timestamp <= ? ORDER BY timestamp DESC, model_run_id DESC LIMIT
+        1`` against the backend; SQLite + DuckDB both honour the
+        primary-key index on ``(model_run_id, timestamp)`` for the
+        sort.
+        """
+        asof_iso = _normalise_asof_for_sql(asof)
+        if asof_iso is None:
+            df = self._backend.read_sql(
+                "SELECT * FROM credit_regime_scores "
+                "ORDER BY timestamp DESC, model_run_id DESC "
+                "LIMIT 1"
+            )
+        else:
+            df = self._backend.read_sql(
+                "SELECT * FROM credit_regime_scores "
+                "WHERE timestamp <= ? "
+                "ORDER BY timestamp DESC, model_run_id DESC "
+                "LIMIT 1",
+                params=(asof_iso,),
+            )
+        if df is None or df.empty:
+            return None
+        return df
+
     def write_liquidity_stress_score(self, df: pd.DataFrame) -> int:
         return self._write_fi(
             "liquidity_stress_scores",
@@ -2092,7 +2177,189 @@ class Warehouse:
         )
 
     def read_liquidity_stress_scores(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id")
+        return self._backend.read_sql(
+            "SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id"
+        )
+
+    def latest_liquidity_stress_score(
+        self,
+        *,
+        scope_type: str | None = None,
+        scope_id: str | None = None,
+        asof: datetime | pd.Timestamp | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Return at most one row from ``liquidity_stress_scores``.
+
+        v1.5.1 (PR-9 FIX 2): the existing
+        :func:`fixed_income.liquidity_stress.latest_liquidity_stress_score`
+        loaded the entire ``liquidity_stress_scores`` table and filtered
+        in pandas; this path issues a parameterised SQL ``LIMIT 1``
+        instead, hitting ``idx_liquidity_scope_ts`` when ``scope_type``
+        / ``scope_id`` are pinned and the primary key otherwise. Falls
+        back to ``None`` when no matching row exists.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if scope_type is not None:
+            clauses.append("scope_type = ?")
+            params.append(str(scope_type))
+        if scope_id is not None:
+            clauses.append("scope_id = ?")
+            params.append(str(scope_id))
+        asof_iso = _normalise_asof_for_sql(asof)
+        if asof_iso is not None:
+            clauses.append("timestamp <= ?")
+            params.append(asof_iso)
+        where_sql = ""
+        if clauses:
+            where_sql = " WHERE " + " AND ".join(clauses)
+        sql = (
+            "SELECT * FROM liquidity_stress_scores"
+            + where_sql
+            + " ORDER BY timestamp DESC, scope_type DESC, scope_id DESC LIMIT 1"
+        )
+        df = self._backend.read_sql(sql, params=tuple(params) if params else None)
+        if df is None or df.empty:
+            return None
+        return df
+
+    def latest_execution_confidence_prediction(
+        self,
+        *,
+        request_id: str | None = None,
+        asof: datetime | pd.Timestamp | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Return at most one row from ``execution_confidence_predictions``.
+
+        v1.5.1 (PR-9 FIX 2): bond-level execution-confidence reads
+        (``bond_level_execution_predictions`` workflow) previously
+        scanned the full table. Parameterised SQL with the indexed
+        ``timestamp`` column gives O(log N) latency per request.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if request_id is not None:
+            clauses.append("request_id = ?")
+            params.append(str(request_id))
+        asof_iso = _normalise_asof_for_sql(asof)
+        if asof_iso is not None:
+            clauses.append("timestamp <= ?")
+            params.append(asof_iso)
+        where_sql = ""
+        if clauses:
+            where_sql = " WHERE " + " AND ".join(clauses)
+        sql = (
+            "SELECT * FROM execution_confidence_predictions"
+            + where_sql
+            + " ORDER BY timestamp DESC, request_id DESC LIMIT 1"
+        )
+        df = self._backend.read_sql(sql, params=tuple(params) if params else None)
+        if df is None or df.empty:
+            return None
+        return df
+
+    def latest_tca_regime_segment(
+        self,
+        *,
+        regime_label: str | None = None,
+        liquidity_label: str | None = None,
+        asof: datetime | pd.Timestamp | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Return at most one row from ``tca_regime_segments``.
+
+        v1.5.1 (PR-9 FIX 2): mirrors the credit / liquidity fast paths
+        so any consumer that only needs the latest row pays O(log N)
+        rather than O(N).
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if regime_label is not None:
+            clauses.append("regime_label = ?")
+            params.append(str(regime_label))
+        if liquidity_label is not None:
+            clauses.append("liquidity_label = ?")
+            params.append(str(liquidity_label))
+        asof_iso = _normalise_asof_for_sql(asof)
+        if asof_iso is not None:
+            clauses.append("timestamp <= ?")
+            params.append(asof_iso)
+        where_sql = ""
+        if clauses:
+            where_sql = " WHERE " + " AND ".join(clauses)
+        sql = (
+            "SELECT * FROM tca_regime_segments"
+            + where_sql
+            + " ORDER BY timestamp DESC, model_run_id DESC LIMIT 1"
+        )
+        df = self._backend.read_sql(sql, params=tuple(params) if params else None)
+        if df is None or df.empty:
+            return None
+        return df
+
+    def enrich_execution_requests_asof(
+        self, execution_requests: pd.DataFrame
+    ) -> pd.DataFrame:
+        """ASOF-join ``execution_requests`` to credit + liquidity scores.
+
+        v1.5.1 (PR-9 FIX 2): on a DuckDB backend this rewrites the
+        traditional pandas merge_asof into a single SQL statement that
+        uses DuckDB's native ``ASOF LEFT JOIN``. The execution-request
+        frame is registered as a temporary view; the join produces one
+        row per input request annotated with the latest
+        ``credit_regime_scores.regime_label`` and per-CUSIP
+        ``liquidity_stress_scores.liquidity_label`` available at the
+        request timestamp.
+
+        On a SQLite backend the helper returns ``execution_requests``
+        unchanged so the caller falls back to its existing pandas-based
+        enrichment (DuckDB-only optimisation; SQLite stays on the
+        existing path).
+
+        ``execution_requests`` MUST carry ``timestamp`` (ISO-8601 string
+        or :class:`pandas.Timestamp`) and ``cusip`` columns. Any
+        additional columns are passed through verbatim.
+        """
+        if execution_requests is None or execution_requests.empty:
+            return execution_requests.copy() if execution_requests is not None else execution_requests
+        if not _is_duckdb_backend(self._backend):
+            return execution_requests.copy()
+        # DuckDB ASOF LEFT JOIN path. Register the input frame as a view
+        # so the SQL statement is self-contained.
+        try:  # pragma: no cover - exercised when duckdb is installed
+            backend = self._backend
+            conn = backend.conn  # type: ignore[attr-defined]
+            frame = execution_requests.copy()
+            # Ensure types DuckDB can ASOF-join: timestamp must be a
+            # TIMESTAMP / VARCHAR sortable column.
+            frame["timestamp"] = pd.to_datetime(
+                frame["timestamp"], utc=True, errors="coerce"
+            )
+            conn.register("execution_requests_asof_input", frame)
+            try:
+                joined = conn.execute(
+                    """
+                    SELECT
+                        e.*,
+                        c.regime_label  AS regime_label,
+                        l.liquidity_label AS liquidity_label
+                    FROM execution_requests_asof_input AS e
+                    ASOF LEFT JOIN credit_regime_scores AS c
+                        ON e.timestamp >= c.timestamp
+                    ASOF LEFT JOIN liquidity_stress_scores AS l
+                        ON e.timestamp >= l.timestamp
+                       AND e.cusip = l.scope_id
+                       AND l.scope_type = 'cusip'
+                    """
+                ).fetchdf()
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.unregister("execution_requests_asof_input")
+        except Exception:
+            # Defensive fallback: any DuckDB error degrades to the
+            # caller-side path so a malformed input or unexpected
+            # schema does not bring down execution-confidence scoring.
+            return execution_requests.copy()
+        return joined
 
     def write_execution_confidence_prediction(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2119,7 +2386,9 @@ class Warehouse:
         )
 
     def read_execution_confidence_predictions(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id")
+        return self._backend.read_sql(
+            "SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id"
+        )
 
     def write_execution_outcome(self, df: pd.DataFrame) -> int:
         """Persist execution outcomes; enforces ``observed_at > decision_timestamp``.
@@ -2138,7 +2407,8 @@ class Warehouse:
         if bad.any():
             offenders = df.loc[bad, "request_id"].tolist()
             raise ValueError(
-                f"execution_outcomes requires observed_at > decision_timestamp; offending request_ids: {offenders!r}"
+                "execution_outcomes requires observed_at > decision_timestamp; "
+                f"offending request_ids: {offenders!r}"
             )
         return self._write_fi(
             "execution_outcomes",
@@ -2184,7 +2454,9 @@ class Warehouse:
         )
 
     def read_tca_regime_segments(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name")
+        return self._backend.read_sql(
+            "SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name"
+        )
 
     def write_evidence_pack(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2276,7 +2548,9 @@ def read_bond_reference_asof(
     # DuckDB parses it as TIMESTAMP, SQLite compares it as TEXT against
     # the same ISO-8601 strings written by the writer.
     asof_str = asof_ts.isoformat()
-    sql_filter = "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+    sql_filter = (
+        "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+    )
     params: tuple[Any, ...] = (asof_str, asof_str)
     if not include_survivorship_failures:
         sql_filter += " AND default_date IS NULL AND delisted_date IS NULL"
@@ -2509,7 +2783,9 @@ def close_pooled_warehouses() -> None:
         _POOLED_WAREHOUSES.clear()
         _POOLED_LOCKS.clear()
     if errors:
-        raise RuntimeError(f"close_pooled_warehouses encountered {len(errors)} errors: {errors!r}")
+        raise RuntimeError(
+            f"close_pooled_warehouses encountered {len(errors)} errors: {errors!r}"
+        )
 
 
 def pooled_warehouse_paths() -> tuple[str, ...]:

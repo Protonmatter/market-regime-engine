@@ -134,7 +134,9 @@ HYSTERESIS_BANDS_LIQUIDITY: dict[LiquidityLabel, tuple[float | None, float | Non
 }
 
 
-def classify_with_hysteresis(score: float, prev_label: LiquidityLabel | None) -> LiquidityLabel:
+def classify_with_hysteresis(
+    score: float, prev_label: LiquidityLabel | None
+) -> LiquidityLabel:
     """Map ``score`` to a :class:`LiquidityLabel` with asymmetric hysteresis.
 
     ``prev_label is None`` → sharp-bucket fallback via
@@ -238,7 +240,9 @@ def _apply_nan_policy(
     input is missing, so the audit must fire (mirrors the PR-3 fix)."""
     if wide is None or wide.empty:
         if nan_policy is NanPolicy.NAN_FAILS_PIT_AUDIT:
-            raise PitAuditFailure("liquidity stress features empty; cannot satisfy NAN_FAILS_PIT_AUDIT")
+            raise PitAuditFailure(
+                "liquidity stress features empty; cannot satisfy NAN_FAILS_PIT_AUDIT"
+            )
         return
     if nan_policy is not NanPolicy.NAN_FAILS_PIT_AUDIT and not overrides:
         return
@@ -489,7 +493,9 @@ def score_liquidity_stress(
         If any feature row's ``source_timestamp`` exceeds ``asof``.
     """
     if scope_type not in _VALID_SCOPE_TYPES:
-        raise ValueError(f"scope_type must be one of {sorted(_VALID_SCOPE_TYPES)!r}; got {scope_type!r}")
+        raise ValueError(
+            f"scope_type must be one of {sorted(_VALID_SCOPE_TYPES)!r}; got {scope_type!r}"
+        )
     if not scope_id:
         raise ValueError("scope_id must not be empty")
 
@@ -516,7 +522,9 @@ def score_liquidity_stress(
         _apply_nan_policy(wide, nan_policy=nan_policy, overrides=nan_policy_overrides)
     except PitAuditFailure:
         pit_audit_failed = True
-        log.warning("liquidity stress PIT audit failed (column-level); flipping release_gate=False")
+        log.warning(
+            "liquidity stress PIT audit failed (column-level); flipping release_gate=False"
+        )
     if nan_policy is NanPolicy.NAN_FAILS_PIT_AUDIT and missing_components:
         pit_audit_failed = True
         log.warning(
@@ -627,14 +635,31 @@ def latest_liquidity_stress_score(
 
     When ``scope_type`` and ``scope_id`` are both provided, the result
     is filtered to that scope; otherwise the most recent row across
-    every scope is returned. The ordering matches the table's natural
-    sort (``timestamp ASC, scope_type ASC, scope_id ASC``).
+    every scope is returned.
+
+    v1.5.1 (PR-9 FIX 2): prefer the indexed SQL fast path that hits
+    ``idx_liquidity_scope_ts`` when ``scope_type`` / ``scope_id`` are
+    pinned. Falls back to the legacy full-table read when the
+    warehouse does not expose the new method (in-memory / external
+    test doubles).
     """
+    latest_fast = getattr(warehouse, "latest_liquidity_stress_score", None)
+    if callable(latest_fast):
+        try:
+            fast_df = latest_fast(scope_type=scope_type, scope_id=scope_id)
+        except Exception:  # pragma: no cover - fall back on backend miss
+            fast_df = None
+        if fast_df is not None and not fast_df.empty:
+            return _row_to_output(fast_df.iloc[0])
+        if fast_df is not None and fast_df.empty:
+            return None
     df = warehouse.read_liquidity_stress_scores()
     if df is None or df.empty:
         return None
     if scope_type is not None and scope_id is not None:
-        mask = (df["scope_type"].astype(str) == str(scope_type)) & (df["scope_id"].astype(str) == str(scope_id))
+        mask = (df["scope_type"].astype(str) == str(scope_type)) & (
+            df["scope_id"].astype(str) == str(scope_id)
+        )
         df = df.loc[mask]
         if df.empty:
             return None
@@ -642,8 +667,6 @@ def latest_liquidity_stress_score(
         df = df.loc[df["scope_type"].astype(str) == str(scope_type)]
         if df.empty:
             return None
-    # Sort by timestamp ascending — the table writer stamps ISO-8601
-    # with the Z suffix so lexicographic sort = chronological sort.
     df = df.sort_values("timestamp")
     row = df.iloc[-1]
     return _row_to_output(row)
