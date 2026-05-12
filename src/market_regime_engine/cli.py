@@ -995,6 +995,9 @@ def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
         stored_envelope_hash,
         verify_pack,
     )
+    from market_regime_engine.fixed_income.observability_ext import (
+        incr_evidence_pack_verify_fail,
+    )
 
     out: dict[str, Any] = {
         "fi_evidence_pack_present": False,
@@ -1009,6 +1012,11 @@ def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
         out["fi_envelope_reason"] = "envelope_read_failed"
         out["fi_hmac_verified"] = False
         out["fi_error"] = str(exc)
+        # v1.5 PR-8 Tier-1 C-AUTO-3: surface pack-read failures on the
+        # operator dashboard.
+        incr_evidence_pack_verify_fail(
+            component="unknown", surface="cli_verify_run"
+        )
         return out
     if pack is None:
         return out
@@ -1038,6 +1046,18 @@ def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
         out["fi_hmac_error"] = str(exc)
     out["fi_component_name"] = pack.component_name
     out["fi_release_gate"] = bool(pack.release_gate)
+    # v1.5 PR-8 Tier-1 C-AUTO-3: increment the verify-fail counter once
+    # per call where either the envelope check or the HMAC verify
+    # failed. The HMAC failure also auto-increments
+    # ``fi_hmac_signature_failures_total{reason=...}`` from within
+    # ``verify_pack``; this counter is the surface-aware aggregate so
+    # the runbook in ``docs/V1_5_HMAC_OPERATIONS.md`` can alert on
+    # CLI vs API regressions independently.
+    if out["fi_envelope_consistent"] is False or out["fi_hmac_verified"] is False:
+        incr_evidence_pack_verify_fail(
+            component=str(pack.component_name),
+            surface="cli_verify_run",
+        )
     return out
 
 
