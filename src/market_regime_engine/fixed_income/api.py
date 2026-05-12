@@ -91,14 +91,72 @@ _BODY_SIZE_CAP_BYTES: int = 32 * 1024
 _DEFAULT_RATE_LIMIT: str = "100/second"
 _RATE_LIMIT_ENV: str = "MRE_FI_EXEC_CONF_RATE_LIMIT"
 
+# v1.5.1 (PR-9 FIX 1): when the operator opts-in to the rate limiter
+# via ``MRE_FI_RATE_LIMIT_ENABLED=1`` we MUST fail closed at startup
+# if slowapi is not importable, rather than silently mounting an
+# unlimited handler. The check runs before the FastAPI app binds the
+# port; see :func:`assert_slowapi_available`.
+_RATE_LIMIT_ENABLED_ENV: str = "MRE_FI_RATE_LIMIT_ENABLED"
+
 __all__ = [
     "ExecutionConfidenceRequestModel",
+    "assert_slowapi_available",
     "build_router",
     "credit_regime_output_to_dict",
     "execution_confidence_response_to_dict",
     "liquidity_stress_output_to_dict",
+    "rate_limit_enabled",
     "tca_regime_segment_to_dict",
 ]
+
+
+def rate_limit_enabled() -> bool:
+    """Return True iff the operator opted-in to the slowapi rate limiter.
+
+    v1.5.1 (PR-9 FIX 1): the rate limiter is gated on the
+    ``MRE_FI_RATE_LIMIT_ENABLED`` env var. Accepted truthy values are
+    ``"1"``, ``"true"``, ``"yes"`` (case-insensitive); any other value
+    (including unset) leaves the limiter off. This is intentionally
+    distinct from :data:`_RATE_LIMIT_ENV` which sets the limit *spec*
+    (e.g. ``"100/second"``).
+    """
+    raw = os.getenv(_RATE_LIMIT_ENABLED_ENV, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def assert_slowapi_available() -> None:
+    """Raise ``RuntimeError`` when the limiter is opted-in but slowapi is missing.
+
+    v1.5.1 (PR-9 FIX 1): production callers set
+    ``MRE_FI_RATE_LIMIT_ENABLED=1`` to require rate limiting on
+    POST /v1/execution_confidence. If the import fails (e.g. the
+    deployment forgot the ``[security]`` extra) we MUST raise at
+    startup rather than silently mount an unlimited handler. Tests
+    can monkeypatch ``sys.modules["slowapi"] = None`` to simulate the
+    missing-dependency path.
+
+    No-op when ``MRE_FI_RATE_LIMIT_ENABLED`` is unset / false.
+    """
+    if not rate_limit_enabled():
+        return
+    import importlib
+    import sys
+
+    cached = sys.modules.get("slowapi")
+    if cached is None and "slowapi" in sys.modules:
+        # Tests inject ``sys.modules["slowapi"] = None`` to force the
+        # missing-dependency branch without uninstalling slowapi.
+        raise RuntimeError(
+            "slowapi required when MRE_FI_RATE_LIMIT_ENABLED=1; "
+            "install with: pip install market-regime-engine[security]"
+        )
+    try:
+        importlib.import_module("slowapi")
+    except Exception as exc:
+        raise RuntimeError(
+            "slowapi required when MRE_FI_RATE_LIMIT_ENABLED=1; "
+            "install with: pip install market-regime-engine[security]"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +198,9 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
+            raise ValueError(
+                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
+            )
         return v
 
     @field_validator("cusip")
@@ -191,7 +251,9 @@ def credit_regime_output_to_dict(output: CreditRegimeOutput) -> dict[str, Any]:
     out = asdict(output)
     out["drivers"] = list(output.drivers)
     out.setdefault("metadata", {})
-    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
     return out
 
 
@@ -228,7 +290,9 @@ def liquidity_stress_output_to_dict(output: LiquidityStressOutput) -> dict[str, 
     """
     out = liquidity_output_to_dict(output)
     out.setdefault("metadata", {})
-    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
     return out
 
 
@@ -592,9 +656,13 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+                latest = latest_liquidity_stress_score(
+                    wh, scope_type=scope_type, scope_id=scope_id
+                )
             except Exception as exc:
-                log.exception("liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc)
+                log.exception(
+                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
+                )
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
                     detail={"detail": "no_data", "release_gate": False},
@@ -665,7 +733,9 @@ def build_router(
                     },
                 ) from exc
             try:
-                write_execution_confidence_prediction(wh, response, request_id=body.request_id)
+                write_execution_confidence_prediction(
+                    wh, response, request_id=body.request_id
+                )
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",
@@ -728,7 +798,9 @@ def build_router(
         wh = factory()
         try:
             try:
-                segments = latest_tca_regime_segments(wh, dimensions=dim_list, limit=clamped_limit)
+                segments = latest_tca_regime_segments(
+                    wh, dimensions=dim_list, limit=clamped_limit
+                )
             except Exception as exc:
                 log.exception("tca/regime-segments/latest read failed: %s", exc)
                 raise HTTPException(
@@ -738,7 +810,9 @@ def build_router(
         finally:
             _close_if_not_pooled(wh)
         if not segments:
-            return JSONResponse({"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE)
+            return JSONResponse(
+                {"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE
+            )
         return JSONResponse(
             {
                 "segments": [tca_regime_segment_to_dict(s) for s in segments],

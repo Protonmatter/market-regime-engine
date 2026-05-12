@@ -411,6 +411,16 @@ def _mount_fixed_income_router() -> None:
     the FI subpackage is not eagerly loaded when an operator only
     needs the macro routes.
     """
+    # v1.5.1 (PR-9 FIX 1): if the operator opts-in to the rate
+    # limiter via ``MRE_FI_RATE_LIMIT_ENABLED=1`` we MUST raise a
+    # RuntimeError BEFORE the FastAPI app finalises route binding when
+    # slowapi is not installed. This block runs before the
+    # ``try/except`` below so the guard is not swallowed by the
+    # defensive logger.
+    from market_regime_engine.fixed_income.api import assert_slowapi_available
+
+    assert_slowapi_available()
+
     try:
         from market_regime_engine.fixed_income.api import (
             _build_rate_limiter,
@@ -432,7 +442,9 @@ def _mount_fixed_income_router() -> None:
 
                 app.state.limiter = limiter
 
-                async def _rate_limit_handler(request: _RLRequest, exc: RateLimitExceeded) -> _RLJSONResponse:
+                async def _rate_limit_handler(
+                    request: _RLRequest, exc: RateLimitExceeded
+                ) -> _RLJSONResponse:
                     return _RLJSONResponse(
                         {"detail": f"rate limit exceeded: {exc.detail}"},
                         status_code=429,
