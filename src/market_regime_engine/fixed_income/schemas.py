@@ -101,6 +101,34 @@ class ExecutionRecommendation(str, Enum):
         return _EXECUTION_HUMAN_LABELS[self]
 
 
+class CriticalFeature(str, Enum):
+    """v1.5.1 (PR-9 FIX 8): hard-coded set of features that, when
+    missing in the scorer input, force ``release_gate=False`` AND
+    ``confidence_score <= 0.5`` AND a fail-closed label override,
+    REGARDLESS of the active :class:`NanPolicy`.
+
+    The legacy :func:`_apply_nan_policy` path silently re-weights the
+    remaining components when ``nan_policy`` is not
+    :attr:`NanPolicy.NAN_FAILS_PIT_AUDIT`. That behaviour is correct
+    for *optional* inputs (e.g. the ETF dislocation proxy on illiquid
+    sectors), but for the canonical credit / liquidity contracts
+    listed below it is a silent under-reporting risk: a missing
+    bid-ask snapshot or a torn CDS basis must not be reweighted away
+    in production.
+
+    The contract is enforced by
+    :func:`fixed_income.critical_features.evaluate_critical_features`
+    inside both the credit and liquidity scorers; the resulting
+    audit log surfaces the offending features in
+    ``metadata.critical_features_missing``.
+    """
+
+    CREDIT_BOND_SPREAD = "credit_bond_spread"
+    CREDIT_CDS_BASIS = "credit_cds_basis"
+    LIQUIDITY_BIDASK = "liquidity_bidask"
+    LIQUIDITY_RFQ_RESPONSE = "liquidity_rfq_response"
+
+
 _EXECUTION_HUMAN_LABELS: dict[ExecutionRecommendation, str] = {
     ExecutionRecommendation.AUTO_X_ALLOWED: "Auto-X allowed",
     ExecutionRecommendation.AUTO_X_CAUTION: "Auto-X caution / trader confirm",

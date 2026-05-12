@@ -49,6 +49,11 @@ from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
 from market_regime_engine.fixed_income.pit_guard import (
     PitViolationError,
 )
+from market_regime_engine.fixed_income.critical_features import (
+    CREDIT_CRITICAL_COLUMNS,
+    CRITICAL_LABEL_CREDIT,
+    evaluate_critical_features,
+)
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
     RegimeLabel,
@@ -478,6 +483,14 @@ def score_credit_regime(
             missing_components,
         )
 
+    # v1.5.1 (PR-9 FIX 8): critical-feature contract overrides the
+    # NaN-policy re-weighting. A missing canonical credit spread or
+    # CDS basis input forces release_gate=False and the
+    # ``UNCERTAIN`` fail-closed label regardless of nan_policy.
+    critical_audit = evaluate_critical_features(
+        wide, contract=CREDIT_CRITICAL_COLUMNS
+    )
+
     if not component_scores:
         # No features at all — neutral score, zero confidence, fail closed.
         regime_score = float(_NEUTRAL_SCORE)
@@ -495,9 +508,26 @@ def score_credit_regime(
         if not gate:
             confidence = min(confidence, 0.5)
 
+    # v1.5.1 (PR-9 FIX 8): apply the fail-closed override AFTER the
+    # legacy NaN-policy path so the regime label is overridden to
+    # the explicit "UNCERTAIN" string and the gate is unconditionally
+    # closed. The label override is intentionally a plain string and
+    # bypasses :class:`RegimeLabel` so consumers can recognise the
+    # critical-feature audit verdict at sight rather than mistaking
+    # it for a normal "watch_transition" mid-band score.
     hysteresis_applied = prev_label is not None
     regime_label_enum = classify_with_hysteresis(regime_score, prev_label)
     regime_label = regime_label_enum.label
+    if critical_audit.fail_closed:
+        gate = False
+        confidence = min(confidence, 0.5)
+        regime_label = CRITICAL_LABEL_CREDIT
+        log.warning(
+            "credit regime critical-feature contract violated: missing=%r; "
+            "flipping release_gate=False, label=%r",
+            [feature.value for feature in critical_audit.missing],
+            CRITICAL_LABEL_CREDIT,
+        )
 
     metadata: dict[str, Any] = {
         "weights_used": weights_norm,
@@ -509,6 +539,13 @@ def score_credit_regime(
         "pit_audit_failed": pit_audit_failed,
         "hysteresis_applied": hysteresis_applied,
         "prev_label": prev_label.value if prev_label is not None else None,
+        # v1.5.1 (PR-9 FIX 8): surface the critical-feature audit so
+        # operators can pivot dashboards by which canonical input
+        # tripped the fail-closed gate.
+        "critical_features_missing": [
+            feature.value for feature in critical_audit.missing
+        ],
+        "critical_features_fail_closed": critical_audit.fail_closed,
     }
 
     timestamp_iso = iso8601_z(asof_utc)

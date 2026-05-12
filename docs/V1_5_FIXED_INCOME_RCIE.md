@@ -1143,3 +1143,66 @@ holding the DB path open. Exit codes:
 - Operations doc: `docs/V1_5_HMAC_OPERATIONS.md`.
 - AutoX contract: `docs/V1_5_AUTOX_CONTRACT.md`.
 - Breaking changes: `docs/V1_5_BREAKING_CHANGES.md`.
+
+## Fail-Closed Contract (v1.5.1, PR-9 FIX 8)
+
+Each fixed-income scorer maintains a hardcoded set of
+**critical features** in `src/market_regime_engine/fixed_income/critical_features.py`.
+When any one of these is missing or all-NaN in the lookback
+window, the scorer MUST:
+
+1. Force `release_gate = False`
+2. Cap `confidence_score ≤ 0.5`
+3. Emit a fail-closed label override:
+   - Credit: `regime_label = "UNCERTAIN"`
+   - Liquidity: `liquidity_label = "NO_DECISION"`
+4. Surface the offending features in
+   `metadata.critical_features_missing` (list of
+   `CriticalFeature` enum values) and set
+   `metadata.critical_features_fail_closed = True`.
+
+This contract **overrides** the legacy `NanPolicy` re-weighting
+behaviour. A missing canonical credit-bond-spread proxy or
+bid-ask snapshot cannot be silently re-weighted away in
+production: the override fires regardless of whether
+`nan_policy` is `nan_fails_pit_audit`, `nan_to_zero`,
+`nan_to_last_valid`, or `nan_drops_row`.
+
+### Critical-feature contracts
+
+| Scorer | CriticalFeature value | Pivot column (current build) |
+| --- | --- | --- |
+| Credit | `credit_bond_spread` | `cdx_ig_5y` |
+| Credit | `credit_cds_basis` | `cdx_hy_5y` |
+| Liquidity | `liquidity_bidask` | `bid_ask_width` |
+| Liquidity | `liquidity_rfq_response` | `quotes_received` |
+
+Optional features (e.g. `etf_prem_disc` for credit) are NOT in
+the critical contract and follow the legacy re-weighting under
+the active `NanPolicy`.
+
+### Rationale
+
+The third-party review of v1.5.0 (PR-9 review doc) flagged
+`_apply_nan_policy` as a silent under-reporting risk: when
+`nan_policy != NAN_FAILS_PIT_AUDIT`, missing components were
+silently re-weighted away. For the canonical inputs that drive
+the credit / liquidity regime label, this is a fail-OPEN
+behaviour that violates the governance rails listed in
+`MRE_FIXED_INCOME_AGENT.md §"non-negotiable constraints"`. The
+fail-closed contract makes the override explicit, auditable,
+and untestable away by NaN-policy tuning.
+
+### Operator playbook
+
+When a critical-feature audit fires in production:
+
+1. Inspect `metadata.critical_features_missing` and the
+   warning emitted by the scorer to identify which input is
+   missing.
+2. Check the ingest pipeline for the corresponding feature
+   (e.g. `cdx_ig_5y` → CDX vendor feed; `bid_ask_width` →
+   quote tape) and the `vintage_observations` table.
+3. The scorer will re-attempt on the next `mre fi-*` run; no
+   forced reweighting is supported.
+4. Tests: `tests/test_fi_critical_feature_fail_closed.py`.
