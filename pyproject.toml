@@ -61,10 +61,18 @@ fixed_income = ["pandas-market-calendars>=4.4"]
 # v1.3 supply-chain hardening: SBOM, license audit, and static
 # security scan tooling. Pinned to broad ranges so the CI matrix
 # can refresh without bumping pyproject every minor.
+#
+# v1.5.1 (PR-9 FIX 1): the slowapi rate limiter is part of the
+# ``[security]`` extra because POST /v1/execution_confidence relies
+# on it when ``MRE_FI_RATE_LIMIT_ENABLED=1``. The FastAPI startup
+# guard in :mod:`fixed_income.api` raises RuntimeError when the
+# env var is set but slowapi is not installed so production cannot
+# silently degrade to an unlimited handler.
 security = [
   "cyclonedx-bom>=4.0",
   "pip-licenses>=4.0",
   "bandit>=1.7",
+  "slowapi>=0.1.9",
 ]
 # v1.3 shared API cache. Optional because Redis is environment-conditional;
 # the local TTL cache is the default and remains zero-dependency.
