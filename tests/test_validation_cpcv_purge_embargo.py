@@ -45,9 +45,7 @@ def test_pbo_respects_purge_and_embargo_kwargs() -> None:
     """Pass purge + embargo; the function must still produce a finite PBO."""
     rng = np.random.default_rng(0)
     matrix = pd.DataFrame(rng.normal(size=(200, 30)))
-    pbo = probability_of_backtest_overfitting(
-        matrix, n_partitions=8, purge=2, embargo=1
-    )
+    pbo = probability_of_backtest_overfitting(matrix, n_partitions=8, purge=2, embargo=1)
     assert 0.0 <= pbo <= 1.0
 
 
@@ -56,9 +54,7 @@ def test_pbo_rejects_excessive_combinations() -> None:
     rng = np.random.default_rng(0)
     matrix = pd.DataFrame(rng.normal(size=(40, 5)))
     with pytest.raises(ValueError, match="max_combinations"):
-        probability_of_backtest_overfitting(
-            matrix, n_partitions=20, max_combinations=100
-        )
+        probability_of_backtest_overfitting(matrix, n_partitions=20, max_combinations=100)
 
 
 def test_pbo_uses_cpcv_combinations_not_paired_halves() -> None:

@@ -37,7 +37,6 @@ from market_regime_engine.fixed_income.liquidity_stress import (
 from market_regime_engine.fixed_income.schemas import CriticalFeature
 from market_regime_engine.frontier.data_cleaning import NanPolicy
 
-
 # -- Credit scorer -------------------------------------------------------------
 
 
@@ -115,10 +114,7 @@ def test_credit_fail_closed_when_bond_spread_missing(policy: NanPolicy) -> None:
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.regime_label == "UNCERTAIN"
-    assert (
-        CriticalFeature.CREDIT_BOND_SPREAD.value
-        in out.metadata["critical_features_missing"]
-    )
+    assert CriticalFeature.CREDIT_BOND_SPREAD.value in out.metadata["critical_features_missing"]
     assert out.metadata["critical_features_fail_closed"] is True
 
 
@@ -139,10 +135,7 @@ def test_credit_fail_closed_when_cds_basis_missing(policy: NanPolicy) -> None:
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.regime_label == "UNCERTAIN"
-    assert (
-        CriticalFeature.CREDIT_CDS_BASIS.value
-        in out.metadata["critical_features_missing"]
-    )
+    assert CriticalFeature.CREDIT_CDS_BASIS.value in out.metadata["critical_features_missing"]
 
 
 def test_credit_optional_feature_missing_does_not_trigger_critical_gate() -> None:
@@ -232,10 +225,7 @@ def test_liquidity_fail_closed_when_bidask_missing(policy: NanPolicy) -> None:
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.liquidity_label == "NO_DECISION"
-    assert (
-        CriticalFeature.LIQUIDITY_BIDASK.value
-        in out.metadata["critical_features_missing"]
-    )
+    assert CriticalFeature.LIQUIDITY_BIDASK.value in out.metadata["critical_features_missing"]
 
 
 @pytest.mark.parametrize(
@@ -255,10 +245,7 @@ def test_liquidity_fail_closed_when_rfq_response_missing(policy: NanPolicy) -> N
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.liquidity_label == "NO_DECISION"
-    assert (
-        CriticalFeature.LIQUIDITY_RFQ_RESPONSE.value
-        in out.metadata["critical_features_missing"]
-    )
+    assert CriticalFeature.LIQUIDITY_RFQ_RESPONSE.value in out.metadata["critical_features_missing"]
 
 
 def test_liquidity_full_input_passes_critical_audit() -> None:

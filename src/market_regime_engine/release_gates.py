@@ -460,11 +460,7 @@ def evaluate_release_gate(
     # v1.5.1 (PR-9 FIX 4c): TCA-lift rail. The gate FAILS unless at
     # least one regime in ``tca_lift`` reports
     # ``p_value <= max_tca_p`` AND ``|effect_size| >= min_tca_effect``.
-    if (
-        max_tca_p is not None
-        and min_tca_effect is not None
-        and tca_lift_raw is not None
-    ):
+    if max_tca_p is not None and min_tca_effect is not None and tca_lift_raw is not None:
         lift = _coerce_tca_lift_payload(tca_lift_raw)
         if lift:
             best_passes = any(

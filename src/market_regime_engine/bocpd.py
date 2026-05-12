@@ -153,9 +153,7 @@ class DiagonalStudentTBOCPD:
                 ]
             )
 
-        frame = clean_with_policy(
-            x, default_policy=nan_policy, column_policies=column_policies
-        ).astype(float)
+        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
         arr = frame.to_numpy(float)
         dim = arr.shape[1]
 
@@ -392,9 +390,7 @@ class MultivariateNIWBOCPD:
                 ]
             )
 
-        frame = clean_with_policy(
-            x, default_policy=nan_policy, column_policies=column_policies
-        ).astype(float)
+        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
         arr = frame.to_numpy(float)
         dim = arr.shape[1]
 

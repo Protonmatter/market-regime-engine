@@ -44,15 +44,15 @@ from typing import Any
 
 import pandas as pd
 
-from market_regime_engine.fixed_income.hashing import canonical_sha256
-from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
-from market_regime_engine.fixed_income.pit_guard import (
-    PitViolationError,
-)
 from market_regime_engine.fixed_income.critical_features import (
     CREDIT_CRITICAL_COLUMNS,
     CRITICAL_LABEL_CREDIT,
     evaluate_critical_features,
+)
+from market_regime_engine.fixed_income.hashing import canonical_sha256
+from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
+from market_regime_engine.fixed_income.pit_guard import (
+    PitViolationError,
 )
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
@@ -487,9 +487,7 @@ def score_credit_regime(
     # NaN-policy re-weighting. A missing canonical credit spread or
     # CDS basis input forces release_gate=False and the
     # ``UNCERTAIN`` fail-closed label regardless of nan_policy.
-    critical_audit = evaluate_critical_features(
-        wide, contract=CREDIT_CRITICAL_COLUMNS
-    )
+    critical_audit = evaluate_critical_features(wide, contract=CREDIT_CRITICAL_COLUMNS)
 
     if not component_scores:
         # No features at all — neutral score, zero confidence, fail closed.
@@ -523,8 +521,7 @@ def score_credit_regime(
         confidence = min(confidence, 0.5)
         regime_label = CRITICAL_LABEL_CREDIT
         log.warning(
-            "credit regime critical-feature contract violated: missing=%r; "
-            "flipping release_gate=False, label=%r",
+            "credit regime critical-feature contract violated: missing=%r; flipping release_gate=False, label=%r",
             [feature.value for feature in critical_audit.missing],
             CRITICAL_LABEL_CREDIT,
         )
@@ -542,9 +539,7 @@ def score_credit_regime(
         # v1.5.1 (PR-9 FIX 8): surface the critical-feature audit so
         # operators can pivot dashboards by which canonical input
         # tripped the fail-closed gate.
-        "critical_features_missing": [
-            feature.value for feature in critical_audit.missing
-        ],
+        "critical_features_missing": [feature.value for feature in critical_audit.missing],
         "critical_features_fail_closed": critical_audit.fail_closed,
     }
 
