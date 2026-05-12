@@ -53,6 +53,11 @@ from market_regime_engine.observability import (
     prometheus_text,
     time_block,
 )
+from market_regime_engine.production import (
+    assert_production_ready,
+    is_production_env,
+    select_api_db_path,
+)
 from market_regime_engine.storage import (
     Warehouse,
     close_pooled_warehouses,
@@ -62,6 +67,15 @@ from market_regime_engine.storage import (
 log = logging.getLogger(__name__)
 
 
+# v1.6 PR-22: fail-closed production posture check at import time. When
+# ``MRE_ENV=production`` is set but ``MRE_API_KEY`` / ``MRE_DB_PATH`` are
+# missing (or the cache backend is misconfigured), ``assert_production_ready``
+# raises ``RuntimeError`` so a misconfigured deploy never reaches the
+# ``app = FastAPI(...)`` line. Outside production this is a no-op and
+# returns a ``ProductionCheckResult`` with ``ok=True``.
+_PRODUCTION_CHECK = assert_production_ready()
+
+
 def _api_key_required() -> str | None:
     return os.getenv("MRE_API_KEY")
 
@@ -69,6 +83,16 @@ def _api_key_required() -> str | None:
 async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
     expected = _api_key_required()
     if expected is None:
+        # v1.6 PR-22: in production, fail-closed when no key is set so a
+        # misconfigured deploy cannot accidentally serve unauthenticated
+        # endpoints (the import-time ``assert_production_ready`` already
+        # guards this at startup, but a key rotation that wipes the env
+        # var without restarting the worker would otherwise leak open).
+        if is_production_env():
+            raise HTTPException(
+                status_code=503,
+                detail="MRE_API_KEY is required in production",
+            )
         return
     if not x_api_key:
         raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
@@ -97,10 +121,17 @@ def _db_path() -> str:
       fails fast (per AF-2). Default-path (env unset) absence still
       degrades to a warning to preserve the existing auto-create
       behaviour of the underlying Warehouse.
+
+    v1.6 PR-22: the default-resolution now routes through
+    :func:`market_regime_engine.production.select_api_db_path`, which
+    raises when ``MRE_ENV=production`` and ``MRE_DB_PATH`` is unset.
+    That extra gate fires at import time via
+    :func:`assert_production_ready` so a production deploy without
+    ``MRE_DB_PATH`` is rejected long before the first request lands.
     """
     global _DB_PATH_LOGGED
     explicit = os.environ.get("MRE_DB_PATH")
-    path = explicit if explicit is not None and explicit != "" else "data/mre.duckdb"
+    path = select_api_db_path(default="data/mre.duckdb")
     exists = os.path.exists(path)
     if not _DB_PATH_LOGGED:
         log.info("resolved db_path=%s exists=%s", path, exists)
@@ -270,19 +301,32 @@ def _build_cache_backend() -> _CacheBackend:
       package isn't installed.
     - ``MRE_REDIS_URL`` is unset or unreachable.
 
-    This lets a deployment toggle the env var on/off without risking a
-    cold-start crash if the Redis cluster is being rebooted.
+    This lets a dev / staging deployment toggle the env var on/off
+    without risking a cold-start crash if the Redis cluster is being
+    rebooted.
+
+    v1.6 PR-22: under ``MRE_ENV=production`` the soft-degrade path is
+    disabled. A production worker that declared ``MRE_CACHE_BACKEND=redis``
+    with no reachable URL must fail at startup rather than silently
+    serve from the local in-process cache (which would mean per-worker
+    cache divergence under uvicorn ``--workers``). The shared-cache
+    invariant is part of the production contract.
     """
     backend = os.getenv("MRE_CACHE_BACKEND", "local").lower()
     if backend != "redis":
         return _LocalTTLCache()
     url = os.getenv("MRE_REDIS_URL", "")
     if not url:
-        log.warning("MRE_CACHE_BACKEND=redis but MRE_REDIS_URL is empty; falling back to local cache")
+        msg = "MRE_CACHE_BACKEND=redis but MRE_REDIS_URL is empty"
+        if is_production_env():
+            raise RuntimeError(msg)
+        log.warning("%s; falling back to local cache", msg)
         return _LocalTTLCache()
     try:
         return _RedisTTLCache(url=url)
     except Exception as exc:
+        if is_production_env():
+            raise RuntimeError(f"redis cache unavailable in production: {exc}") from exc
         log.warning("redis cache unavailable (%s); falling back to local cache", exc)
         return _LocalTTLCache()
 
@@ -442,7 +486,9 @@ def _mount_fixed_income_router() -> None:
 
                 app.state.limiter = limiter
 
-                async def _rate_limit_handler(request: _RLRequest, exc: RateLimitExceeded) -> _RLJSONResponse:
+                async def _rate_limit_handler(
+                    request: _RLRequest, exc: RateLimitExceeded
+                ) -> _RLJSONResponse:
                     return _RLJSONResponse(
                         {"detail": f"rate limit exceeded: {exc.detail}"},
                         status_code=429,
