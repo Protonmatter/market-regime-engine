@@ -346,9 +346,20 @@ def verify_pack(pack: FixedIncomeEvidencePack) -> bool:
 
     Parses ``"v<ver>:<hex>"`` from ``pack.hmac_signature``, looks up
     the key, recomputes the HMAC over the canonical JSON (excluding
-    the signature field itself), and compares with
-    :func:`hmac.compare_digest` (constant-time, side-channel-resistant
-    — do not refactor to ``==`` without preserving this guarantee).
+    the signature field itself), and compares using
+    :func:`hmac.compare_digest`.
+
+    Implementation note (do not refactor without preserving):
+    verification uses :func:`hmac.compare_digest` for **constant-time
+    comparison** so an attacker that can submit guesses against a
+    pack does not learn how many leading hex digits matched via
+    timing side channels. Replacing the call with ``==`` (or any
+    short-circuiting equality) would silently re-introduce a timing
+    oracle on the digest comparison and is explicitly forbidden by
+    AGENT.md §"HMAC operations". The
+    ``test_module_uses_compare_digest_in_verify`` introspection
+    test pins this so a refactor cannot remove the guarantee
+    silently.
 
     Returns ``False`` when the signature is missing, malformed, or
     signed under a key version that is not currently configured.
