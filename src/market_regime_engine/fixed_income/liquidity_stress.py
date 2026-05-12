@@ -60,6 +60,11 @@ from typing import Any, Literal
 
 import pandas as pd
 
+from market_regime_engine.fixed_income.critical_features import (
+    CRITICAL_LABEL_LIQUIDITY,
+    LIQUIDITY_CRITICAL_COLUMNS,
+    evaluate_critical_features,
+)
 from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
 from market_regime_engine.fixed_income.pit_guard import (
@@ -583,6 +588,14 @@ def score_liquidity_stress(
             missing_components,
         )
 
+    # v1.5.1 (PR-9 FIX 8): critical-feature contract overrides
+    # nan_policy re-weighting. Missing bid-ask or RFQ-response
+    # observations force release_gate=False and the ``NO_DECISION``
+    # fail-closed label regardless of nan_policy.
+    critical_audit = evaluate_critical_features(
+        wide, contract=LIQUIDITY_CRITICAL_COLUMNS
+    )
+
     if not component_scores:
         liquidity_index = float(_NEUTRAL_SCORE)
         confidence = 0.0
@@ -604,6 +617,16 @@ def score_liquidity_stress(
     hysteresis_applied = prev_label is not None
     liquidity_label_enum = classify_with_hysteresis(liquidity_index, prev_label)
     liquidity_label = liquidity_label_enum.label
+    if critical_audit.fail_closed:
+        gate = False
+        confidence = min(confidence, 0.5)
+        liquidity_label = CRITICAL_LABEL_LIQUIDITY
+        log.warning(
+            "liquidity stress critical-feature contract violated: missing=%r; "
+            "flipping release_gate=False, label=%r",
+            [feature.value for feature in critical_audit.missing],
+            CRITICAL_LABEL_LIQUIDITY,
+        )
 
     metadata: dict[str, Any] = {
         "weights_used": weights_norm,
@@ -615,6 +638,13 @@ def score_liquidity_stress(
         "pit_audit_failed": pit_audit_failed,
         "hysteresis_applied": hysteresis_applied,
         "prev_label": prev_label.value if prev_label is not None else None,
+        # v1.5.1 (PR-9 FIX 8): surface the critical-feature audit so
+        # operators can pivot dashboards by which canonical input
+        # tripped the fail-closed gate.
+        "critical_features_missing": [
+            feature.value for feature in critical_audit.missing
+        ],
+        "critical_features_fail_closed": critical_audit.fail_closed,
     }
 
     timestamp_iso = iso8601_z(asof_utc)
