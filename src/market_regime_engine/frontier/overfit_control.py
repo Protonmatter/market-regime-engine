@@ -1,5 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Anti-overfit controls for model tournaments and strategy-like outputs."""
+"""Anti-overfit controls for model tournaments and strategy-like outputs.
+
+v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.15 / Findings #1 + #2): this module
+previously shipped a *forked duplicate* of the BLP DSR / PBO / MTRL
+primitives. That fork re-introduced the v1.5.1 A2 (PBO missing
+purge/embargo) and A3 (DSR* multiplicity scaling missing
+``sqrt(var_term)``) bugs that the v1.5.2 :mod:`market_regime_engine.validation`
+fix already landed.
+
+To eliminate the fork (and the structural failure mode of "duplicate the
+primitive, get the math slightly wrong"), the math now delegates to
+:mod:`market_regime_engine.validation`. The dataclass return shapes
+``DeflatedSharpeResult`` / ``PBOResult`` are preserved for backwards
+compatibility with the v1.6 PR-22 callers; the kurtosis convention is
+standardised on **excess** kurtosis (Gaussian = 0) per BLP convention,
+matching the validation primitives.
+
+References:
+
+- Bailey & López de Prado (2014), "The Deflated Sharpe Ratio".
+- Bailey, Borwein, López de Prado, Zhu (2017), "The probability of
+  backtest overfitting".
+- López de Prado (2018), *Advances in Financial Machine Learning*
+  §7.4-7.5 (combinatorial purged cross-validation).
+"""
 
 from __future__ import annotations
 
@@ -10,14 +34,21 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
-from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
 
+from market_regime_engine import validation as _validation
+
 
 @dataclass(frozen=True)
 class DeflatedSharpeResult:
+    """BLP 2014 DSR result.
+
+    v1.6.0: the ``kurtosis`` field now reports **excess** kurtosis
+    (Gaussian = 0) per BLP convention, matching :func:`validation.deflated_sharpe`.
+    """
+
     sharpe: float
     deflated_sharpe: float
     pvalue: float
@@ -61,48 +92,90 @@ def deflated_sharpe_ratio(
     *,
     n_trials: int = 1,
     periods_per_year: int = 252,
+    sharpe_target: float = 0.0,
+    skew: float | None = None,
+    excess_kurt: float | None = None,
 ) -> DeflatedSharpeResult:
-    """Approximate Bailey-Lopez de Prado deflated Sharpe ratio.
+    """BLP 2014 deflated Sharpe ratio (delegates to :mod:`validation`).
 
-    ``sharpe`` and ``expected_max_sharpe`` are reported annualized for operator
-    readability. The deflated Sharpe statistic is computed on the per-period
-    Sharpe scale so units stay consistent inside the hypothesis test.
+    Returns the structured :class:`DeflatedSharpeResult` while the
+    underlying DSR probability is computed by
+    :func:`validation.deflated_sharpe`, so the math is BLP-correct
+    (``var_term`` scaling, multiplicity threshold, excess-kurtosis
+    convention).
+
+    The ``excess_kurt`` argument is **excess** kurtosis (Gaussian = 0).
+    The earlier v1.6.0 forked implementation accepted Pearson kurtosis
+    (Gaussian = 3); the convention is now standardised on excess to
+    match BLP / :mod:`validation`. Callers that pre-computed Pearson
+    kurtosis should subtract 3 before passing.
     """
-
     arr = np.asarray(returns, dtype=float)
     arr = arr[np.isfinite(arr)]
     n = int(arr.size)
+    n_trials_int = max(int(n_trials), 1)
     if n < 4:
-        return DeflatedSharpeResult(float("nan"), float("nan"), float("nan"), float("nan"), n, n_trials, float("nan"), float("nan"))
+        return DeflatedSharpeResult(
+            sharpe=float("nan"),
+            deflated_sharpe=float("nan"),
+            pvalue=float("nan"),
+            expected_max_sharpe=float("nan"),
+            n_observations=n,
+            n_trials=n_trials_int,
+            skewness=float("nan"),
+            kurtosis=float("nan"),
+        )
+
     sd = float(arr.std(ddof=1))
     raw_sr = 0.0 if sd <= 1e-12 else float(arr.mean() / sd)
     annualized_sr = raw_sr * math.sqrt(periods_per_year)
-    demeaned = arr - arr.mean()
-    z = demeaned / max(sd, 1e-12)
-    skew = float(np.mean(z**3))
-    kurt = float(np.mean(z**4))
-    n_trials = max(int(n_trials), 1)
-    normal = NormalDist()
-    if n_trials <= 1:
-        expected_max_raw_sr = 0.0
+
+    if skew is None or excess_kurt is None:
+        sample_skew, sample_excess = _validation._sample_skew_kurt(arr)
+        if skew is None:
+            skew = sample_skew
+        if excess_kurt is None:
+            excess_kurt = sample_excess
+    skew = float(skew)
+    excess_kurt = float(excess_kurt)
+
+    # Delegate the DSR probability to validation (BLP-correct math).
+    dsr_prob = _validation.deflated_sharpe(
+        arr,
+        n_trials=n_trials_int,
+        skew=skew,
+        kurt=excess_kurt,
+        sharpe_target=sharpe_target,
+    )
+
+    # Reconstruct the threshold-relative z-score and the annualized SR*
+    # offset for the dataclass surface. The arithmetic here is the same
+    # closed form ``validation.deflated_sharpe`` runs internally; we
+    # recompute (rather than invert ``dsr_prob``) so the dataclass
+    # z-score is exact even when the probability numerically saturates.
+    var_term = max(
+        1.0 - skew * raw_sr + (excess_kurt + 2.0) / 4.0 * raw_sr * raw_sr,
+        1e-12,
+    )
+    denom = math.sqrt(var_term / max(n - 1, 1))
+    e_max_z = _validation._expected_max_z(n_trials_int)
+    sr_star_threshold = float(sharpe_target) + e_max_z * denom
+    if denom > 0:
+        dsr_stat = (raw_sr - sr_star_threshold) / denom
     else:
-        gamma = 0.5772156649015329
-        expected_max_raw_sr = math.sqrt(1.0 / max(n - 1, 1)) * (
-            (1 - gamma) * normal.inv_cdf(1 - 1 / n_trials)
-            + gamma * normal.inv_cdf(1 - 1 / (math.e * n_trials))
-        )
-    denom = math.sqrt(max(1e-12, 1 - skew * raw_sr + ((kurt - 1) / 4.0) * raw_sr * raw_sr))
-    dsr_stat = (raw_sr - expected_max_raw_sr) * math.sqrt(n - 1) / denom
-    pvalue = 1.0 - normal.cdf(dsr_stat)
+        dsr_stat = float("nan")
+    expected_max_sharpe = (sr_star_threshold - float(sharpe_target)) * math.sqrt(periods_per_year)
+    pvalue = 1.0 - dsr_prob
+
     return DeflatedSharpeResult(
-        float(annualized_sr),
-        float(dsr_stat),
-        float(pvalue),
-        float(expected_max_raw_sr * math.sqrt(periods_per_year)),
-        n,
-        n_trials,
-        skew,
-        kurt,
+        sharpe=float(annualized_sr),
+        deflated_sharpe=float(dsr_stat),
+        pvalue=float(pvalue),
+        expected_max_sharpe=float(expected_max_sharpe),
+        n_observations=n,
+        n_trials=n_trials_int,
+        skewness=float(skew),
+        kurtosis=float(excess_kurt),
     )
 
 
@@ -111,23 +184,72 @@ def probability_of_backtest_overfitting(
     *,
     n_folds: int = 8,
     periods_per_year: int = 252,
+    embargo: int = 0,
+    purge: int = 0,
 ) -> PBOResult:
-    """Estimate PBO with a CSCV-style train/test fold tournament."""
+    """BBLZ 2017 probability of backtest overfitting (delegates to :mod:`validation`).
 
+    The canonical PBO statistic is computed by
+    :func:`validation.probability_of_backtest_overfitting`, which applies
+    the purge + embargo gaps per BLP §7.4 (the v1.5.1 PR-9 FIX 4a fix).
+    The dataclass ``selected_models`` and ``logits`` diagnostics are
+    populated by walking the same C(N, k) splits and applying matching
+    purge/embargo to the IS aggregation so the per-split logits stay
+    consistent with the canonical PBO.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md Finding #1): now correctly accepts and
+    applies ``purge`` and ``embargo`` (defaults to 0 for backwards compat
+    with the earlier v1.6.0 PR-22 fork; production callers should set
+    ``purge >= 1`` for serially dependent panels).
+    """
     if returns_by_model is None or returns_by_model.empty:
         return PBOResult(float("nan"), 0, [], [])
     if n_folds < 2 or n_folds % 2 != 0:
         raise ValueError("n_folds must be an even integer >= 2")
+    if embargo < 0 or purge < 0:
+        raise ValueError("embargo and purge must be >= 0")
     frame = returns_by_model.dropna(how="any")
     if frame.shape[0] < n_folds * 2 or frame.shape[1] < 2:
         return PBOResult(float("nan"), 0, [], [])
-    folds = np.array_split(np.arange(len(frame)), n_folds)
+
+    pbo_value = _validation.probability_of_backtest_overfitting(
+        frame, n_partitions=n_folds, embargo=embargo, purge=purge
+    )
+
+    # Diagnostic walk: extract per-split Sharpe winner + BBLZ logit so the
+    # dataclass surface stays informative. Mirror validation's purge /
+    # embargo boundary semantics (purge both sides of every OOS block;
+    # embargo the post-OOS region) so the diagnostic logits stay
+    # consistent with the canonical PBO statistic.
+    n = len(frame)
+    folds = np.array_split(np.arange(n), n_folds)
     k = n_folds // 2
     logits: list[float] = []
     selected_models: list[str] = []
+
     for train_fold_ids in combinations(range(n_folds), k):
         train_idx = np.concatenate([folds[i] for i in train_fold_ids])
-        test_idx = np.concatenate([folds[i] for i in range(n_folds) if i not in train_fold_ids])
+        test_fold_ids = tuple(i for i in range(n_folds) if i not in train_fold_ids)
+        test_idx = np.concatenate([folds[i] for i in test_fold_ids])
+        if purge > 0 or embargo > 0:
+            mask_drop = np.zeros(n, dtype=bool)
+            for oos_idx in test_fold_ids:
+                block = folds[oos_idx]
+                if block.size == 0:
+                    continue
+                start = int(block[0])
+                end = int(block[-1])
+                if purge > 0:
+                    purge_lo = max(0, start - purge)
+                    purge_hi = min(n, end + 1 + purge)
+                    mask_drop[purge_lo:purge_hi] = True
+                if embargo > 0:
+                    embargo_hi = min(n, end + 1 + embargo)
+                    mask_drop[end + 1 : embargo_hi] = True
+            keep = ~mask_drop[train_idx]
+            train_idx = train_idx[keep]
+        if train_idx.size == 0:
+            continue
         train_scores = frame.iloc[train_idx].apply(_sharpe, periods_per_year=periods_per_year)
         test_scores = frame.iloc[test_idx].apply(_sharpe, periods_per_year=periods_per_year)
         winner = str(train_scores.idxmax())
@@ -136,8 +258,13 @@ def probability_of_backtest_overfitting(
         pct = float((ranks[winner] - 0.5) / len(ranks))
         pct = min(max(pct, 1e-6), 1 - 1e-6)
         logits.append(float(math.log(pct / (1 - pct))))
-    pbo = float(np.mean(np.asarray(logits) <= 0.0)) if logits else float("nan")
-    return PBOResult(pbo=pbo, n_trials=len(logits), logits=logits, selected_models=selected_models)
+
+    return PBOResult(
+        pbo=float(pbo_value),
+        n_trials=len(logits),
+        logits=logits,
+        selected_models=selected_models,
+    )
 
 
 def minimum_track_record_length(
@@ -146,18 +273,23 @@ def minimum_track_record_length(
     benchmark_sharpe: float = 0.0,
     alpha: float = 0.05,
     skewness: float = 0.0,
-    kurtosis: float = 3.0,
+    excess_kurtosis: float = 0.0,
 ) -> float:
-    """Approximate minimum observations needed to reject benchmark Sharpe."""
+    """BLP 2014 minimum track record length (delegates to :mod:`validation`).
 
-    normal = NormalDist()
-    z = normal.inv_cdf(1.0 - alpha)
-    delta = float(observed_sharpe - benchmark_sharpe)
-    if delta <= 0:
-        return float("inf")
-    denom = max(1e-12, delta * delta)
-    non_normal = max(1e-12, 1 - skewness * observed_sharpe + ((kurtosis - 1) / 4.0) * observed_sharpe**2)
-    return float(1.0 + (z * z * non_normal) / denom)
+    v1.6.0: kurtosis convention standardised on **excess** (Gaussian = 0)
+    via the ``excess_kurtosis`` keyword (default 0). The earlier v1.6.0
+    fork accepted Pearson kurtosis with default 3.0; callers that
+    previously passed Pearson should subtract 3 before passing the
+    excess form.
+    """
+    return _validation.minimum_track_record_length(
+        float(observed_sharpe),
+        float(benchmark_sharpe),
+        skew=float(skewness),
+        excess_kurt=float(excess_kurtosis),
+        confidence=1.0 - float(alpha),
+    )
 
 
 def _canonical_json(obj: object) -> bytes:
