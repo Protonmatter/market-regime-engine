@@ -565,8 +565,15 @@ def probability_of_backtest_overfitting(
                 purge_hi = min(t, end + 1 + purge)
                 mask_drop[purge_lo:purge_hi] = True
             if embargo > 0:
-                embargo_hi = min(t, end + 1 + embargo)
-                mask_drop[end + 1 : embargo_hi] = True
+                # Embargo extends AFTER the purge window (additive, not
+                # subsumed). López de Prado specifies the union of purge
+                # and embargo windows so the total right-side drop is
+                # `purge + embargo`, not `max(purge, embargo)`. The
+                # canonical implementation lives in
+                # `walk_forward.purge_and_embargo_searchsorted`.
+                embargo_lo = min(t, end + 1 + purge)
+                embargo_hi = min(t, embargo_lo + embargo)
+                mask_drop[embargo_lo:embargo_hi] = True
         keep = ~mask_drop[is_indices]
         return is_indices[keep]
 
