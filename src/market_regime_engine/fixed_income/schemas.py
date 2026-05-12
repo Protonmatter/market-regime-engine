@@ -340,6 +340,15 @@ class FixedIncomeEvidencePack:
     of these packs. PR-1 ships the dataclass + canonical SHA-256 hash;
     PR-7 adds HMAC signing/verification so ``hmac_signature`` may be
     ``None`` until then.
+
+    v1.5.1 (PR-9 FIX 3) adds the ``request_id`` field. When non-``None``
+    the value rides through ``_pack_to_canonical_dict`` and therefore
+    binds into the HMAC bytestream so a replay of the same
+    ``(model_run_id, output_hash)`` under a different ``request_id`` no
+    longer verifies. Legacy ``v1``-signed packs from v1.5.0 carry
+    ``request_id=None`` and continue to verify under the same key
+    version; production callers MUST set ``request_id`` and prefer the
+    ``v2`` key version.
     """
 
     model_run_id: str
@@ -358,6 +367,7 @@ class FixedIncomeEvidencePack:
     lockfile_hash: str | None
     hmac_signature: str | None
     metadata: dict[str, Any] = field(default_factory=dict)
+    request_id: str | None = None
 
 
 __all__ = [

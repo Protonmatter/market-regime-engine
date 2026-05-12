@@ -158,3 +158,52 @@ mre fi-evidence-pack --db data/mre.duckdb \
 mre verify-run --db data/mre.duckdb --run-id <recent_run>
 # expect: "fi_hmac_verified": true
 ```
+
+## 8. request_id binding (v1.5.1, PR-9 FIX 3)
+
+v1.5.0 packs bound only `(model_run_id, component_name, output_hash,
+timestamp)` into the HMAC payload. A replay of the same
+`(model_run_id, output_hash)` under a different inbound `request_id`
+verified silently. v1.5.1 closes that hole by threading `request_id`
+into the canonical bytestream when:
+
+- the pack was built via `build_evidence_pack(request_id=...)`, AND
+- `metadata["_request_id_bound"]` is True (auto-stamped by the builder).
+
+Legacy v1.5.0 packs lack the metadata flag; their canonical bytestream
+remains byte-identical and the v1 signatures continue to verify. The
+following matrix summarises the contract:
+
+| Pack origin | metadata flag | request_id in canonical bytes | Key prefix |
+|---|---|---|---|
+| v1.5.0 sign + v1 key | absent | excluded | `v1:...` |
+| v1.5.0 resign under v2 (`fi-evidence-resign --to-key v2`) | absent | excluded | `v2:...` |
+| v1.5.1 sign with `request_id=X` | `True` | included as `"request_id":"X"` | `v2:...` (recommended) |
+| v1.5.1 sign with `request_id=None` | absent | excluded | `v1:...` or `v2:...` |
+
+### v1 → v2 rotation procedure (FIX 3)
+
+1. Roll out the `v2` key via `MRE_FI_HMAC_KEY_VERSIONS`.
+2. Update every signer to call `build_evidence_pack(request_id=...)`
+   (the FastAPI execution-confidence path threads `X-Request-ID`; the
+   `mre fi-evidence-pack` CLI exposes `--request-id`).
+3. Re-sign historical packs:
+   `mre fi-evidence-resign --from-key v1 --to-key v2 --db ...`. The
+   command emits a `warning` field with a `null_request_id_count` and
+   `null_request_id_sample` when re-signed packs preserve
+   `request_id=null` semantics. Those packs are still replay-vulnerable
+   for the legacy `(model_run_id, output_hash)` tuple; schedule them
+   for a re-issue at source.
+4. After `vN` retirement, regenerate any remaining null-`request_id`
+   packs from the live signal rows via `mre fi-evidence-pack
+   --request-id <id> --sign true`.
+
+### Production guard
+
+When `MRE_ENV=production` (or `MRE_FI_REQUIRE_HMAC=1`) AND the pack's
+`component_name == "execution_confidence"`, `sign_pack` raises
+`RuntimeError` if `pack.request_id` is `None`. This prevents a
+production worker from publishing a replay-vulnerable
+execution-confidence pack. Other components (`credit_regime`,
+`liquidity_stress`, `tca_segmentation`) do not consume an inbound
+request id and are exempt.

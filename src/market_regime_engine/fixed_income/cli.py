@@ -261,7 +261,8 @@ def _build_fi_tca_segment(sub: argparse._SubParsersAction) -> None:
     )
     parser.add_argument(
         "--use-hysteresis",
-        help="Apply asymmetric hysteresis to the regime label during tagging (default true).",
+        help="Apply asymmetric hysteresis to the regime label during tagging "
+        "(default true).",
         default="true",
         choices=["true", "false"],
     )
@@ -443,7 +444,9 @@ def _cmd_fi_score_credit_regime(ns: argparse.Namespace) -> int:
     wh = Warehouse(ns.db)
     try:
         try:
-            features = build_credit_features(wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504)))
+            features = build_credit_features(
+                wh, asof_ts, lookback_days=int(getattr(ns, "lookback_days", 504))
+            )
         except PitViolationError as exc:
             print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
             return 2
@@ -574,17 +577,23 @@ def _cmd_fi_score_liquidity(ns: argparse.Namespace) -> int:
         Literal["market", "sector", "rating", "cusip"], scope_type_raw
     )
     scope_id = getattr(ns, "scope_id", "ALL") or "ALL"
-    prev_from_wh = (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
+    prev_from_wh = (
+        (getattr(ns, "prev_label_from_warehouse", "true") or "true").lower() != "false"
+    )
     use_hier = bool(getattr(ns, "use_hierarchical", False))
 
     wh = Warehouse(ns.db)
     prev_label: LiquidityLabel | None = None
     try:
         if prev_from_wh:
-            prev = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+            prev = latest_liquidity_stress_score(
+                wh, scope_type=scope_type, scope_id=scope_id
+            )
             if prev is not None and prev.liquidity_label:
                 try:
-                    prev_label = next(lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label)
+                    prev_label = next(
+                        lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label
+                    )
                 except StopIteration:
                     prev_label = None
         try:
@@ -665,7 +674,9 @@ def _envelope_from_execution_confidence(output: Any) -> dict[str, Any]:
         "protocol": output.protocol,
         "confidence_score": float(output.confidence_score),
         "expected_slippage_bps": (
-            float(output.expected_slippage_bps) if output.expected_slippage_bps is not None else None
+            float(output.expected_slippage_bps)
+            if output.expected_slippage_bps is not None
+            else None
         ),
         "confidence_interval": [
             output.confidence_interval_low,
@@ -710,7 +721,11 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
 
     input_path = getattr(ns, "input", None)
     if not input_path:
-        print(json.dumps({"status": "error", "detail": "--input is required"}, sort_keys=True))
+        print(
+            json.dumps(
+                {"status": "error", "detail": "--input is required"}, sort_keys=True
+            )
+        )
         return 2
     try:
         raw = Path(input_path).read_text(encoding="utf-8")
@@ -730,10 +745,16 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
     try:
         body = ExecutionConfidenceRequestModel(**payload)
     except Exception as exc:
-        print(json.dumps({"status": "validation_error", "detail": str(exc)}, sort_keys=True))
+        print(
+            json.dumps(
+                {"status": "validation_error", "detail": str(exc)}, sort_keys=True
+            )
+        )
         return 2
 
-    release_gate = (getattr(ns, "release_gate", "true") or "true").lower() != "false"
+    release_gate = (
+        (getattr(ns, "release_gate", "true") or "true").lower() != "false"
+    )
     profile = getattr(ns, "profile", "production")
 
     wh = Warehouse(ns.db)
@@ -747,19 +768,31 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
                 model_run_id=getattr(ns, "model_run_id", None),
             )
         except PitViolationError as exc:
-            print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"status": "pit_violation", "detail": str(exc)}, sort_keys=True
+                )
+            )
             return 2
         except PitAuditFailure as exc:
-            print(json.dumps({"status": "pit_audit_failed", "detail": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"status": "pit_audit_failed", "detail": str(exc)}, sort_keys=True
+                )
+            )
             return 2
-        write_execution_confidence_prediction(wh, output, request_id=body.request_id)
+        write_execution_confidence_prediction(
+            wh, output, request_id=body.request_id
+        )
     finally:
         wh.close()
 
     envelope = _envelope_from_execution_confidence(output)
     envelope["request_id"] = body.request_id
     print(json.dumps(envelope, sort_keys=True, default=str))
-    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
+    output_path = getattr(ns, "output_json", None) or getattr(
+        ns, "out_json_legacy", None
+    )
     if output_path:
         _write_optional_json(output_path, envelope)
     return 0
@@ -798,7 +831,9 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
             print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
             return 2
     else:
-        date_ts = previous_trading_day(pd.Timestamp.now(tz="UTC"), TradingCalendar.SIFMA_BOND)
+        date_ts = previous_trading_day(
+            pd.Timestamp.now(tz="UTC"), TradingCalendar.SIFMA_BOND
+        )
     if date_ts.tzinfo is None:
         date_ts = date_ts.tz_localize("UTC")
 
@@ -822,7 +857,9 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
         dim_list = ["regime_label", "liquidity_label"]
 
     soft_weighting = bool(getattr(ns, "soft_weighting", False))
-    use_hysteresis = (getattr(ns, "use_hysteresis", "true") or "true").lower() != "false"
+    use_hysteresis = (
+        (getattr(ns, "use_hysteresis", "true") or "true").lower() != "false"
+    )
     model_run_id = getattr(ns, "model_run_id", None)
 
     wh = Warehouse(ns.db)
@@ -836,7 +873,11 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
                 model_run_id=model_run_id,
             )
         except PitViolationError as exc:
-            print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
+            print(
+                json.dumps(
+                    {"status": "pit_violation", "detail": str(exc)}, sort_keys=True
+                )
+            )
             return 2
     finally:
         wh.close()
@@ -850,13 +891,17 @@ def _cmd_fi_tca_segment(ns: argparse.Namespace) -> int:
         "use_hysteresis": bool(use_hysteresis),
     }
     print(json.dumps(envelope, sort_keys=True))
-    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
+    output_path = getattr(ns, "output_json", None) or getattr(
+        ns, "out_json_legacy", None
+    )
     if output_path:
         _write_optional_json(output_path, envelope)
     return 0
 
 
-def _resolve_component_artifacts(warehouse: Any, component: str, model_run_id: str) -> dict[str, Any]:
+def _resolve_component_artifacts(
+    warehouse: Any, component: str, model_run_id: str
+) -> dict[str, Any]:
     """Resolve component-specific output rows for evidence pack assembly.
 
     Returns a dict with keys:
@@ -879,33 +924,44 @@ def _resolve_component_artifacts(warehouse: Any, component: str, model_run_id: s
         df = warehouse.read_credit_regime_scores()
         sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
         if sub.empty:
-            raise LookupError(f"no credit_regime_scores rows for model_run_id={model_run_id!r}")
+            raise LookupError(
+                f"no credit_regime_scores rows for model_run_id={model_run_id!r}"
+            )
         row = sub.iloc[-1]
         return {
             "timestamp": str(row["timestamp"]),
             "output_hash": str(row["artifact_hash"]),
             "release_gate": bool(int(row["release_gate"])),
             "model_version": "credit_regime_baseline_v0",
-            "input_features_hash": canonical_sha256({"drivers": str(row.get("drivers_json", ""))}),
+            "input_features_hash": canonical_sha256(
+                {"drivers": str(row.get("drivers_json", ""))}
+            ),
         }
     if component == "liquidity_stress":
         df = warehouse.read_liquidity_stress_scores()
         sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
         if sub.empty:
-            raise LookupError(f"no liquidity_stress_scores rows for model_run_id={model_run_id!r}")
+            raise LookupError(
+                f"no liquidity_stress_scores rows for model_run_id={model_run_id!r}"
+            )
         row = sub.iloc[-1]
         return {
             "timestamp": str(row["timestamp"]),
             "output_hash": str(row["artifact_hash"]),
             "release_gate": bool(int(row["release_gate"])),
             "model_version": "liquidity_stress_baseline_v0",
-            "input_features_hash": canonical_sha256({"drivers": str(row.get("drivers_json", ""))}),
+            "input_features_hash": canonical_sha256(
+                {"drivers": str(row.get("drivers_json", ""))}
+            ),
         }
     if component == "execution_confidence":
         df = warehouse.read_execution_confidence_predictions()
         sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
         if sub.empty:
-            raise LookupError(f"no execution_confidence_predictions rows for model_run_id={model_run_id!r}")
+            raise LookupError(
+                f"no execution_confidence_predictions rows for "
+                f"model_run_id={model_run_id!r}"
+            )
         row = sub.iloc[-1]
         return {
             "timestamp": str(row["timestamp"]),
@@ -924,17 +980,23 @@ def _resolve_component_artifacts(warehouse: Any, component: str, model_run_id: s
         df = warehouse.read_tca_regime_segments()
         sub = df[df["model_run_id"] == model_run_id] if not df.empty else df
         if sub.empty:
-            raise LookupError(f"no tca_regime_segments rows for model_run_id={model_run_id!r}")
+            raise LookupError(
+                f"no tca_regime_segments rows for model_run_id={model_run_id!r}"
+            )
         row = sub.iloc[-1]
         # TCA rows do not carry an artifact_hash column; derive from the
         # canonical row payload so the pack is still tamper-evident.
-        row_hash = canonical_sha256({col: str(row.get(col, "")) for col in sub.columns if col != "metadata_json"})
+        row_hash = canonical_sha256(
+            {col: str(row.get(col, "")) for col in sub.columns if col != "metadata_json"}
+        )
         return {
             "timestamp": str(row["timestamp"]),
             "output_hash": row_hash,
             "release_gate": True,
             "model_version": "tca_segmentation_baseline_v0",
-            "input_features_hash": canonical_sha256({"metric": str(row.get("metric_name", ""))}),
+            "input_features_hash": canonical_sha256(
+                {"metric": str(row.get("metric_name", ""))}
+            ),
         }
     raise ValueError(f"unsupported component: {component!r}")
 
@@ -995,7 +1057,8 @@ def _cmd_fi_evidence_pack(ns: argparse.Namespace) -> int:
                 {
                     "status": "error",
                     "detail": (
-                        f"invalid --component {component!r}; expected one of {sorted(_VALID_EVIDENCE_COMPONENTS)!r}"
+                        f"invalid --component {component!r}; "
+                        f"expected one of {sorted(_VALID_EVIDENCE_COMPONENTS)!r}"
                     ),
                 },
                 sort_keys=True,
@@ -1029,7 +1092,9 @@ def _cmd_fi_evidence_pack(ns: argparse.Namespace) -> int:
         vintages = capture_data_vintages(wh, asof=asof_ts)
         # The model_hash is canonical over the output_hash + component
         # so a signed pack can be verified standalone.
-        model_hash = canonical_sha256({"component": component, "output_hash": artifacts["output_hash"]})
+        model_hash = canonical_sha256(
+            {"component": component, "output_hash": artifacts["output_hash"]}
+        )
         pack = build_evidence_pack(
             model_run_id=model_run_id,
             component_name=component,
@@ -1042,9 +1107,16 @@ def _cmd_fi_evidence_pack(ns: argparse.Namespace) -> int:
             data_vintages=vintages,
             timestamp=str(artifacts["timestamp"]),
             lockfile_hash=_lockfile_hash() or None,
+            # v1.5.1 (PR-9 FIX 3): bind the request_id into the
+            # canonical HMAC bytestream so a replay under a different
+            # id no longer verifies. v1.5.0 packs persisted before
+            # this rollout keep request_id=None and verify under v1.
+            request_id=request_id,
         )
         try:
-            persisted = write_evidence_pack(wh, pack, request_id=request_id, sign=sign_value)
+            persisted = write_evidence_pack(
+                wh, pack, request_id=request_id, sign=sign_value
+            )
         except RuntimeError as exc:
             payload = {"status": "error", "detail": str(exc)}
             if require_production_hmac():
@@ -1091,13 +1163,17 @@ def _cmd_fi_report(ns: argparse.Namespace) -> int:
             print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
             return 2
 
-    out_path = Path(getattr(ns, "out", None) or "data/reports/fixed_income_rcie.md")
+    out_path = Path(
+        getattr(ns, "out", None) or "data/reports/fixed_income_rcie.md"
+    )
     wh = Warehouse(ns.db)
     try:
         # mypy: format is validated above so the cast is safe.
         from typing import Literal, cast
 
-        fmt: Literal["markdown", "html"] = cast(Literal["markdown", "html"], fmt_raw)
+        fmt: Literal["markdown", "html"] = cast(
+            Literal["markdown", "html"], fmt_raw
+        )
         body = generate_fi_report(wh, asof=asof_ts, output_format=fmt)
     finally:
         wh.close()
@@ -1144,7 +1220,10 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
             json.dumps(
                 {
                     "status": "error",
-                    "detail": (f"--to-key {to_key!r} not in MRE_FI_HMAC_KEY_VERSIONS {sorted(keys)!r}"),
+                    "detail": (
+                        f"--to-key {to_key!r} not in MRE_FI_HMAC_KEY_VERSIONS "
+                        f"{sorted(keys)!r}"
+                    ),
                 },
                 sort_keys=True,
             )
@@ -1180,7 +1259,8 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
         prefix = f"{from_key}:"
         mask = sig_series.str.startswith(prefix)
         matching = df[mask]
-        matched_count = len(matching)
+        matched_count = int(len(matching))
+        null_request_id_warnings: list[str] = []
         if not dry_run and not matching.empty:
             from dataclasses import replace as _dataclass_replace
 
@@ -1189,6 +1269,14 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
             rows: list[dict[str, Any]] = []
             for _, row in matching.iterrows():
                 pack = _row_to_pack(row)
+                # v1.5.1 (PR-9 FIX 3): re-signing a legacy v1 pack
+                # under v2 preserves ``request_id=None`` (we cannot
+                # invent a value the original signer never bound).
+                # Surface the count in the report so the operator
+                # knows which packs are still replay-vulnerable and
+                # need to be re-issued at source.
+                if pack.request_id is None and to_key >= "v2":
+                    null_request_id_warnings.append(str(row.get("model_run_id", "")))
                 # Strip the existing signature so canonical_pack_payload
                 # doesn't re-include a stale value (defensive — the helper
                 # already drops hmac_signature before signing).
@@ -1200,19 +1288,29 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
     finally:
         wh.close()
 
-    print(
-        json.dumps(
-            {
-                "status": "ok",
-                "from_key": from_key,
-                "to_key": to_key,
-                "dry_run": dry_run,
-                "matched": matched_count,
-                "resigned": int(resigned_count),
-            },
-            sort_keys=True,
+    payload = {
+        "status": "ok",
+        "from_key": from_key,
+        "to_key": to_key,
+        "dry_run": dry_run,
+        "matched": matched_count,
+        "resigned": int(resigned_count),
+    }
+    # v1.5.1 (PR-9 FIX 3): when packs were re-signed under v2+ but
+    # carried a null ``request_id`` we surface a warning so operators
+    # know which model_run_ids are still replay-vulnerable. The warning
+    # is non-fatal — re-signing legacy packs is the documented path —
+    # but the count + a sample of ids gives the operator the lever they
+    # need to schedule a re-issue at source.
+    if null_request_id_warnings:
+        sample = sorted(set(null_request_id_warnings))[:10]
+        payload["warning"] = (
+            "resigned packs carry request_id=null and remain replay-vulnerable; "
+            "regenerate at source with fi-evidence-pack --request-id"
         )
-    )
+        payload["null_request_id_count"] = len(null_request_id_warnings)
+        payload["null_request_id_sample"] = sample
+    print(json.dumps(payload, sort_keys=True))
     return 0
 
 
