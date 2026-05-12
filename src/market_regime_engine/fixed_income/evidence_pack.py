@@ -58,6 +58,17 @@ log = logging.getLogger(__name__)
 
 _HMAC_FIELD = "hmac_signature"
 
+# v1.5 PR-8 (Tier-1 fix C-AUTO-1): the canonical SHA-256 of the pack
+# (computed via :func:`compute_pack_hash`) is persisted into
+# ``pack.metadata`` under this key at write time so ``verify-run`` can
+# detect row-level tampering by comparing the recomputed pack hash to
+# the stored envelope hash. The key is stripped from
+# :func:`_pack_to_canonical_dict` (alongside ``hmac_signature``) so the
+# canonical bytestream is invariant under presence/absence of the
+# envelope hash — both HMAC signing and pack-hash recomputation produce
+# the same bytes whether the envelope hash has been stamped or not.
+_ENVELOPE_HASH_METADATA_KEY = "_envelope_hash"
+
 # Env vars (per AGENT.md PR-7 + INSTRUCTIONS.md §10 governance rules).
 _HMAC_KEY_VERSIONS_ENV = "MRE_FI_HMAC_KEY_VERSIONS"
 _HMAC_KEY_SINGLETON_ENV = "MRE_FI_HMAC_KEY"
@@ -79,16 +90,30 @@ def _python_version() -> str:
 
 
 def _pack_to_canonical_dict(pack: FixedIncomeEvidencePack) -> dict[str, Any]:
-    """Return the pack as a canonical dict, dropping ``hmac_signature``.
+    """Return the pack as a canonical dict, dropping ``hmac_signature``
+    and the self-referential envelope-hash key from ``metadata``.
 
     The HMAC signature wraps the canonical bytestream, so it cannot
     itself participate in the hash without making the construction
     fixed-point. AGENT.md §"Hashing rules" spells this out: "HMAC
     signing should sign the canonical pack JSON excluding
     ``hmac_signature`` itself."
+
+    v1.5 PR-8 (Tier-1 fix C-AUTO-1): ``metadata[_ENVELOPE_HASH_METADATA_KEY]``
+    is stamped at write time so :func:`verify-run` can detect tampering
+    by recomputing :func:`compute_pack_hash` and comparing to the
+    stored value. The key is excluded from the canonical bytestream so
+    the same compute_pack_hash result is invariant under whether the
+    envelope hash has been stamped or not (avoiding a second fixed
+    point on top of the HMAC one).
     """
     raw = asdict(pack)
     raw.pop(_HMAC_FIELD, None)
+    metadata = raw.get("metadata")
+    if isinstance(metadata, dict) and _ENVELOPE_HASH_METADATA_KEY in metadata:
+        raw["metadata"] = {
+            k: v for k, v in metadata.items() if k != _ENVELOPE_HASH_METADATA_KEY
+        }
     return raw
 
 
@@ -225,9 +250,13 @@ def get_hmac_keys() -> dict[str, bytes]:
         try:
             mapping = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"{_HMAC_KEY_VERSIONS_ENV} must be a JSON object: {exc}") from exc
+            raise RuntimeError(
+                f"{_HMAC_KEY_VERSIONS_ENV} must be a JSON object: {exc}"
+            ) from exc
         if not isinstance(mapping, dict):
-            raise RuntimeError(f"{_HMAC_KEY_VERSIONS_ENV} must decode to a JSON object; got {type(mapping).__name__}")
+            raise RuntimeError(
+                f"{_HMAC_KEY_VERSIONS_ENV} must decode to a JSON object; got {type(mapping).__name__}"
+            )
         out: dict[str, bytes] = {}
         for version, value in mapping.items():
             if not isinstance(version, str) or not version:
@@ -302,7 +331,10 @@ def sign_pack(
     if key_version is None:
         key_version = latest_hmac_version()
     if key_version not in keys:
-        raise RuntimeError(f"HMAC key version {key_version!r} is not in the configured versions {sorted(keys)!r}")
+        raise RuntimeError(
+            f"HMAC key version {key_version!r} is not in the configured "
+            f"versions {sorted(keys)!r}"
+        )
     payload = canonical_pack_payload(pack)
     digest = _hmac_hex(keys[key_version], payload)
     signature = f"{key_version}:{digest}"
@@ -481,6 +513,26 @@ def evidence_pack_to_row(
     }
 
 
+def _stamp_envelope_hash(pack: FixedIncomeEvidencePack) -> FixedIncomeEvidencePack:
+    """Return a new pack with ``metadata[_ENVELOPE_HASH_METADATA_KEY]``
+    populated with the canonical pack-hash.
+
+    The envelope hash is the SHA-256 over the canonical bytestream
+    *excluding* both ``hmac_signature`` and this key itself (see
+    :func:`_pack_to_canonical_dict`), so the value is stable under
+    re-signing and under repeated stamping.
+
+    v1.5 PR-8 (Tier-1 fix C-AUTO-1): ``verify-run`` compares the
+    recomputed hash against this stamped value to detect row-level
+    tampering of any pack field (including ``output_hash``) without
+    requiring HMAC keys.
+    """
+    envelope_hash = compute_pack_hash(pack)
+    new_metadata = dict(pack.metadata or {})
+    new_metadata[_ENVELOPE_HASH_METADATA_KEY] = envelope_hash
+    return replace(pack, metadata=new_metadata)
+
+
 def write_evidence_pack(
     warehouse: Any,
     pack: FixedIncomeEvidencePack,
@@ -502,12 +554,19 @@ def write_evidence_pack(
 
     Returns the (possibly newly-signed) pack so the caller can compare
     the persisted ``hmac_signature`` against the in-memory one.
+
+    v1.5 PR-8 (Tier-1 fix C-AUTO-1): stamps the canonical pack-hash
+    into ``pack.metadata[_envelope_hash]`` before signing so
+    :func:`verify_run` can compare the recomputed hash against the
+    stored envelope hash to detect row-level tampering.
     """
+    stamped = _stamp_envelope_hash(pack)
     if sign is True:
-        signed = sign_pack(pack)
+        signed = sign_pack(stamped)
         if signed.hmac_signature is None:
             raise RuntimeError(
-                "sign=True requested but no HMAC keys are configured (set MRE_FI_HMAC_KEY_VERSIONS or MRE_FI_HMAC_KEY)"
+                "sign=True requested but no HMAC keys are configured "
+                "(set MRE_FI_HMAC_KEY_VERSIONS or MRE_FI_HMAC_KEY)"
             )
     elif sign is False:
         if require_production_hmac():
@@ -515,9 +574,9 @@ def write_evidence_pack(
                 "sign=False requested but production mode requires HMAC; "
                 "either disable production mode or pass sign=True"
             )
-        signed = pack
+        signed = stamped
     else:
-        signed = sign_pack(pack)
+        signed = sign_pack(stamped)
     row = evidence_pack_to_row(signed, request_id=request_id)
     warehouse.write_evidence_pack(pd.DataFrame([row]))
     return signed
@@ -601,11 +660,17 @@ def _row_to_pack(row: pd.Series) -> FixedIncomeEvidencePack:
         validation_results=_parse_json_field(row.get("validation_results_json")),
         release_gate=bool(int(row["release_gate"])),
         random_seeds=_parse_json_field(row.get("random_seeds_json")),
-        python_version=(None if pd.isna(row.get("python_version")) else str(row["python_version"])) or "",
-        lockfile_hash=(None if pd.isna(row.get("lockfile_hash")) else str(row["lockfile_hash"])),
+        python_version=(
+            None if pd.isna(row.get("python_version")) else str(row["python_version"])
+        )
+        or "",
+        lockfile_hash=(
+            None if pd.isna(row.get("lockfile_hash")) else str(row["lockfile_hash"])
+        ),
         hmac_signature=(
             None
-            if pd.isna(row.get("hmac_signature")) or row.get("hmac_signature") in ("", None)
+            if pd.isna(row.get("hmac_signature"))
+            or row.get("hmac_signature") in ("", None)
             else str(row["hmac_signature"])
         ),
         metadata=_parse_json_field(row.get("metadata_json")),
@@ -622,6 +687,23 @@ def evidence_pack_to_dict(pack: FixedIncomeEvidencePack) -> dict[str, Any]:
     return out
 
 
+def stored_envelope_hash(pack: FixedIncomeEvidencePack) -> str | None:
+    """Return the envelope hash stamped into ``pack.metadata`` at write time.
+
+    v1.5 PR-8 (Tier-1 fix C-AUTO-1): ``write_evidence_pack`` stamps the
+    canonical pack hash here; ``verify-run`` reads it back and compares
+    to a fresh :func:`compute_pack_hash` to detect row-level tampering.
+    Returns ``None`` when the pack was written before the stamping
+    rollout (or by a path that bypassed :func:`write_evidence_pack`)
+    so ``verify-run`` fails closed with ``"envelope_hash_missing"``.
+    """
+    metadata = pack.metadata or {}
+    value = metadata.get(_ENVELOPE_HASH_METADATA_KEY)
+    if not isinstance(value, str) or not value:
+        return None
+    return value
+
+
 __all__ = [
     "build_evidence_pack",
     "canonical_pack_payload",
@@ -634,6 +716,7 @@ __all__ = [
     "read_evidence_pack",
     "require_production_hmac",
     "sign_pack",
+    "stored_envelope_hash",
     "verify_pack",
     "verify_pack_hash",
     "write_evidence_pack",

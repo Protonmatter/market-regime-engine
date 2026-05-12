@@ -973,28 +973,40 @@ def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
 
     - ``fi_evidence_pack_present``: True when at least one row matches.
     - ``fi_envelope_consistent``: True when the recomputed canonical
-      hash matches the stored ``output_hash``.
+      pack hash matches the envelope hash stamped at write time by
+      :func:`write_evidence_pack` (v1.5 PR-8 Tier-1 fix C-AUTO-1).
+      False when the stored envelope hash is missing
+      (``fi_envelope_reason="envelope_hash_missing"``) or when the
+      recomputed value differs from the stored one
+      (``fi_envelope_reason="envelope_hash_mismatch"``). ``None`` when
+      no pack is present.
+    - ``fi_envelope_reason``: ``"envelope_hash_missing"`` /
+      ``"envelope_hash_mismatch"`` / ``None`` so auditors can tell why
+      consistency failed.
     - ``fi_hmac_verified``: True when ``verify_pack`` accepts the
       signature (or no keys are configured and signature is None).
 
-    Adds the trio to the macro ``verify_run`` report so a single
+    Adds the quartet to the macro ``verify_run`` report so a single
     operator command surfaces both layers of governance.
     """
     from market_regime_engine.fixed_income.evidence_pack import (
         compute_pack_hash,
         read_evidence_pack,
+        stored_envelope_hash,
         verify_pack,
     )
 
     out: dict[str, Any] = {
         "fi_evidence_pack_present": False,
         "fi_envelope_consistent": None,
+        "fi_envelope_reason": None,
         "fi_hmac_verified": None,
     }
     try:
         pack = read_evidence_pack(db, model_run_id=model_run_id)
     except Exception as exc:
         out["fi_envelope_consistent"] = False
+        out["fi_envelope_reason"] = "envelope_read_failed"
         out["fi_hmac_verified"] = False
         out["fi_error"] = str(exc)
         return out
@@ -1003,10 +1015,21 @@ def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
     out["fi_evidence_pack_present"] = True
     try:
         recomputed = compute_pack_hash(pack)
-        out["fi_envelope_consistent"] = bool(recomputed.startswith("sha256:"))
         out["fi_recomputed_hash"] = recomputed
+        expected = stored_envelope_hash(pack)
+        out["fi_expected_envelope_hash"] = expected
+        if not expected:
+            out["fi_envelope_consistent"] = False
+            out["fi_envelope_reason"] = "envelope_hash_missing"
+        elif recomputed != expected:
+            out["fi_envelope_consistent"] = False
+            out["fi_envelope_reason"] = "envelope_hash_mismatch"
+        else:
+            out["fi_envelope_consistent"] = True
+            out["fi_envelope_reason"] = None
     except Exception as exc:
         out["fi_envelope_consistent"] = False
+        out["fi_envelope_reason"] = "envelope_compare_failed"
         out["fi_envelope_error"] = str(exc)
     try:
         out["fi_hmac_verified"] = bool(verify_pack(pack))
@@ -1107,7 +1130,9 @@ def verify_run_cmd(args: argparse.Namespace) -> None:
         except Exception as exc:
             fi_report = {"fi_error": str(exc)}
         report = {**report, **fi_report}
-        if not bool(fi_report.get("fi_hmac_verified", True)) and fi_report.get("fi_evidence_pack_present"):
+        if not bool(fi_report.get("fi_hmac_verified", True)) and fi_report.get(
+            "fi_evidence_pack_present"
+        ):
             report["approved"] = False
         log.info("verify_run", extra=report)
         print(json.dumps(report, indent=2, sort_keys=True, default=str))
