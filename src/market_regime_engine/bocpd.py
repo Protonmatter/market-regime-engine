@@ -153,7 +153,9 @@ class DiagonalStudentTBOCPD:
                 ]
             )
 
-        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
+        frame = clean_with_policy(
+            x, default_policy=nan_policy, column_policies=column_policies
+        ).astype(float)
         arr = frame.to_numpy(float)
         dim = arr.shape[1]
 
@@ -319,7 +321,7 @@ def _cholesky_solve_lower(L: np.ndarray, b: np.ndarray) -> np.ndarray:
     present because it is roughly an order of magnitude faster.
     """
     try:  # pragma: no cover - import speed not worth measuring
-        from scipy.linalg import solve_triangular  # type: ignore
+        from scipy.linalg import solve_triangular
 
         return solve_triangular(L, b, lower=True)
     except Exception:
@@ -390,7 +392,9 @@ class MultivariateNIWBOCPD:
                 ]
             )
 
-        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
+        frame = clean_with_policy(
+            x, default_policy=nan_policy, column_policies=column_policies
+        ).astype(float)
         arr = frame.to_numpy(float)
         dim = arr.shape[1]
 

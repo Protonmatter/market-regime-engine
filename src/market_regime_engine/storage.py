@@ -2740,7 +2740,7 @@ def get_pooled_warehouse(path: str | Path) -> Warehouse:
 
 
 @contextlib.contextmanager
-def pooled_warehouse_write_lock(path: str | Path):  # type: ignore[no-untyped-def]
+def pooled_warehouse_write_lock(path: str | Path):
     """Context manager that holds the per-warehouse write lock.
 
     Recommended usage::

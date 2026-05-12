@@ -36,7 +36,7 @@ try:  # pragma: no cover - exercised only when the extension is built
     else:
         log.info("mre_rust_ext loaded (no __version__ attribute exported)")
 except Exception as exc:  # pragma: no cover - default in CI without Rust
-    mre_rust_ext = None  # type: ignore[assignment]
+    mre_rust_ext = None
     _AVAILABLE = False
     _WHEEL_VERSION = None
     log.debug("mre_rust_ext unavailable: %s", exc)
