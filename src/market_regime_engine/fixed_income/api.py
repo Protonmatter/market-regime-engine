@@ -45,6 +45,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from market_regime_engine.fixed_income.credit_spread_regime import (
     latest_credit_regime_score,
+    latest_credit_regime_score_identity,
 )
 from market_regime_engine.fixed_income.execution_confidence import (
     score_execution_confidence,
@@ -262,8 +263,13 @@ def _resolve_db_path() -> str:
 # accelerator inside one worker.
 
 _FI_CACHE_LOCK = threading.RLock()
-_FI_CACHE: dict[tuple[str, str], tuple[str, Any]] = {}
-# (endpoint, warehouse_id) -> (latest_ts, payload)
+_FI_CACHE: dict[tuple[str, str], tuple[Any, Any]] = {}
+# (endpoint, warehouse_id) -> (version_key, payload)
+# v1.5 PR-8 (Tier-2 fix A-Q1): ``version_key`` is now opaque — for
+# ``regime_index/latest`` it's the
+# ``(timestamp, model_run_id, artifact_hash)`` triple so two writes
+# with the same canonical timestamp but different runs invalidate the
+# cache. Other endpoints continue to use a single timestamp string.
 
 
 def _warehouse_identity(warehouse: Any) -> str:
@@ -284,15 +290,20 @@ def _fi_cache_get_or_compute(
     *,
     endpoint: str,
     warehouse: Any,
-    latest_ts: str | None,
+    latest_ts: Any | None,
     compute: Callable[[], Any],
 ) -> Any:
-    """Return cached payload when latest_ts matches; else compute + cache.
+    """Return cached payload when ``latest_ts`` matches; else compute + cache.
 
-    ``latest_ts`` is the canonical version key (e.g. the most recent
-    ``credit_regime_scores.timestamp`` ISO-8601 string). When it
-    advances, the previous cached entry is dropped — a fresh score
-    invalidates the cache instantly per REVIEW.md §3.6 PR-8.
+    ``latest_ts`` is the canonical version key. For
+    ``regime_index/latest`` it's the
+    ``(timestamp, model_run_id, artifact_hash)`` triple (v1.5 PR-8
+    Tier-2 A-Q1: two writes with the same canonical timestamp but
+    different runs MUST invalidate the cache, which a timestamp-only
+    key fails to do). For the other FI endpoints it's still the
+    ISO-8601 timestamp string. When the key advances, the previous
+    cached entry is dropped — a fresh score invalidates the cache
+    instantly per REVIEW.md §3.6 PR-8.
     """
     if latest_ts is None:
         # No data: always recompute (cheap for empty-warehouse path).
@@ -315,10 +326,18 @@ def reset_fi_cache() -> None:
 
 
 def _latest_credit_regime_timestamp(warehouse: Any) -> str | None:
-    df = warehouse.read_credit_regime_scores()
-    if df is None or df.empty:
+    """Legacy helper kept for back-compat with any external callers.
+
+    v1.5 PR-8 (Tier-2 fix A-Q1): the FastAPI handler now uses
+    :func:`latest_credit_regime_score_identity` so the cache key
+    includes ``model_run_id`` and ``artifact_hash``; this helper is no
+    longer called from the hot path but is preserved so the public
+    module surface does not regress.
+    """
+    triple = latest_credit_regime_score_identity(warehouse)
+    if triple is None:
         return None
-    return str(df.iloc[-1]["timestamp"])
+    return triple[0]
 
 
 def _latest_liquidity_timestamp(
@@ -470,8 +489,14 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest_ts = _latest_credit_regime_timestamp(wh)
-                if latest_ts is None:
+                # v1.5 PR-8 (Tier-2 fix A-Q1): use the
+                # ``(timestamp, model_run_id, artifact_hash)`` triple as
+                # the cache version key so two writes with the same
+                # canonical timestamp but different runs invalidate the
+                # cache. Pre-fix the cache returned the FIRST run's
+                # artifact silently on the second read.
+                identity = latest_credit_regime_score_identity(wh)
+                if identity is None:
                     return JSONResponse(
                         {"detail": "no_data", "release_gate": False},
                         status_code=_HTTP_SERVICE_UNAVAILABLE,
@@ -488,7 +513,7 @@ def build_router(
                 payload = _fi_cache_get_or_compute(
                     endpoint="regime_index/latest",
                     warehouse=wh,
-                    latest_ts=latest_ts,
+                    latest_ts=identity,
                     compute=_compute,
                 )
             except Exception as exc:
