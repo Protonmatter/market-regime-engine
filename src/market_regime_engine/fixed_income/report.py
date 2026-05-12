@@ -25,6 +25,7 @@ on a fresh install before any FI signals have landed.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 from dataclasses import dataclass
@@ -36,6 +37,41 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 __all__ = ["FiReportSection", "generate_fi_report"]
+
+
+def _safe_md_cell(value: Any) -> str:
+    """Render a value as a Markdown table cell, escaping every character
+    that would let attacker-controlled DB content break out into
+    syntactic Markdown or HTML.
+
+    v1.5 PR-8 (Tier-1 fix C-AUTO-5): the FI report interpolates
+    operator-untrusted scope_id / regime_label / model_run_id / etc.
+    directly into Markdown table cells. The HTML render path then
+    passes through ``markdown.markdown(...)`` which expands HTML in
+    those cells — so a CUSIP-shaped attacker input like
+    ``9128283N8\\n<script>alert(1)</script>`` historically broke out
+    into actual ``<script>``.
+
+    The escape policy:
+
+    - Backslash first (so subsequent escapes don't get double-escaped).
+    - Markdown table separators: pipe.
+    - Inline-code introducer: backtick.
+    - Line breaks: collapsed to a single space (no row injection).
+    - HTML metacharacters: html.escape with quote=False to preserve
+      apostrophes inside identifiers.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("|", "\\|")
+    s = s.replace("`", "\\`")
+    s = s.replace("\r\n", " ")
+    s = s.replace("\n", " ")
+    s = s.replace("\r", " ")
+    s = html.escape(s, quote=False)
+    return s
 
 
 @dataclass(frozen=True)
@@ -70,7 +106,9 @@ def _signal_age_seconds(asof: pd.Timestamp, ts: pd.Timestamp | str | None) -> fl
     return float((asof - parsed).total_seconds())
 
 
-def _credit_regime_section(df: pd.DataFrame, *, asof: pd.Timestamp) -> FiReportSection:
+def _credit_regime_section(
+    df: pd.DataFrame, *, asof: pd.Timestamp
+) -> FiReportSection:
     if df is None or df.empty:
         return FiReportSection(
             heading="Credit Regime Index",
@@ -88,15 +126,16 @@ def _credit_regime_section(df: pd.DataFrame, *, asof: pd.Timestamp) -> FiReportS
     age_str = f"{age:.0f}s" if age is not None else "n/a"
     body_lines = [
         f"- **Score**: {float(row['regime_score']):.2f} / 100",
-        f"- **Label**: {row['regime_label']}",
+        f"- **Label**: {_safe_md_cell(row['regime_label'])}",
         f"- **Confidence**: {float(row['confidence']):.2f}",
         f"- **Release gate**: {bool(int(row['release_gate']))}",
-        f"- **Timestamp**: {row['timestamp']}",
-        f"- **Signal age (vs asof)**: {age_str}",
-        f"- **Model run**: `{row['model_run_id']}`",
+        f"- **Timestamp**: {_safe_md_cell(row['timestamp'])}",
+        f"- **Signal age (vs asof)**: {_safe_md_cell(age_str)}",
+        f"- **Model run**: `{_safe_md_cell(row['model_run_id'])}`",
     ]
     if drivers:
-        body_lines.append(f"- **Drivers**: {', '.join(drivers[:5])}")
+        safe_drivers = ", ".join(_safe_md_cell(d) for d in drivers[:5])
+        body_lines.append(f"- **Drivers**: {safe_drivers}")
     return FiReportSection(
         heading="Credit Regime Index",
         body="\n".join(body_lines) + "\n",
@@ -119,8 +158,8 @@ def _liquidity_section(df: pd.DataFrame, *, asof: pd.Timestamp) -> FiReportSecti
         age = _signal_age_seconds(asof, row.get("timestamp"))
         age_str = f"{age:.0f}" if age is not None else "n/a"
         lines.append(
-            f"| {row['scope_type']} | {row['scope_id']} | "
-            f"{float(row['liquidity_score']):.2f} | {row['liquidity_label']} | "
+            f"| {_safe_md_cell(row['scope_type'])} | {_safe_md_cell(row['scope_id'])} | "
+            f"{float(row['liquidity_score']):.2f} | {_safe_md_cell(row['liquidity_label'])} | "
             f"{bool(int(row['release_gate']))} | {age_str} |"
         )
     return FiReportSection(
@@ -143,7 +182,8 @@ def _execution_confidence_section(
         f"- **Total predictions** (last {len(head)}): {len(head)}",
         f"- **Auto-X allowed**: {int(actions.get('Auto-X allowed', 0))}",
         f"- **Auto-X caution**: {int(actions.get('Auto-X caution / trader confirm', 0))}",
-        f"- **Manual review required**: {int(actions.get('Manual review required', 0))}",
+        f"- **Manual review required**: "
+        f"{int(actions.get('Manual review required', 0))}",
     ]
     if outcomes is not None and not outcomes.empty:
         joined = predictions.merge(
@@ -154,7 +194,9 @@ def _execution_confidence_section(
             suffixes=("_pred", "_out"),
         )
         if not joined.empty:
-            joined["filled"] = joined["filled_quantity"].fillna(0).astype(float) > 0
+            joined["filled"] = (
+                joined["filled_quantity"].fillna(0).astype(float) > 0
+            )
             success_rate = float(joined["filled"].mean())
             lines.append(f"- **Filled rate** (predictions ∩ outcomes): {success_rate:.1%}")
             lines.append(f"- **Sample size**: {len(joined)}")
@@ -191,7 +233,7 @@ def _tca_section(df: pd.DataFrame) -> FiReportSection:
     lines = ["| Regime | Liquidity | Samples | Avg metric value |", "|---|---|---|---|"]
     for _, row in grouped.iterrows():
         lines.append(
-            f"| {row['regime_label']} | {row['liquidity_label']} | "
+            f"| {_safe_md_cell(row['regime_label'])} | {_safe_md_cell(row['liquidity_label'])} | "
             f"{int(row['samples'])} | {float(row['avg_value']):.4f} |"
         )
     return FiReportSection(
@@ -211,13 +253,13 @@ def _release_gate_section(df: pd.DataFrame) -> FiReportSection:
     profile = str(row.get("resolved_profile", "n/a"))
     reasons = row.get("reasons")
     lines = [
-        f"- **Latest decision**: {decision}",
-        f"- **Resolved profile**: {profile}",
-        f"- **Min confidence**: {row.get('min_confidence', 'n/a')}",
-        f"- **Worst coverage**: {row.get('worst_coverage', 'n/a')}",
+        f"- **Latest decision**: {_safe_md_cell(decision)}",
+        f"- **Resolved profile**: {_safe_md_cell(profile)}",
+        f"- **Min confidence**: {_safe_md_cell(row.get('min_confidence', 'n/a'))}",
+        f"- **Worst coverage**: {_safe_md_cell(row.get('worst_coverage', 'n/a'))}",
     ]
     if reasons:
-        lines.append(f"- **Reasons**: {reasons}")
+        lines.append(f"- **Reasons**: {_safe_md_cell(reasons)}")
     return FiReportSection(
         heading="Release Gate Status",
         body="\n".join(lines) + "\n",
@@ -230,16 +272,26 @@ def _evidence_pack_section(df: pd.DataFrame) -> FiReportSection:
             heading="Evidence Packs",
             body="_No evidence packs have been recorded yet._\n",
         )
-    by_component = df.sort_values("timestamp").groupby("component_name", as_index=False).tail(1)
+    by_component = (
+        df.sort_values("timestamp")
+        .groupby("component_name", as_index=False)
+        .tail(1)
+    )
     lines = [
         "| Component | Model run | Request | Signed | Timestamp |",
         "|---|---|---|---|---|",
     ]
     for _, row in by_component.iterrows():
-        signed = str(row.get("hmac_signature", "")).split(":", 1)[0] if str(row.get("hmac_signature", "")) else "no"
+        signed = (
+            str(row.get("hmac_signature", "")).split(":", 1)[0]
+            if str(row.get("hmac_signature", ""))
+            else "no"
+        )
         lines.append(
-            f"| {row['component_name']} | `{row['model_run_id']}` | "
-            f"`{row['request_id']}` | {signed} | {row['timestamp']} |"
+            f"| {_safe_md_cell(row['component_name'])} | "
+            f"`{_safe_md_cell(row['model_run_id'])}` | "
+            f"`{_safe_md_cell(row['request_id'])}` | "
+            f"{_safe_md_cell(signed)} | {_safe_md_cell(row['timestamp'])} |"
         )
     return FiReportSection(
         heading="Evidence Packs",
@@ -280,7 +332,7 @@ def _render_html(markdown_body: str) -> str:
         )
         return (
             "<!DOCTYPE html>\n"
-            '<html lang="en"><head><meta charset="utf-8">'
+            "<html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<title>Fixed-Income RCIE Report</title></head><body>"
             f"{html_body}</body></html>\n"
         )
@@ -289,7 +341,7 @@ def _render_html(markdown_body: str) -> str:
 
         return (
             "<!DOCTYPE html>\n"
-            '<html lang="en"><head><meta charset="utf-8">'
+            "<html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<title>Fixed-Income RCIE Report</title></head><body>"
             f"<pre>{escape(markdown_body)}</pre>"
             "</body></html>\n"
