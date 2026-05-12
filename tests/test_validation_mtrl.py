@@ -35,11 +35,21 @@ def test_mtrl_rejects_invalid_confidence() -> None:
 
 
 def test_mtrl_matches_blp_closed_form_for_gaussian_returns() -> None:
-    """For Gaussian returns (skew=0, kurt=0), MTRL reduces to
-    ``1 + (Φ⁻¹(C) / (SR − SR_target))²``."""
+    """For Gaussian returns (skew=0, γ_4 excess=0), Bailey & Lopez de Prado
+    (2014) eq. (5)+(8) reduce to:
+
+        n* = 1 + (1 − SR²/4) · (Φ⁻¹(C) / (SR − SR_target))²
+
+    v1.5.1 (PR-9 FIX 4d): the prior implementation ran a simpler
+    ``n* = 1 + (Φ⁻¹(C) / (SR − SR_target))²`` because it used
+    ``γ_4/4`` instead of ``(γ_4 − 1)/4`` in the variance term. The
+    audit aligned MTRL with DSR (both now use ``(γ_4 − 1)/4`` per
+    BLP eq. 5) and this test was updated accordingly.
+    """
     sr = 1.0
     sr_target = 0.0
     # Φ⁻¹(0.95) ≈ 1.6449.
-    expected = 1.0 + (1.6449 / (sr - sr_target)) ** 2
+    var_term = 1.0 - (sr * sr) / 4.0  # γ_3=0, γ_4=0 → (γ_4 − 1)/4 · SR² = −SR²/4
+    expected = 1.0 + var_term * (1.6449 / (sr - sr_target)) ** 2
     out = minimum_track_record_length(sr, sr_target, confidence=0.95)
     assert abs(out - expected) < 0.01
