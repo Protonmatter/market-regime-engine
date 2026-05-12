@@ -439,10 +439,6 @@ def deflated_sharpe(
     skew = float(skew)
     kurt = float(kurt)
 
-    # Deflated threshold: SR* such that the multiple-testing-inflated
-    # null distribution gives p(SR_max >= SR*) = 0.5.
-    sr_star_threshold = float(sharpe_target) + (_expected_max_z(n_trials) / math.sqrt(max(n - 1, 1)))
-
     # Non-normality adjustment per BLP eq. (5).
     # `_sample_skew_kurt` returns *excess* kurtosis (γ_4 − 3), so BLP's
     # Pearson-kurtosis form `(γ_4 − 1)/4` becomes `(γ_4_excess + 2)/4`.
@@ -452,6 +448,14 @@ def deflated_sharpe(
     var_term = max(var_term, 1e-12)
     denom = math.sqrt(var_term / max(n - 1, 1))
 
+    # Deflated threshold per BLP eq. (9):
+    #     SR* = sharpe_target + sqrt(Var(SR_hat)) · E[max_z(N)]
+    # i.e. the multiple-testing inflation scales with the *moment-corrected*
+    # stderr, not with `1/sqrt(T−1)` alone. The v1.5.1 form dropped the
+    # `sqrt(var_term)` factor — the v1.5.2 A3 fix re-introduces it so the
+    # threshold tracks the same non-normality penalty as the denominator
+    # below.
+    sr_star_threshold = float(sharpe_target) + _expected_max_z(n_trials) * denom
     z = (sharpe_hat - sr_star_threshold) / denom
     return float(_normal_cdf(z))
 
