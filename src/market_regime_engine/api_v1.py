@@ -222,7 +222,7 @@ class _RedisTTLCache:
 
     def __init__(self, url: str) -> None:
         try:
-            import redis  # type: ignore[import-not-found]
+            import redis
         except Exception as exc:  # pragma: no cover - import path
             raise RuntimeError(
                 "redis backend requested but the redis package is not installed; "
@@ -438,7 +438,7 @@ def _mount_fixed_income_router() -> None:
             try:
                 from fastapi import Request as _RLRequest
                 from fastapi.responses import JSONResponse as _RLJSONResponse
-                from slowapi.errors import RateLimitExceeded  # type: ignore[import-not-found]
+                from slowapi.errors import RateLimitExceeded
 
                 app.state.limiter = limiter
 

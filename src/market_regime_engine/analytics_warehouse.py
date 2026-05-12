@@ -129,7 +129,7 @@ def build_duckdb_database(
         manifest["duckdb_path"] = str(duckdb_path)
         return manifest
 
-    import duckdb  # type: ignore
+    import duckdb
 
     con = duckdb.connect(str(duckdb_path))
     created = []

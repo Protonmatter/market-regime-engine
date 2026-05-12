@@ -38,7 +38,7 @@ import pandas as pd
 
 try:  # ``requests`` is already a hard dep but keep an import guard so
     # this module is import-safe in pruned environments.
-    import requests  # type: ignore[import-untyped]
+    import requests
 except Exception:  # pragma: no cover
     requests = None  # type: ignore[assignment]
 

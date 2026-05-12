@@ -120,8 +120,8 @@ class RegimeWFST:
         dp: list[dict[str, float]] = []
         back: list[dict[str, str | None]] = []
 
-        first = {}
-        first_back = {}
+        first: dict[str, float] = {}
+        first_back: dict[str, str | None] = {}
         for s in states:
             posterior_penalty = -math.log(max(posterior_rows[0].get(s, 0.0), 1e-6)) if posterior_rows[0] else 0.0
             emission = 0.0 if s == observed[0] else 1.0
@@ -131,8 +131,8 @@ class RegimeWFST:
         back.append(first_back)
 
         for i in range(1, len(observed)):
-            layer = {}
-            layer_back = {}
+            layer: dict[str, float] = {}
+            layer_back: dict[str, str | None] = {}
             labels = event_labels[i] if i < len(event_labels) else set()
             post = posterior_rows[i] if i < len(posterior_rows) else {}
             for dst in states:
@@ -151,7 +151,8 @@ class RegimeWFST:
             dp.append(layer)
             back.append(layer_back)
 
-        cur = min(dp[-1], key=dp[-1].get)
+        last_layer = dp[-1]
+        cur = min(last_layer, key=lambda k: last_layer[k])
         path = [cur]
         for i in range(len(observed) - 1, 0, -1):
             prev = back[i][cur]
@@ -223,7 +224,7 @@ class RegimeWFST:
             prob = smoothed / np.where(row_total > 0, row_total, 1.0)
 
         new_arcs: list[Arc] = []
-        new_map: dict[tuple[str, str], list[Arc]] = defaultdict(list)
+        new_map: defaultdict[tuple[str, str], list[Arc]] = defaultdict(list)
         for arc in PRIOR_ARCS:
             i = idx.get(arc.src)
             j = idx.get(arc.dst)

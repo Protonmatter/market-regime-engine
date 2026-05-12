@@ -112,7 +112,7 @@ def shap_attribution_if_available(
     :func:`permutation_attribution` when empty.
     """
     try:  # pragma: no cover - optional dependency
-        import shap  # type: ignore[import-not-found]
+        import shap
     except Exception:
         return pd.DataFrame()
     if X is None or X.empty:

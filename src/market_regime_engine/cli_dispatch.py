@@ -41,7 +41,9 @@ _FI_COMMANDS: frozenset[str] = frozenset(
     }
 )
 
-CUSTOM_COMMANDS = frozenset({"pit-audit", "snapshot-build", "snapshot-verify"} | _FI_COMMANDS)
+CUSTOM_COMMANDS = frozenset(
+    {"pit-audit", "snapshot-build", "snapshot-verify"} | _FI_COMMANDS
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -151,12 +153,14 @@ def _delegate_to_legacy_cli(args: Sequence[str], *, argv_was_none: bool) -> int:
     from market_regime_engine.cli import main as legacy_main
 
     if argv_was_none:
-        return int(legacy_main() or 0)
+        legacy_main()
+        return 0
 
     old_argv = sys.argv
     sys.argv = [old_argv[0], *args]
     try:
-        return int(legacy_main() or 0)
+        legacy_main()
+        return 0
     finally:
         sys.argv = old_argv
 

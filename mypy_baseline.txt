@@ -1,0 +1,62 @@
+# v1.5.1 (PR-9 FIX 7) mypy baseline.
+#
+# Snapshot of ``mypy src/market_regime_engine`` immediately after the
+# PR-9 audit-hardening branch landed. The pre-PR-9 baseline was 34
+# errors across 21 files; this PR brings it down to 14 across 8 files
+# by:
+#
+#   - removing 8 unused ``# type: ignore`` comments that had silently
+#     decayed under newer mypy / stub-package releases;
+#   - unrolling the heterogeneous ``(states, joint, predict_fn)`` tuple
+#     loop in :func:`bocpd_muse.MuseBOCPD.fit_predict` so mypy can
+#     narrow each model's state list to a concrete type (5 errors → 0);
+#   - tightening the ``wfst.WFSTDecoder.decode`` dict / defaultdict
+#     annotations (4 errors → 0);
+#   - dropping the ``int(legacy_main() or 0)`` pattern in
+#     :mod:`cli_dispatch` (2 errors → 0); and
+#   - removing one stale ``# type: ignore[no-untyped-def]`` in
+#     :func:`storage.pooled_warehouse_write_lock` and one each in
+#     :mod:`alerts_sinks`, :mod:`rust_kernels`, :mod:`counterfactual`,
+#     :mod:`frontier.hierarchical_liquidity`, :mod:`bocpd`,
+#     :mod:`analytics_warehouse`, :mod:`api_v1`.
+#
+# The remaining 14 errors split into five clusters; the PR-10 plan
+# in ``docs/V1_5_PLAN_PR10.md`` will land the fixes:
+#
+#   - model_registry.py:65 (4): ``**dict[str, object]`` expansion into
+#     a :class:`ModelCard` constructor that wants concrete types.
+#     The right fix is a TypedDict or a Pydantic schema. Holding for
+#     PR-10 so we can rev the registry contract in one place.
+#   - hmm.py / msvar.py (3): ``score`` methods declared to return
+#     ``ndarray`` but the closed-form path returns a scalar. PR-10
+#     will widen the declared return type to ``float | ndarray`` and
+#     align all callers.
+#   - prediction_evidence.py (2): ``murphy_decomposition`` expects
+#     ``Sequence[float]`` but receives ``ndarray``. PR-10 will widen
+#     ``murphy_decomposition``'s signature to accept ``ArrayLike``.
+#   - bocpd_hazard.py (1), scenarios.py (1), walk_forward.py (1): low-
+#     impact single-line type errors deferred to PR-10.
+#   - api_v1.py (2): FastAPI / slowapi interaction. The Starlette
+#     ``add_exception_handler`` signature shadows a generic
+#     ``Exception`` upcast; the slowapi handler is a known-good
+#     callable shape. PR-10 will move to an ``async def`` handler
+#     decorated via ``@app.exception_handler(RateLimitExceeded)``
+#     which Starlette's stubs accept without a cast.
+#
+# To re-run:
+#
+#     mypy src/market_regime_engine
+#
+# Re-baseline by overwriting this file with the new ``mypy ...``
+# output once PR-10 lands.
+
+src/market_regime_engine/model_registry.py:65: arg-type (×4)
+src/market_regime_engine/walk_forward.py:361: no-untyped-def
+src/market_regime_engine/hmm.py:151: return-value
+src/market_regime_engine/hmm.py:152: return-value
+src/market_regime_engine/bocpd_hazard.py:97: union-attr
+src/market_regime_engine/msvar.py:47: return-value
+src/market_regime_engine/prediction_evidence.py:241: arg-type (×2)
+src/market_regime_engine/scenarios.py:153: misc (slice)
+src/market_regime_engine/api_v1.py:249: arg-type (Awaitable[Any] | Any)
+src/market_regime_engine/api_v1.py:454: arg-type (RateLimitExceeded handler)

@@ -186,58 +186,112 @@ class BOCPDMuse:
         rows = []
         for i, date in enumerate(frame.index):
             xt = arr[i]
-            ll_per_model = []
-            cp_probs = []
-            run_means = []
-            map_runs = []
-            new_states_niw = None
-            new_states_diag = None
-            new_states_ar1 = None
-            new_joints = []
+            ll_per_model: list[float] = []
+            cp_probs: list[float] = []
+            run_means: list[float] = []
+            map_runs: list[int] = []
+            new_joints: list[np.ndarray] = []
 
-            for m_idx, (states, joint, predict_fn) in enumerate(
-                [
-                    (niw_states, log_joint_per_model[0], lambda st, x=xt: st.predictive_logpdf(x)),
-                    (diag_states, log_joint_per_model[1], lambda st, x=xt: _student_t_logpdf_diag(x, st)),
-                    (ar1_states, log_joint_per_model[2], lambda st, x=xt: st.predict(x)),
-                ]
-            ):
-                pred_logs = np.array([predict_fn(st) for st in states], dtype=float)
-                pred_norm = _logsumexp(joint + pred_logs)
-                cp_log = _logsumexp(joint + pred_logs + log_h)
-                growth_logs = joint + pred_logs + log_1mh
-                new_log_joint = np.empty(min(len(growth_logs) + 1, self.max_run + 1), dtype=float)
-                new_log_joint[0] = cp_log
-                kept = growth_logs[: self.max_run]
-                new_log_joint[1 : 1 + len(kept)] = kept
-                norm = _logsumexp(new_log_joint)
-                new_log_joint = new_log_joint - norm
-                probs = np.exp(new_log_joint)
-                probs = probs / probs.sum()
+            # v1.5.1 (PR-9 FIX 7): unrolled per-model loop so mypy can
+            # narrow ``states`` to the concrete NIW / RunningDiag / AR1
+            # state list. The previous loop carried a heterogeneous
+            # ``(states, joint, predict_fn)`` tuple where every element
+            # widened to ``object`` and dragged the np.array call into
+            # a ``_ScalarT`` type-var error. The semantics here are
+            # identical to the prior loop.
 
-                cp_probs.append(float(probs[0]))
-                run_lengths = np.arange(len(probs), dtype=float)
-                run_means.append(float(np.sum(run_lengths * probs)))
-                map_runs.append(int(np.argmax(probs)))
-                ll_per_model.append(float(pred_norm))
-                new_joints.append(np.log(np.maximum(probs, self.min_prob)))
+            # --- model 0: NIW Student-t -----------------------------
+            joint_niw = log_joint_per_model[0]
+            pred_logs_niw = np.array(
+                [st.predictive_logpdf(xt) for st in niw_states], dtype=float
+            )
+            cp_log_niw = _logsumexp(joint_niw + pred_logs_niw + log_h)
+            growth_logs_niw = joint_niw + pred_logs_niw + log_1mh
+            new_log_joint_niw = np.empty(
+                min(len(growth_logs_niw) + 1, self.max_run + 1), dtype=float
+            )
+            new_log_joint_niw[0] = cp_log_niw
+            kept = growth_logs_niw[: self.max_run]
+            new_log_joint_niw[1 : 1 + len(kept)] = kept
+            new_log_joint_niw = new_log_joint_niw - _logsumexp(new_log_joint_niw)
+            probs_niw = np.exp(new_log_joint_niw)
+            probs_niw = probs_niw / probs_niw.sum()
+            cp_probs.append(float(probs_niw[0]))
+            run_means.append(
+                float(np.sum(np.arange(len(probs_niw), dtype=float) * probs_niw))
+            )
+            map_runs.append(int(np.argmax(probs_niw)))
+            ll_per_model.append(float(_logsumexp(joint_niw + pred_logs_niw)))
+            new_joints.append(np.log(np.maximum(probs_niw, self.min_prob)))
+            prior_niw = NIWState.prior(
+                dim, kappa0=self.prior_kappa, psi_scale=self.prior_psi_scale
+            )
+            new_states_niw: list[NIWState] = [prior_niw.update(xt)] + [
+                st.update(xt) for st in niw_states[: self.max_run]
+            ]
+            new_states_niw = new_states_niw[: len(probs_niw)]
 
-                if m_idx == 0:
-                    prior = NIWState.prior(dim, kappa0=self.prior_kappa, psi_scale=self.prior_psi_scale)
-                    new_states_niw = [prior.update(xt)] + [st.update(xt) for st in states[: self.max_run]]
-                    new_states_niw = new_states_niw[: len(probs)]
-                elif m_idx == 1:
-                    prior_diag = RunningDiagState.prior(dim, self.prior_var_diag)
-                    new_states_diag = [prior_diag.update(xt)] + [st.update(xt) for st in states[: self.max_run]]
-                    new_states_diag = new_states_diag[: len(probs)]
-                else:
-                    prior_ar = _AR1State.prior(dim, self.prior_var_diag)
-                    new_states_ar1 = [prior_ar.update(xt)] + [st.update(xt) for st in states[: self.max_run]]
-                    new_states_ar1 = new_states_ar1[: len(probs)]
+            # --- model 1: diagonal Student-t ------------------------
+            joint_diag = log_joint_per_model[1]
+            pred_logs_diag = np.array(
+                [_student_t_logpdf_diag(xt, st) for st in diag_states], dtype=float
+            )
+            cp_log_diag = _logsumexp(joint_diag + pred_logs_diag + log_h)
+            growth_logs_diag = joint_diag + pred_logs_diag + log_1mh
+            new_log_joint_diag = np.empty(
+                min(len(growth_logs_diag) + 1, self.max_run + 1), dtype=float
+            )
+            new_log_joint_diag[0] = cp_log_diag
+            kept_diag = growth_logs_diag[: self.max_run]
+            new_log_joint_diag[1 : 1 + len(kept_diag)] = kept_diag
+            new_log_joint_diag = new_log_joint_diag - _logsumexp(new_log_joint_diag)
+            probs_diag = np.exp(new_log_joint_diag)
+            probs_diag = probs_diag / probs_diag.sum()
+            cp_probs.append(float(probs_diag[0]))
+            run_means.append(
+                float(np.sum(np.arange(len(probs_diag), dtype=float) * probs_diag))
+            )
+            map_runs.append(int(np.argmax(probs_diag)))
+            ll_per_model.append(float(_logsumexp(joint_diag + pred_logs_diag)))
+            new_joints.append(np.log(np.maximum(probs_diag, self.min_prob)))
+            prior_diag = RunningDiagState.prior(dim, self.prior_var_diag)
+            new_states_diag: list[RunningDiagState] = [prior_diag.update(xt)] + [
+                st.update(xt) for st in diag_states[: self.max_run]
+            ]
+            new_states_diag = new_states_diag[: len(probs_diag)]
 
-            niw_states = new_states_niw  # type: ignore[assignment]
-            diag_states = new_states_diag  # type: ignore[assignment]
-            ar1_states = new_states_ar1  # type: ignore[assignment]
+            # --- model 2: AR(1) -------------------------------------
+            joint_ar = log_joint_per_model[2]
+            pred_logs_ar = np.array(
+                [st.predict(xt) for st in ar1_states], dtype=float
+            )
+            cp_log_ar = _logsumexp(joint_ar + pred_logs_ar + log_h)
+            growth_logs_ar = joint_ar + pred_logs_ar + log_1mh
+            new_log_joint_ar = np.empty(
+                min(len(growth_logs_ar) + 1, self.max_run + 1), dtype=float
+            )
+            new_log_joint_ar[0] = cp_log_ar
+            kept_ar = growth_logs_ar[: self.max_run]
+            new_log_joint_ar[1 : 1 + len(kept_ar)] = kept_ar
+            new_log_joint_ar = new_log_joint_ar - _logsumexp(new_log_joint_ar)
+            probs_ar = np.exp(new_log_joint_ar)
+            probs_ar = probs_ar / probs_ar.sum()
+            cp_probs.append(float(probs_ar[0]))
+            run_means.append(
+                float(np.sum(np.arange(len(probs_ar), dtype=float) * probs_ar))
+            )
+            map_runs.append(int(np.argmax(probs_ar)))
+            ll_per_model.append(float(_logsumexp(joint_ar + pred_logs_ar)))
+            new_joints.append(np.log(np.maximum(probs_ar, self.min_prob)))
+            prior_ar = _AR1State.prior(dim, self.prior_var_diag)
+            new_states_ar1: list[_AR1State] = [prior_ar.update(xt)] + [
+                st.update(xt) for st in ar1_states[: self.max_run]
+            ]
+            new_states_ar1 = new_states_ar1[: len(probs_ar)]
+
+            niw_states = new_states_niw
+            diag_states = new_states_diag
+            ar1_states = new_states_ar1
             log_joint_per_model = new_joints
 
             ll_arr = np.array(ll_per_model, dtype=float)
