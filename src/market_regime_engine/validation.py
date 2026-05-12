@@ -400,6 +400,17 @@ def deflated_sharpe(
     1. Multiple-testing selection bias (``n_trials`` candidate strategies),
     2. Non-normality of returns via sample ``skew`` + excess ``kurt``.
 
+    Closed form (v1.5.2 A1+A3, BLP 2014 eq. 5 + 9):
+
+        Var(SR_hat) ≈ (1 − γ_3·SR + (γ_4_excess + 2)/4 · SR²) / (T − 1)    (eq. 5)
+        SR*         = sharpe_target + sqrt(Var(SR_hat)) · E[max_z(N)]      (eq. 9)
+        DSR         = Φ((SR_hat − SR*) / sqrt(Var(SR_hat)))
+
+    where γ_3 is sample skewness, γ_4_excess is sample *excess*
+    kurtosis (Pearson γ_4 − 3; Gaussian = 0), N is ``n_trials``,
+    and ``E[max_z(N)]`` is the expected maximum of N iid standard normals
+    (the multiplicity correction).
+
     Inputs:
 
     - ``strategy_returns``: per-period (e.g. daily) return series.
@@ -413,7 +424,21 @@ def deflated_sharpe(
 
     Returns DSR in ``[0, 1]``. Higher is stronger evidence of true edge.
 
-    Reference: López de Prado, "The Deflated Sharpe Ratio" (2014),
+    v1.5.2 corrections versus the v1.5.1 path:
+
+    - **A1**: the variance term uses ``(γ_4_excess + 2)/4`` — the
+      excess-kurtosis rewrite of BLP eq. 5's Pearson-kurtosis form
+      ``(γ_4 − 1)/4``. The v1.5.1 implementation passed *excess*
+      kurtosis into the *Pearson*-form expression — off by 3/4 in the
+      kurt term.
+    - **A3**: the multiplicity threshold ``SR*`` scales with the
+      *moment-corrected* stderr ``sqrt(Var(SR_hat))`` per BLP eq. 9, not
+      ``1/sqrt(T−1)`` alone. For skewed or fat-tailed inputs the
+      v1.5.1 threshold was systematically biased by a factor of
+      ``sqrt(var_term)``.
+
+    Reference: Bailey & López de Prado, "The Deflated Sharpe Ratio"
+    (2014), §3 eq. 5/9.
     https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
     """
     arr = np.asarray(
@@ -485,10 +510,15 @@ def probability_of_backtest_overfitting(
     - ``purge`` rows on either side of every OOS block are removed
       from the IS aggregation so leakage from contaminated boundaries
       cannot inflate the in-sample winner.
-    - ``embargo`` additional rows immediately after every OOS block
+    - ``embargo`` additional rows immediately AFTER the purge window
       are also removed (the "purged-and-embargoed" extension that
       protects time-series with serial dependence beyond the purge
-      gap).
+      gap). v1.5.2 A2: embargo is **additive** to purge on the right
+      side — total right-side drop after each OOS block is
+      ``purge + embargo`` rows, matching the union semantics in
+      ``walk_forward.purge_and_embargo_searchsorted``. The v1.5.1
+      implementation incorrectly took ``max(purge, embargo)``, silently
+      subsuming embargo when ``embargo <= purge``.
 
     The split enumeration uses ``itertools.combinations`` which gives
     exactly C(N, k) splits. We cap at ``max_combinations`` (default
@@ -623,23 +653,32 @@ def minimum_track_record_length(
     target Sharpe ``sharpe_target`` at the requested confidence under the
     same non-normality correction as the DSR.
 
-    Closed form (BLP 2014, eq. 8):
+    Closed form (BLP 2014, eq. 8) in **excess**-kurtosis form
+    (v1.5.2 A1):
 
-        n* = 1 + (1 − γ_3·SR + (γ_4 − 1)/4 · SR²) · (Φ⁻¹(C) / (SR − SR_target))²
+        n* = 1 + Var(SR_hat) · (Φ⁻¹(C) / (SR − SR_target))²
+           = 1 + (1 − γ_3·SR + (γ_4_excess + 2)/4 · SR²)
+                 · (Φ⁻¹(C) / (SR − SR_target))²
 
     where ``Φ⁻¹`` is the inverse standard-normal CDF, ``C`` is the
     requested confidence (default 0.95), ``γ_3`` is skewness, and
-    ``γ_4`` is **excess** kurtosis (``kurt − 3``).
+    ``γ_4_excess`` is **excess** kurtosis (Pearson γ_4 − 3,
+    Gaussian = 0). The variance term is BLP eq. 5 with the
+    excess-kurtosis input rewritten from the original Pearson-form
+    ``(γ_4 − 1)/4``.
 
     Returns ``inf`` when ``sharpe_observed <= sharpe_target`` (the
     inequality can never be defended).
 
-    v1.5.1 (PR-9 FIX 4d): the variance term now uses ``(γ_4 − 1)/4``
-    (BLP eq. 5) to match the DSR estimator. Prior to PR-9 the MTRL
-    used ``γ_4/4`` which inconsistently double-counted the kurtosis
-    bias. For Gaussian returns (``γ_4 = 0``) the new form gives a
-    slightly *smaller* required-track length; for fat-tailed inputs
-    the gap widens. Property-based tests in
+    v1.5.2 (A1) correction history: PR-9 FIX 4d intended to align the
+    variance term with the DSR estimator under BLP eq. 5 but used
+    ``(γ_4_excess − 1)/4`` (off by 3/4 from the correct
+    ``(γ_4_excess + 2)/4`` in the excess-kurtosis convention). The
+    v1.5.2 fix re-anchors to ``(γ_4_excess + 2)/4`` and the DSR
+    estimator receives the same correction so the two functions stay
+    consistent. For Gaussian iid (γ_3=0, γ_4_excess=0) at SR=1 the
+    var_term is ``1 + 0.5 · 1 = 1.5`` (not the v1.5.1 ``0.75``).
+    Property-based tests in
     ``tests/test_validation_dsr_mtrl_audit.py`` lock the BLP-consistent
     closed form.
     """
