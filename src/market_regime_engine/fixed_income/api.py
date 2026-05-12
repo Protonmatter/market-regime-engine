@@ -39,7 +39,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -139,7 +139,9 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
+            raise ValueError(
+                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
+            )
         return v
 
     @field_validator("cusip")
@@ -190,7 +192,9 @@ def credit_regime_output_to_dict(output: CreditRegimeOutput) -> dict[str, Any]:
     out = asdict(output)
     out["drivers"] = list(output.drivers)
     out.setdefault("metadata", {})
-    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
     return out
 
 
@@ -227,7 +231,9 @@ def liquidity_stress_output_to_dict(output: LiquidityStressOutput) -> dict[str, 
     """
     out = liquidity_output_to_dict(output)
     out.setdefault("metadata", {})
-    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
     return out
 
 
@@ -346,6 +352,36 @@ def _warehouse_factory_default() -> Any:
     return get_pooled_warehouse(_resolve_db_path())
 
 
+def _close_if_not_pooled(warehouse: Any) -> None:
+    """Close ``warehouse`` only when it is not pool-owned.
+
+    The default :func:`_warehouse_factory_default` returns the per-process
+    pooled warehouse; closing it from a request handler leaves a dead
+    instance in ``_POOLED_WAREHOUSES`` so the next request returns a
+    closed DuckDB connection (the pool-poisoning bug surfaced in two
+    independent audits, Tier-1 A1/B-Auto-1 in REVIEW.md).
+
+    Pooled warehouses are released via the FastAPI lifespan shutdown
+    hook (:func:`close_pooled_warehouses`); we only close in this code
+    path for test factories that hand back a fresh, non-pooled instance.
+    """
+    close = getattr(warehouse, "close", None)
+    if not callable(close):
+        return
+    try:
+        from market_regime_engine.storage import is_pooled_warehouse
+    except Exception:
+        # Defensive: if storage cannot be imported (shouldn't happen
+        # under normal operation), fall back to closing — preserves the
+        # pre-fix behaviour and avoids leaking handles for test
+        # factories.
+        close()
+        return
+    if is_pooled_warehouse(warehouse):
+        return
+    close()
+
+
 def execution_confidence_response_to_dict(
     response: ExecutionConfidenceResponse,
 ) -> dict[str, Any]:
@@ -462,9 +498,7 @@ def build_router(
                     detail={"detail": "no_data", "release_gate": False},
                 ) from exc
         finally:
-            close = getattr(wh, "close", None)
-            if callable(close):
-                close()
+            _close_if_not_pooled(wh)
         status = int(payload.pop("_status", 200))
         return JSONResponse(payload, status_code=status)
 
@@ -512,9 +546,7 @@ def build_router(
                     detail={"detail": "no_data", "release_gate": False},
                 ) from exc
         finally:
-            close = getattr(wh, "close", None)
-            if callable(close):
-                close()
+            _close_if_not_pooled(wh)
         status = int(payload.pop("_status", 200))
         return JSONResponse(payload, status_code=status)
 
@@ -541,17 +573,19 @@ def build_router(
         wh = factory()
         try:
             try:
-                latest = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+                latest = latest_liquidity_stress_score(
+                    wh, scope_type=scope_type, scope_id=scope_id
+                )
             except Exception as exc:
-                log.exception("liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc)
+                log.exception(
+                    "liquidity_index/%s/%s read failed: %s", scope_type, scope_id, exc
+                )
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
                     detail={"detail": "no_data", "release_gate": False},
                 ) from exc
         finally:
-            close = getattr(wh, "close", None)
-            if callable(close):
-                close()
+            _close_if_not_pooled(wh)
         if latest is None:
             return JSONResponse(
                 {"detail": "no_data", "release_gate": False},
@@ -611,7 +645,9 @@ def build_router(
                     },
                 ) from exc
             try:
-                write_execution_confidence_prediction(wh, response, request_id=body.request_id)
+                write_execution_confidence_prediction(
+                    wh, response, request_id=body.request_id
+                )
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",
@@ -674,7 +710,9 @@ def build_router(
         wh = factory()
         try:
             try:
-                segments = latest_tca_regime_segments(wh, dimensions=dim_list, limit=clamped_limit)
+                segments = latest_tca_regime_segments(
+                    wh, dimensions=dim_list, limit=clamped_limit
+                )
             except Exception as exc:
                 log.exception("tca/regime-segments/latest read failed: %s", exc)
                 raise HTTPException(
@@ -682,11 +720,11 @@ def build_router(
                     detail={"detail": "no_data"},
                 ) from exc
         finally:
-            close = getattr(wh, "close", None)
-            if callable(close):
-                close()
+            _close_if_not_pooled(wh)
         if not segments:
-            return JSONResponse({"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE)
+            return JSONResponse(
+                {"detail": "no_data"}, status_code=_HTTP_SERVICE_UNAVAILABLE
+            )
         return JSONResponse(
             {
                 "segments": [tca_regime_segment_to_dict(s) for s in segments],
@@ -722,9 +760,7 @@ def build_router(
                     detail={"detail": "evidence_pack_read_failed"},
                 ) from exc
         finally:
-            close = getattr(wh, "close", None)
-            if callable(close):
-                close()
+            _close_if_not_pooled(wh)
         if pack is None:
             return JSONResponse(
                 {"detail": "evidence_pack_not_found", "model_run_id": model_run_id},
