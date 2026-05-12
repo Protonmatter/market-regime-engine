@@ -6,11 +6,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
 from statistics import NormalDist
-from typing import Mapping, Sequence
 
 import numpy as np
 import pandas as pd

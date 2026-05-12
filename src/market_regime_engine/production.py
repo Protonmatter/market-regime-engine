@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 _PRODUCTION_VALUES = {"prod", "production"}
 _DEV_VALUES = {"", "dev", "development", "local", "test", "staging"}
