@@ -347,7 +347,8 @@ def verify_pack(pack: FixedIncomeEvidencePack) -> bool:
     Parses ``"v<ver>:<hex>"`` from ``pack.hmac_signature``, looks up
     the key, recomputes the HMAC over the canonical JSON (excluding
     the signature field itself), and compares with
-    :func:`hmac.compare_digest` (constant-time).
+    :func:`hmac.compare_digest` (constant-time, side-channel-resistant
+    — do not refactor to ``==`` without preserving this guarantee).
 
     Returns ``False`` when the signature is missing, malformed, or
     signed under a key version that is not currently configured.
@@ -355,24 +356,45 @@ def verify_pack(pack: FixedIncomeEvidencePack) -> bool:
     configured *and* ``hmac_signature`` is ``None``: a deployment that
     deliberately runs unsigned must not see a wall of False from this
     helper.
+
+    v1.5 PR-8 (Tier-1 fix C-AUTO-3): every False return path
+    increments ``fi_hmac_signature_failures_total{reason=...}`` so the
+    runbook in ``docs/V1_5_HMAC_OPERATIONS.md`` can alert on
+    aggregate failure rates without needing per-call-site
+    instrumentation. Labels are stable strings to keep cardinality
+    bounded.
     """
+    from market_regime_engine.fixed_income.observability_ext import (
+        incr_hmac_signature_failures,
+    )
+
     keys = get_hmac_keys()
     sig = pack.hmac_signature
     if sig is None:
-        return not keys
+        if keys:
+            incr_hmac_signature_failures(reason="missing_signature")
+            return False
+        return True
     if not isinstance(sig, str) or ":" not in sig:
+        incr_hmac_signature_failures(reason="malformed_signature")
         return False
     version, _, hex_digest = sig.partition(":")
     if not version or not hex_digest:
+        incr_hmac_signature_failures(reason="malformed_signature")
         return False
     key = keys.get(version)
     if key is None:
+        incr_hmac_signature_failures(reason="key_not_found")
         return False
     payload = canonical_pack_payload(pack)
     expected = _hmac_hex(key, payload)
     try:
-        return hmac.compare_digest(hex_digest, expected)
+        if hmac.compare_digest(hex_digest, expected):
+            return True
+        incr_hmac_signature_failures(reason="compare_digest_mismatch")
+        return False
     except Exception:
+        incr_hmac_signature_failures(reason="compare_digest_error")
         return False
 
 
