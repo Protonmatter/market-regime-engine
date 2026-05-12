@@ -108,8 +108,7 @@ def test_vectorized_audit_matches_legacy_iterrows_on_seeded_inputs() -> None:
         legacy = _legacy_audit_pit(frame, asof=asof)
         new = _new_audit_pit(frame, asof=asof)
         assert legacy == new, (
-            f"seed={seed} legacy_raises={legacy} vectorised_raises={new}; "
-            f"divergence in accept/reject semantics"
+            f"seed={seed} legacy_raises={legacy} vectorised_raises={new}; divergence in accept/reject semantics"
         )
 
 
@@ -171,7 +170,4 @@ def test_vectorized_audit_perf_at_200k_rows_under_500ms() -> None:
     start = time.perf_counter()
     _audit_pit(frame, asof=asof)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
-    assert elapsed_ms < 500.0, (
-        f"vectorised _audit_pit took {elapsed_ms:.1f} ms on 200k rows; "
-        f"target is < 500 ms"
-    )
+    assert elapsed_ms < 500.0, f"vectorised _audit_pit took {elapsed_ms:.1f} ms on 200k rows; target is < 500 ms"

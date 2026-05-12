@@ -85,9 +85,7 @@ def test_verify_run_includes_fi_evidence_pack_verification_when_present(
     assert report["fi_release_gate"] is True
 
 
-def test_verify_run_passes_when_pack_verifies(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_verify_run_passes_when_pack_verifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": _b64()}))
     db_path = tmp_path / "vr-fi-pass.duckdb"
     wh = Warehouse(str(db_path))
@@ -100,9 +98,7 @@ def test_verify_run_passes_when_pack_verifies(
     assert report["fi_hmac_verified"] is True
 
 
-def test_verify_run_fails_when_pack_tampered(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_verify_run_fails_when_pack_tampered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A tampered pack must fail HMAC verification.
 
     We simulate tampering by overwriting the ``output_hash`` column
@@ -117,9 +113,7 @@ def test_verify_run_fails_when_pack_tampered(
         _persist_pack(wh, model_run_id="run-vr-tamper", request_id="req-t", sign=True)
         # Tamper: rewrite the output_hash on the persisted row.
         df = wh.read_evidence_packs()
-        df.loc[df["model_run_id"] == "run-vr-tamper", "output_hash"] = (
-            "sha256:tampered"
-        )
+        df.loc[df["model_run_id"] == "run-vr-tamper", "output_hash"] = "sha256:tampered"
         # Re-write the tampered row (composite PK ON CONFLICT replaces).
         wh.write_evidence_pack(df)
         report = _verify_fi_evidence_pack(wh, "run-vr-tamper")
@@ -156,9 +150,7 @@ def _seed_model_run(wh: Warehouse, run_id: str) -> None:
             "domain": ["test"],
         }
     )
-    outputs = pd.DataFrame(
-        columns=["model_name", "date", "horizon", "target", "value"]
-    )
+    outputs = pd.DataFrame(columns=["model_name", "date", "horizon", "target", "value"])
     envelope = build_repro_envelope(
         features=features,
         model_outputs=outputs,
@@ -178,9 +170,7 @@ def _seed_model_run(wh: Warehouse, run_id: str) -> None:
                 "model_count": 0,
                 "code_version": envelope.code_version or "",
                 "artifact_hash": "sha256:test",
-                "metadata_json": json.dumps(
-                    {"repro_envelope": dataclasses.asdict(envelope)}
-                ),
+                "metadata_json": json.dumps({"repro_envelope": dataclasses.asdict(envelope)}),
             }
         ]
     )
@@ -188,9 +178,7 @@ def _seed_model_run(wh: Warehouse, run_id: str) -> None:
     wh.write_features(features)
 
 
-def test_envelope_inconsistent_pack_lowers_approved(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_envelope_inconsistent_pack_lowers_approved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """v1.5 PR-8 Tier-2 (C-AUTO-6): verify-run lowers ``approved=False``
     when a pack is present but envelope-inconsistent, even if HMAC was
     accepted (or no keys were configured)."""
@@ -228,9 +216,7 @@ def test_envelope_inconsistent_pack_lowers_approved(
     assert report["approved"] is False
 
 
-def test_envelope_consistent_pack_keeps_approved_true(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_envelope_consistent_pack_keeps_approved_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Sanity-side of the envelope-approval rule: a clean pack must NOT
     flip ``approved`` to False solely on the envelope check."""
     from market_regime_engine.cli import verify_run_cmd

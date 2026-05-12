@@ -74,9 +74,7 @@ def _app_with_pooled_factory(db: Path) -> FastAPI:
     sequential GETs against the same warehouse to exercise the cache
     key contract."""
     app = FastAPI()
-    app.include_router(
-        build_router(warehouse_factory=lambda: get_pooled_warehouse(db))
-    )
+    app.include_router(build_router(warehouse_factory=lambda: get_pooled_warehouse(db)))
     return app
 
 
