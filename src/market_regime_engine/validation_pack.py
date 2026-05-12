@@ -1,5 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Tamper-evident empirical validation evidence packs."""
+"""Tamper-evident empirical validation evidence packs.
+
+Sister module to :mod:`market_regime_engine.fixed_income.evidence_pack` —
+the two share the canonical-JSON encoding and the generic
+HMAC-SHA256-hex primitive via :mod:`market_regime_engine.evidence_common`,
+but layer different higher-level signing schemes on top:
+
+- FI evidence packs sign the canonical JSON of the *pack dataclass*
+  under a versioned (``v1`` / ``v2`` / ...) key prefix; the verifier
+  routes the signature back to the right key by version.
+- Validation evidence packs sign the *whole manifest file* under a
+  single key; rotations are handled at the file level (re-sign or
+  re-build the pack).
+
+Operators that need per-signal audit trail (every Auto-X firing) want
+the FI pack; operators that need per-release-run audit bundle (every
+release-gate or back-test sweep) want this one. See
+``docs/V1_6_ENGINEERING_PLAN.md`` for the full reconciliation matrix.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +35,12 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from market_regime_engine import __version__
+from market_regime_engine.evidence_common import (
+    canonical_json as _shared_canonical_json,
+    git_dirty as _shared_git_dirty,
+    git_revision as _shared_git_revision,
+    hmac_sha256_hex,
+)
 from market_regime_engine.production import is_production_env
 
 MANIFEST_NAME = "manifest.json"
@@ -43,25 +67,19 @@ def _sha256_file(path: Path) -> str:
 
 
 def _canonical_json(obj: object) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    """Local thin wrapper that emits bytes — calls the shared encoder.
+
+    v1.6 PR-22: the canonical-JSON encoding is shared with the FI
+    evidence-pack subpack via :mod:`market_regime_engine.evidence_common`.
+    We keep this wrapper to preserve the local byte-returning signature
+    that this module's manifest writer expects (the shared helper
+    returns a ``str``).
+    """
+    return _shared_canonical_json(obj).encode("utf-8")
 
 
-def _git_revision(short: bool = False) -> str:
-    args = ["git", "rev-parse", "--short", "HEAD"] if short else ["git", "rev-parse", "HEAD"]
-    try:
-        return subprocess.check_output(args, stderr=subprocess.DEVNULL, text=True).strip()
-    except Exception:
-        return "unknown"
-
-
-def _git_dirty() -> bool | None:
-    try:
-        result = subprocess.run(["git", "status", "--porcelain"], check=False, capture_output=True, text=True)
-        if result.returncode != 0:
-            return None
-        return bool(result.stdout.strip())
-    except Exception:
-        return None
+_git_revision = _shared_git_revision
+_git_dirty = _shared_git_dirty
 
 
 def _iter_files(path: Path) -> Iterable[Path]:
@@ -221,7 +239,7 @@ def build_evidence_pack(
 
     signed = False
     if key:
-        sig = hmac.new(key.encode("utf-8"), manifest_path.read_bytes(), hashlib.sha256).hexdigest()
+        sig = hmac_sha256_hex(key.encode("utf-8"), manifest_path.read_bytes())
         (pack_dir / MANIFEST_HMAC_NAME).write_text(f"{sig}  {MANIFEST_NAME}\n", encoding="utf-8")
         signed = True
 
@@ -284,7 +302,7 @@ def verify_evidence_pack(path: str | Path, *, hmac_key: str | None = None, requi
             differences["hmac"] = {"error": "pack is signed but no HMAC key was provided"}
         else:
             expected_sig = hmac_path.read_text(encoding="utf-8").split()[0]
-            actual_sig = hmac.new(key.encode("utf-8"), manifest_path.read_bytes(), hashlib.sha256).hexdigest()
+            actual_sig = hmac_sha256_hex(key.encode("utf-8"), manifest_path.read_bytes())
             if not hmac.compare_digest(expected_sig, actual_sig):
                 differences["hmac"] = {"expected": expected_sig, "actual": actual_sig}
     elif require_signed:
