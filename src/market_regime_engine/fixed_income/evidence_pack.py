@@ -69,6 +69,19 @@ _HMAC_FIELD = "hmac_signature"
 # the same bytes whether the envelope hash has been stamped or not.
 _ENVELOPE_HASH_METADATA_KEY = "_envelope_hash"
 
+# v1.5.1 (PR-9 FIX 3): when this flag is True in ``pack.metadata`` the
+# canonical bytestream binds ``pack.request_id`` into the HMAC payload.
+# When absent / False the canonical bytestream excludes ``request_id``
+# (the v1.5.0 wire format). The flag itself is part of canonical bytes
+# (just regular metadata), so a v2-signed pack that toggles the flag
+# would fail verify automatically — the flag is tamper-evident.
+#
+# Legacy v1.5.0 packs lacked any concept of ``request_id`` binding;
+# their metadata does not carry this flag and their HMAC payload does
+# not contain ``request_id``. Verification of those packs is therefore
+# preserved verbatim under the new code.
+_REQUEST_ID_BOUND_METADATA_KEY = "_request_id_bound"
+
 # Env vars (per AGENT.md PR-7 + INSTRUCTIONS.md §10 governance rules).
 _HMAC_KEY_VERSIONS_ENV = "MRE_FI_HMAC_KEY_VERSIONS"
 _HMAC_KEY_SINGLETON_ENV = "MRE_FI_HMAC_KEY"
@@ -106,12 +119,32 @@ def _pack_to_canonical_dict(pack: FixedIncomeEvidencePack) -> dict[str, Any]:
     the same compute_pack_hash result is invariant under whether the
     envelope hash has been stamped or not (avoiding a second fixed
     point on top of the HMAC one).
+
+    v1.5.1 (PR-9 FIX 3): the new optional ``request_id`` field is
+    included in the canonical bytestream **iff**
+    ``metadata[_request_id_bound]`` is truthy. Legacy v1 packs persisted
+    before PR-9 carry no such flag and we drop ``request_id`` entirely
+    so the canonical bytes are byte-identical to what the v1.5.0 signer
+    produced. New v2 packs built via :func:`build_evidence_pack` with a
+    non-``None`` ``request_id`` automatically receive the flag and
+    therefore bind the id into the HMAC payload.
+
+    The flag itself is part of canonical bytes (regular metadata), so a
+    pack-on-disk that flipped the flag would fail :func:`verify_pack`
+    automatically — the binding is tamper-evident in both directions.
     """
     raw = asdict(pack)
     raw.pop(_HMAC_FIELD, None)
     metadata = raw.get("metadata")
+    request_id_bound = False
+    if isinstance(metadata, dict):
+        request_id_bound = bool(metadata.get(_REQUEST_ID_BOUND_METADATA_KEY))
+    if not request_id_bound:
+        raw.pop("request_id", None)
     if isinstance(metadata, dict) and _ENVELOPE_HASH_METADATA_KEY in metadata:
-        raw["metadata"] = {k: v for k, v in metadata.items() if k != _ENVELOPE_HASH_METADATA_KEY}
+        raw["metadata"] = {
+            k: v for k, v in metadata.items() if k != _ENVELOPE_HASH_METADATA_KEY
+        }
     return raw
 
 
@@ -133,6 +166,7 @@ def build_evidence_pack(
     metadata: dict[str, Any] | None = None,
     timestamp: str | None = None,
     python_version: str | None = None,
+    request_id: str | None = None,
 ) -> FixedIncomeEvidencePack:
     """Construct a :class:`FixedIncomeEvidencePack`.
 
@@ -144,7 +178,22 @@ def build_evidence_pack(
 
     ``hmac_signature`` defaults to ``None`` in PR-1; PR-7's
     ``sign_pack`` returns a new pack with the signature attached.
+
+    v1.5.1 (PR-9 FIX 3): ``request_id`` MUST be set in production for
+    execution-confidence packs. Setting it threads the value into the
+    HMAC canonical bytestream so a replay of the same
+    ``(model_run_id, output_hash)`` under a different request id no
+    longer verifies. Legacy v1.5.0 packs were built with
+    ``request_id=None`` and continue to verify under the v1 key.
     """
+    # v1.5.1 (PR-9 FIX 3): when ``request_id`` is set, stamp the
+    # metadata flag that ``_pack_to_canonical_dict`` reads to decide
+    # whether to bind ``request_id`` into the HMAC payload. Legacy
+    # callers (``request_id=None``) get no flag and the canonical
+    # bytestream stays byte-identical to v1.5.0.
+    metadata_dict: dict[str, Any] = dict(metadata or {})
+    if request_id is not None and not metadata_dict.get(_REQUEST_ID_BOUND_METADATA_KEY):
+        metadata_dict[_REQUEST_ID_BOUND_METADATA_KEY] = True
     return FixedIncomeEvidencePack(
         model_run_id=model_run_id,
         component_name=component_name,
@@ -161,7 +210,8 @@ def build_evidence_pack(
         python_version=python_version or _python_version(),
         lockfile_hash=lockfile_hash,
         hmac_signature=hmac_signature,
-        metadata=dict(metadata or {}),
+        metadata=metadata_dict,
+        request_id=request_id,
     )
 
 
@@ -248,9 +298,13 @@ def get_hmac_keys() -> dict[str, bytes]:
         try:
             mapping = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"{_HMAC_KEY_VERSIONS_ENV} must be a JSON object: {exc}") from exc
+            raise RuntimeError(
+                f"{_HMAC_KEY_VERSIONS_ENV} must be a JSON object: {exc}"
+            ) from exc
         if not isinstance(mapping, dict):
-            raise RuntimeError(f"{_HMAC_KEY_VERSIONS_ENV} must decode to a JSON object; got {type(mapping).__name__}")
+            raise RuntimeError(
+                f"{_HMAC_KEY_VERSIONS_ENV} must decode to a JSON object; got {type(mapping).__name__}"
+            )
         out: dict[str, bytes] = {}
         for version, value in mapping.items():
             if not isinstance(version, str) or not version:
@@ -312,7 +366,28 @@ def sign_pack(
     - no keys configured AND production mode is False → return the
       pack unchanged (``hmac_signature`` stays ``None``); dev-mode
       pass-through.
+
+    v1.5.1 (PR-9 FIX 3): in production
+    (:func:`require_production_hmac`) every execution-confidence pack
+    MUST carry ``request_id`` (the HMAC-bound replay token). Signing
+    an execution-confidence pack with ``request_id=None`` under
+    production mode raises :class:`RuntimeError` so the operator
+    cannot accidentally publish a replay-vulnerable pack. Other
+    components (e.g. ``credit_regime``) are exempt because they do
+    not consume an inbound request id.
     """
+    if (
+        require_production_hmac()
+        and pack.component_name == "execution_confidence"
+        and not pack.request_id
+    ):
+        raise RuntimeError(
+            "FI HMAC production mode (MRE_ENV=production or "
+            "MRE_FI_REQUIRE_HMAC=1) requires request_id on "
+            "execution_confidence evidence packs; pass --request-id on "
+            "fi-evidence-pack or thread the FastAPI X-Request-ID through "
+            "build_evidence_pack(...)"
+        )
     keys = get_hmac_keys()
     if not keys:
         if require_production_hmac():
@@ -325,7 +400,10 @@ def sign_pack(
     if key_version is None:
         key_version = latest_hmac_version()
     if key_version not in keys:
-        raise RuntimeError(f"HMAC key version {key_version!r} is not in the configured versions {sorted(keys)!r}")
+        raise RuntimeError(
+            f"HMAC key version {key_version!r} is not in the configured "
+            f"versions {sorted(keys)!r}"
+        )
     payload = canonical_pack_payload(pack)
     digest = _hmac_hex(keys[key_version], payload)
     signature = f"{key_version}:{digest}"
@@ -515,7 +593,20 @@ def evidence_pack_to_row(
 
     JSON-encoded fields use ``canonical_json`` so the row hash is
     deterministic and matches what :func:`compute_pack_hash` saw.
+
+    v1.5.1 (PR-9 FIX 3): when ``pack.request_id`` is set it MUST equal
+    the writer-provided ``request_id`` parameter — they're the same
+    value semantically and a mismatch indicates a code bug
+    (e.g. caller threaded the row-level id but built the pack with the
+    wrong id). The mismatch raises :class:`ValueError` so the divergence
+    surfaces immediately.
     """
+    if pack.request_id is not None and str(pack.request_id) != str(request_id):
+        raise ValueError(
+            f"evidence_pack_to_row: pack.request_id={pack.request_id!r} but "
+            f"row request_id={request_id!r}; pass the same id to "
+            f"build_evidence_pack() and to evidence_pack_to_row()"
+        )
     return {
         "model_run_id": pack.model_run_id,
         "request_id": request_id,
@@ -589,7 +680,8 @@ def write_evidence_pack(
         signed = sign_pack(stamped)
         if signed.hmac_signature is None:
             raise RuntimeError(
-                "sign=True requested but no HMAC keys are configured (set MRE_FI_HMAC_KEY_VERSIONS or MRE_FI_HMAC_KEY)"
+                "sign=True requested but no HMAC keys are configured "
+                "(set MRE_FI_HMAC_KEY_VERSIONS or MRE_FI_HMAC_KEY)"
             )
     elif sign is False:
         if require_production_hmac():
@@ -670,6 +762,30 @@ def _normalize_timestamp_for_roundtrip(value: Any) -> str:
 
 
 def _row_to_pack(row: pd.Series) -> FixedIncomeEvidencePack:
+    """Hydrate a :class:`FixedIncomeEvidencePack` from a warehouse row.
+
+    v1.5.1 (PR-9 FIX 3): the row's ``request_id`` is always read back
+    into ``pack.request_id`` for completeness, but it is the metadata
+    flag ``_request_id_bound`` (stamped into ``pack.metadata`` at
+    :func:`build_evidence_pack` time) that decides whether
+    :func:`verify_pack` binds the value into the canonical bytestream.
+    Legacy v1 packs lack the flag and verify exactly as before; new v2
+    packs built via :func:`build_evidence_pack` with a non-``None``
+    ``request_id`` carry the flag and bind the id.
+    """
+    hmac_sig = (
+        None
+        if pd.isna(row.get("hmac_signature"))
+        or row.get("hmac_signature") in ("", None)
+        else str(row["hmac_signature"])
+    )
+    row_rid = row.get("request_id")
+    has_row_rid = (
+        row_rid is not None
+        and not (isinstance(row_rid, float) and pd.isna(row_rid))
+        and str(row_rid) != ""
+    )
+    request_id_for_pack: str | None = str(row_rid) if has_row_rid else None
     return FixedIncomeEvidencePack(
         model_run_id=str(row["model_run_id"]),
         component_name=str(row["component_name"]),
@@ -683,14 +799,16 @@ def _row_to_pack(row: pd.Series) -> FixedIncomeEvidencePack:
         validation_results=_parse_json_field(row.get("validation_results_json")),
         release_gate=bool(int(row["release_gate"])),
         random_seeds=_parse_json_field(row.get("random_seeds_json")),
-        python_version=(None if pd.isna(row.get("python_version")) else str(row["python_version"])) or "",
-        lockfile_hash=(None if pd.isna(row.get("lockfile_hash")) else str(row["lockfile_hash"])),
-        hmac_signature=(
-            None
-            if pd.isna(row.get("hmac_signature")) or row.get("hmac_signature") in ("", None)
-            else str(row["hmac_signature"])
+        python_version=(
+            None if pd.isna(row.get("python_version")) else str(row["python_version"])
+        )
+        or "",
+        lockfile_hash=(
+            None if pd.isna(row.get("lockfile_hash")) else str(row["lockfile_hash"])
         ),
+        hmac_signature=hmac_sig,
         metadata=_parse_json_field(row.get("metadata_json")),
+        request_id=request_id_for_pack,
     )
 
 
