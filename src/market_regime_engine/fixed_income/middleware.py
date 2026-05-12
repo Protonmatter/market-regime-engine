@@ -150,15 +150,10 @@ class MaxBodySizeMiddleware:
         # bodies that omit Content-Length because an attacker can
         # otherwise stream an unbounded body. We still cap-by-accumulation
         # below as defence in depth.
-        if (
-            self._reject_chunked_when_unsafe
-            and _should_reject_chunked()
-            and _is_chunked_without_content_length(scope)
-        ):
+        if self._reject_chunked_when_unsafe and _should_reject_chunked() and _is_chunked_without_content_length(scope):
             await _send_413(
                 send,
-                detail="chunked transfer-encoding without Content-Length is "
-                "rejected in production",
+                detail="chunked transfer-encoding without Content-Length is rejected in production",
                 limit_bytes=max_size,
             )
             return
@@ -212,9 +207,7 @@ class MaxBodySizeMiddleware:
             )
 
 
-def _wrap_receive_with_size_check(
-    receive: Receive, max_size: int
-) -> tuple[Receive, dict[str, Any]]:
+def _wrap_receive_with_size_check(receive: Receive, max_size: int) -> tuple[Receive, dict[str, Any]]:
     """Return a ``(wrapped_receive, state)`` pair.
 
     ``state["exceeded"]`` is mutated to ``True`` once the running total

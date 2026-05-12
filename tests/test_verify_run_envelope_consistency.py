@@ -191,9 +191,7 @@ def test_envelope_hash_is_stamped_in_metadata_by_write_evidence_pack(
     assert stored_envelope_hash(persisted) == persisted.metadata[_ENVELOPE_HASH_METADATA_KEY]
 
 
-def test_envelope_hash_stable_under_hmac_signing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_envelope_hash_stable_under_hmac_signing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The stamped envelope hash and the HMAC signature must be compatible:
     signing must NOT invalidate the envelope hash, and HMAC verification
     must continue to pass after stamping (i.e., the envelope_hash key is
@@ -201,9 +199,7 @@ def test_envelope_hash_stable_under_hmac_signing(
     monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": _b64()}))
     wh = Warehouse(str(tmp_path / "envelope-signed.duckdb"))
     try:
-        _persist(
-            wh, model_run_id="run-signed", request_id="req-signed", sign=True
-        )
+        _persist(wh, model_run_id="run-signed", request_id="req-signed", sign=True)
         report = _verify_fi_evidence_pack(wh, "run-signed")
     finally:
         wh.close()

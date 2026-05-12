@@ -61,9 +61,7 @@ def test_tca_dropped_rows_increments_via_legacy_global() -> None:
             "arrival_cost_bps": [1.0, float("nan"), 2.0, float("nan")],
         }
     )
-    cleaned, n_dropped = _drop_nan_rows(
-        trades, metric="arrival_cost_bps", dimensions=()
-    )
+    cleaned, n_dropped = _drop_nan_rows(trades, metric="arrival_cost_bps", dimensions=())
     assert n_dropped == 2
     assert len(cleaned) == 2
     after = _legacy_counter_value(

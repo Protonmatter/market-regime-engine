@@ -99,31 +99,21 @@ def test_api_v1_cache_hits_increment_via_legacy_global(api_v1_module) -> None:
     api_v1 = api_v1_module
     client = TestClient(api_v1.app)
     # First request → cache miss.
-    before_miss = _legacy_counter_value(
-        "mre_api_cache_misses_total", endpoint="release_gate_latest"
-    )
+    before_miss = _legacy_counter_value("mre_api_cache_misses_total", endpoint="release_gate_latest")
     resp = client.get("/v1/release-gate/latest")
     assert resp.status_code in (200, 404, 503)
-    after_miss = _legacy_counter_value(
-        "mre_api_cache_misses_total", endpoint="release_gate_latest"
-    )
+    after_miss = _legacy_counter_value("mre_api_cache_misses_total", endpoint="release_gate_latest")
     assert after_miss >= before_miss + 1.0
 
     # Second request → cache hit.
-    before_hit = _legacy_counter_value(
-        "mre_api_cache_hits_total", endpoint="release_gate_latest"
-    )
+    before_hit = _legacy_counter_value("mre_api_cache_hits_total", endpoint="release_gate_latest")
     resp = client.get("/v1/release-gate/latest")
     assert resp.status_code in (200, 404, 503)
-    after_hit = _legacy_counter_value(
-        "mre_api_cache_hits_total", endpoint="release_gate_latest"
-    )
+    after_hit = _legacy_counter_value("mre_api_cache_hits_total", endpoint="release_gate_latest")
     assert after_hit >= before_hit + 1.0
 
 
-def test_api_v1_cache_counters_increment_via_otel_when_configured(
-    reset_otel_state, api_v1_module
-) -> None:
+def test_api_v1_cache_counters_increment_via_otel_when_configured(reset_otel_state, api_v1_module) -> None:
     """When ``configure_otel(enabled=True)`` is active, the cache
     counter call sites must register OTel counter instruments so the
     OTel exporter pipeline sees the increments."""
@@ -150,6 +140,5 @@ def test_api_v1_cache_counters_increment_via_otel_when_configured(
         "the call site routes through observability.incr"
     )
     assert hit_counter is not None, (
-        "OTel counter for mre_api_cache_hits_total must be created when "
-        "the call site routes through observability.incr"
+        "OTel counter for mre_api_cache_hits_total must be created when the call site routes through observability.incr"
     )

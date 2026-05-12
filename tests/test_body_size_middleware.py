@@ -23,11 +23,9 @@ import contextlib
 import json
 from pathlib import Path
 
-import pandas as pd
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.testclient import WebSocketDenialResponse  # noqa: F401  - keep import alive
 
 import market_regime_engine.fixed_income  # noqa: F401  - register FI schema
 from market_regime_engine.fixed_income.middleware import (
@@ -88,9 +86,7 @@ def test_request_under_cap_succeeds(app_with_middleware) -> None:
     handler that raises (e.g. JSON-serialising an ``inf`` on an
     empty warehouse) still produces a status code instead of
     blowing up the test client."""
-    client = TestClient(
-        app_with_middleware.app, raise_server_exceptions=False
-    )
+    client = TestClient(app_with_middleware.app, raise_server_exceptions=False)
     resp = client.post(
         "/v1/execution_confidence",
         json=_valid_request_body(),
