@@ -33,6 +33,7 @@ docstrings.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable
 from typing import Any
 
@@ -266,13 +267,7 @@ def build_credit_features(
         If any feature row's ``source_timestamp`` is after ``asof`` or
         falls on a closed trading day.
     """
-    asof_utc = (
-        to_utc(asof)
-        if isinstance(asof, str)
-        else pd.Timestamp(asof, tz="UTC")
-        if pd.Timestamp(asof).tzinfo is None
-        else pd.Timestamp(asof).tz_convert("UTC")
-    )
+    asof_utc = to_utc(asof) if isinstance(asof, str) else pd.Timestamp(asof, tz="UTC") if pd.Timestamp(asof).tzinfo is None else pd.Timestamp(asof).tz_convert("UTC")
     if asof_utc is None:
         raise ValueError("asof is required and must not be None")
 
@@ -417,7 +412,10 @@ def _enforce_pit_and_calendar(
     df["__decision_ts"] = asof
     vintage_col = "vintage_date" if "vintage_date" in df.columns else None
     if vintage_col is None:
-        log.warning("feature frame missing vintage_date column; PIT vintage rail skipped for all rows")
+        log.warning(
+            "feature frame missing vintage_date column; PIT vintage rail "
+            "skipped for all rows"
+        )
     report = audit_pit_dataframe(
         df,
         decision_timestamp_col="__decision_ts",
@@ -523,12 +521,17 @@ def build_liquidity_features(
         ``{"market", "sector", "rating", "cusip"}``.
     """
     if scope_type not in {"market", "sector", "rating", "cusip"}:
-        raise ValueError(f"scope_type must be one of {{'market', 'sector', 'rating', 'cusip'}}; got {scope_type!r}")
+        raise ValueError(
+            "scope_type must be one of {'market', 'sector', 'rating', 'cusip'}; "
+            f"got {scope_type!r}"
+        )
 
     asof_utc = _coerce_asof_utc(asof)
     lower = asof_utc - pd.Timedelta(days=int(lookback_days))
 
-    cusip_filter: set[str] | None = _resolve_scope_cusips(warehouse, asof_utc, scope_type=scope_type, scope_id=scope_id)
+    cusip_filter: set[str] | None = _resolve_scope_cusips(
+        warehouse, asof_utc, scope_type=scope_type, scope_id=scope_id
+    )
 
     trades = _filter_microstructure(
         _safe_read(warehouse, "read_trace_trades"),
@@ -740,7 +743,9 @@ def _emit_volume_over_adv_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def _emit_time_since_last_trade_rows(trades: pd.DataFrame, *, asof: pd.Timestamp) -> list[dict[str, Any]]:
+def _emit_time_since_last_trade_rows(
+    trades: pd.DataFrame, *, asof: pd.Timestamp
+) -> list[dict[str, Any]]:
     """Emit one row at ``asof`` carrying minutes since the most recent trade.
 
     The scorer's ``_latest`` reads only the final non-NaN value, so a
@@ -778,11 +783,15 @@ def _emit_rfq_rows(rfqs: pd.DataFrame) -> list[dict[str, Any]]:
     if "dealers_requested" in r.columns:
         daily_req = r.groupby("date")["dealers_requested"].sum().astype(float)
         for ts, v in daily_req.items():
-            out.append(_emit_row(date=ts, feature_name="dealers_requested", value=float(v), source_timestamp=ts))
+            out.append(
+                _emit_row(date=ts, feature_name="dealers_requested", value=float(v), source_timestamp=ts)
+            )
     if "dealers_responded" in r.columns:
         daily_resp = r.groupby("date")["dealers_responded"].sum().astype(float)
         for ts, v in daily_resp.items():
-            out.append(_emit_row(date=ts, feature_name="quotes_received", value=float(v), source_timestamp=ts))
+            out.append(
+                _emit_row(date=ts, feature_name="quotes_received", value=float(v), source_timestamp=ts)
+            )
             out.append(
                 _emit_row(
                     date=ts,
@@ -817,6 +826,15 @@ def _emit_amihud_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
     all surviving cusips in the scope; the day-over-day VWAP return
     is divided by daily volume. Tiny denominators are squashed to
     ``NaN`` rather than producing a near-infinite stress signal.
+
+    v1.5.1 (PR-9 FIX 5): the per-day VWAP / volume aggregation now
+    runs via vectorised :meth:`groupby` reductions on the (px*size,
+    size) columns rather than ``groupby.apply(lambda g: ...)``. The
+    output is byte-identical (zero-volume days yield NaN VWAP and
+    are dropped at the ``dropna`` boundary). The
+    ``MRE_FI_LEGACY_VECTORIZE=1`` env var routes through the legacy
+    ``apply`` path so operators can A/B parity on a suspected
+    regression. The legacy branch is slated for deletion in v1.5.2.
     """
     if trades.empty or "size" not in trades.columns:
         return []
@@ -826,20 +844,35 @@ def _emit_amihud_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
     if t.empty:
         return []
     t["date"] = t["timestamp"].dt.floor("D")
-    grouped = t.groupby("date").apply(
-        lambda g: pd.Series(
-            {
-                "vwap": (g["price"] * g["size"]).sum() / g["size"].sum() if g["size"].sum() > 0 else float("nan"),
-                "volume": float(g["size"].sum()),
-            }
-        ),
-        include_groups=False,
-    )
+    if os.getenv("MRE_FI_LEGACY_VECTORIZE", "").strip() in {"1", "true", "yes", "on"}:
+        grouped = t.groupby("date").apply(
+            lambda g: pd.Series(
+                {
+                    "vwap": (g["price"] * g["size"]).sum() / g["size"].sum()
+                    if g["size"].sum() > 0
+                    else float("nan"),
+                    "volume": float(g["size"].sum()),
+                }
+            ),
+            include_groups=False,
+        )
+    else:
+        t["__notional"] = t["price"] * t["size"]
+        agg = t.groupby("date").agg(
+            notional=("__notional", "sum"),
+            volume=("size", "sum"),
+        )
+        # Zero-volume days → NaN VWAP (matches legacy ``apply`` branch).
+        volume_safe = agg["volume"].where(agg["volume"] > 0)
+        agg["vwap"] = agg["notional"] / volume_safe
+        grouped = agg[["vwap", "volume"]].astype(float)
     if grouped.empty:
         return []
     grouped = grouped.sort_index()
     grouped["return"] = grouped["vwap"].pct_change().abs()
-    grouped["amihud"] = (grouped["return"] / grouped["volume"]).replace([float("inf"), -float("inf")], float("nan"))
+    grouped["amihud"] = (grouped["return"] / grouped["volume"]).replace(
+        [float("inf"), -float("inf")], float("nan")
+    )
     grouped = grouped.dropna(subset=["amihud"])
     return [
         _emit_row(date=ts, feature_name="amihud_illiquidity", value=float(v), source_timestamp=ts)
@@ -847,7 +880,9 @@ def _emit_amihud_rows(trades: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def _emit_axe_freshness_rows(quotes: pd.DataFrame, *, asof: pd.Timestamp) -> list[dict[str, Any]]:
+def _emit_axe_freshness_rows(
+    quotes: pd.DataFrame, *, asof: pd.Timestamp
+) -> list[dict[str, Any]]:
     """Seconds between ``asof`` and the most recent dealer quote (proxy for axe staleness)."""
     if quotes.empty or "timestamp" not in quotes.columns:
         return []
@@ -897,9 +932,69 @@ def _enforce_pit_liquidity(
     asof: pd.Timestamp,
     calendar: TradingCalendar,
 ) -> None:
-    """Row-by-row PIT + trading-day enforcement for liquidity features."""
+    """Row-by-row PIT + trading-day enforcement for liquidity features.
+
+    v1.5.1 (PR-9 FIX 5): vectorised PIT path mirrors the credit
+    builder's :func:`_enforce_pit_and_calendar` and the liquidity
+    scorer's :func:`liquidity_stress._audit_pit`. The PIT rails go
+    through :func:`audit_pit_dataframe` once; the trading-day rail
+    still loops, but only over the subset of feature_names that
+    require a SIFMA trading calendar check (e.g. trade-velocity,
+    not VIX/MOVE). The ``MRE_FI_LEGACY_VECTORIZE=1`` env var routes
+    through the pre-PR-9 iterrows loop for one release cycle.
+    """
     if frame.empty:
         return
+    if os.getenv("MRE_FI_LEGACY_VECTORIZE", "").strip() in {"1", "true", "yes", "on"}:
+        _enforce_pit_liquidity_legacy_iterrows(frame, asof=asof, calendar=calendar)
+        return
+
+    from market_regime_engine.fixed_income.pit_guard import audit_pit_dataframe
+
+    df = frame.copy()
+    df["__decision_ts"] = asof
+    vintage_col = "vintage_date" if "vintage_date" in df.columns else None
+    report = audit_pit_dataframe(
+        df,
+        decision_timestamp_col="__decision_ts",
+        feature_timestamp_col="source_timestamp",
+        vintage_timestamp_col=vintage_col,
+    )
+    if report.violation_count > 0:
+        first = report.violations.iloc[0]
+        label = str(first.get("feature_name", "feature"))
+        reason = str(first.get("pit_violation_reason", ""))
+        raise PitViolationError(
+            f"liquidity PIT audit failed: {report.violation_count} row(s) violate PIT "
+            f"(asof={asof}, first violator label={label!r} reason={reason!r})"
+        )
+
+    name_series = frame["feature_name"].astype(str)
+    cal_mask = name_series.isin(_LIQUIDITY_TRADING_DAY_FEATURES)
+    if not cal_mask.any():
+        return
+    cal_subset = frame.loc[cal_mask]
+    for _, row in cal_subset.iterrows():
+        source_ts = pd.Timestamp(row["source_timestamp"])
+        if source_ts.tzinfo is None:
+            source_ts = source_ts.tz_localize("UTC")
+        if not is_trading_day(source_ts, calendar):
+            raise PitViolationError(
+                f"liquidity feature {row['feature_name']!r} reports on closed trading day "
+                f"{source_ts.isoformat()} per calendar {calendar.value}"
+            )
+
+
+def _enforce_pit_liquidity_legacy_iterrows(
+    frame: pd.DataFrame,
+    *,
+    asof: pd.Timestamp,
+    calendar: TradingCalendar,
+) -> None:
+    """Pre-v1.5.1 iterrows path, gated behind ``MRE_FI_LEGACY_VECTORIZE=1``.
+
+    Slated for deletion in v1.5.2 once the vectorised path has burned in.
+    """
     for _, row in frame.iterrows():
         source_ts = pd.Timestamp(row["source_timestamp"])
         if source_ts.tzinfo is None:
@@ -917,7 +1012,10 @@ def _enforce_pit_liquidity(
             vintage_timestamp=vintage_ts,
             label=str(row["feature_name"]),
         )
-        if str(row["feature_name"]) in _LIQUIDITY_TRADING_DAY_FEATURES and not is_trading_day(source_ts, calendar):
+        if (
+            str(row["feature_name"]) in _LIQUIDITY_TRADING_DAY_FEATURES
+            and not is_trading_day(source_ts, calendar)
+        ):
             raise PitViolationError(
                 f"liquidity feature {row['feature_name']!r} reports on closed trading day "
                 f"{source_ts.isoformat()} per calendar {calendar.value}"

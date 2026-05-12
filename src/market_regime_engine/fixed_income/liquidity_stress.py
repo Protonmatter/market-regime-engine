@@ -52,6 +52,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import uuid
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -61,7 +62,10 @@ import pandas as pd
 
 from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
-from market_regime_engine.fixed_income.pit_guard import assert_pit_safe
+from market_regime_engine.fixed_income.pit_guard import (
+    PitViolationError,
+    assert_pit_safe,
+)
 from market_regime_engine.fixed_income.schemas import (
     LiquidityLabel,
     LiquidityStressOutput,
@@ -407,8 +411,55 @@ def _resolve_model_run_id(model_run_id: str | None, scope_type: str, profile: st
 
 
 def _audit_pit(features: pd.DataFrame, *, asof: pd.Timestamp) -> None:
-    if "source_timestamp" not in features.columns:
+    """Row-level PIT enforcement on the long-form feature frame.
+
+    v1.5.1 (PR-9 FIX 5): vectorised replacement of the legacy
+    ``features.iterrows()`` + per-row :func:`assert_pit_safe` loop.
+    Mirrors the pattern from
+    :func:`credit_spread_regime._audit_pit` (PR-8 Tier-2 fix A2):
+    we batch-normalise the timestamp columns once and let
+    :func:`audit_pit_dataframe` produce the same accept / reject
+    semantics in O(few ms) per column comparison.
+
+    The ``MRE_FI_LEGACY_VECTORIZE=1`` env var routes through the
+    legacy iterrows loop so operators can compare row-counts on a
+    suspected regression. The legacy path will be removed in
+    v1.5.2.
+    """
+    if features.empty or "source_timestamp" not in features.columns:
         return
+    if os.getenv("MRE_FI_LEGACY_VECTORIZE", "").strip() in {"1", "true", "yes", "on"}:
+        _audit_pit_legacy_iterrows(features, asof=asof)
+        return
+
+    from market_regime_engine.fixed_income.pit_guard import audit_pit_dataframe
+
+    df = features.copy()
+    df["__decision_ts"] = asof
+    vintage_col = "vintage_date" if "vintage_date" in df.columns else None
+    report = audit_pit_dataframe(
+        df,
+        decision_timestamp_col="__decision_ts",
+        feature_timestamp_col="source_timestamp",
+        vintage_timestamp_col=vintage_col,
+    )
+    if report.violation_count > 0:
+        first = report.violations.iloc[0]
+        label = str(first.get("feature_name", "feature"))
+        reason = str(first.get("pit_violation_reason", ""))
+        raise PitViolationError(
+            f"liquidity PIT audit failed: {report.violation_count} row(s) violate PIT "
+            f"(asof={asof}, first violator label={label!r} reason={reason!r})"
+        )
+
+
+def _audit_pit_legacy_iterrows(features: pd.DataFrame, *, asof: pd.Timestamp) -> None:
+    """Pre-v1.5.1 iterrows loop, gated behind ``MRE_FI_LEGACY_VECTORIZE=1``.
+
+    Kept for one release cycle so operators can A/B the parity of the
+    new vectorised path on suspected regressions. Slated for deletion
+    in v1.5.2 once the vectorised path has burned in.
+    """
     for _, row in features.iterrows():
         source = pd.Timestamp(row["source_timestamp"])
         if source.tzinfo is None:
