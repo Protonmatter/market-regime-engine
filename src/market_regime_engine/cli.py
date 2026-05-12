@@ -1130,8 +1130,19 @@ def verify_run_cmd(args: argparse.Namespace) -> None:
         except Exception as exc:
             fi_report = {"fi_error": str(exc)}
         report = {**report, **fi_report}
-        if not bool(fi_report.get("fi_hmac_verified", True)) and fi_report.get(
-            "fi_evidence_pack_present"
+        # v1.5 PR-8 (Tier-2 fix C-AUTO-6): an envelope-inconsistent pack
+        # also lowers ``approved`` so a tampered row that bypassed HMAC
+        # verification (e.g. dev-mode pack signed under no keys) does
+        # not slip past verify-run. Use ``is False`` rather than
+        # truthiness so we distinguish ``None`` (no pack present) from
+        # ``False`` (pack present but inconsistent).
+        if fi_report.get("fi_evidence_pack_present") and not bool(
+            fi_report.get("fi_hmac_verified", True)
+        ):
+            report["approved"] = False
+        if (
+            fi_report.get("fi_evidence_pack_present")
+            and fi_report.get("fi_envelope_consistent") is False
         ):
             report["approved"] = False
         log.info("verify_run", extra=report)
