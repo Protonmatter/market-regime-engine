@@ -86,7 +86,9 @@ def test_request_under_cap_succeeds(app_with_middleware) -> None:
     handler that raises (e.g. JSON-serialising an ``inf`` on an
     empty warehouse) still produces a status code instead of
     blowing up the test client."""
-    client = TestClient(app_with_middleware.app, raise_server_exceptions=False)
+    client = TestClient(
+        app_with_middleware.app, raise_server_exceptions=False
+    )
     resp = client.post(
         "/v1/execution_confidence",
         json=_valid_request_body(),
@@ -144,12 +146,18 @@ def test_production_profile_rejects_chunked_with_no_content_length(
     """When ``MRE_ENV=production`` the middleware refuses
     chunked-without-Content-Length up front even if the body would
     fit under the cap, because chunked input bypasses the
-    Content-Length pre-screen."""
+    Content-Length pre-screen.
+
+    v1.6 PR-22: ``api_v1`` now runs ``assert_production_ready()`` at
+    import time, which requires ``MRE_API_KEY`` to be set whenever
+    ``MRE_ENV=production``. The test is about body-cap behavior, not
+    auth, so we set a stub key just to clear the import-time guard.
+    """
     db = tmp_path / "prod-body-cap.duckdb"
     monkeypatch.setenv("MRE_DB_PATH", str(db))
     monkeypatch.setenv("MRE_ENV", "production")
     monkeypatch.setenv("MRE_FI_BODY_SIZE_CAP_BYTES", "65536")
-    monkeypatch.delenv("MRE_API_KEY", raising=False)
+    monkeypatch.setenv("MRE_API_KEY", "test-body-cap-key")
     close_pooled_warehouses()
     import importlib
 
