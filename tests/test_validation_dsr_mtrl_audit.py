@@ -49,7 +49,6 @@ from market_regime_engine.validation import (
     probability_of_backtest_overfitting,
 )
 
-
 # -- DSR audit ----------------------------------------------------------------
 
 
@@ -67,7 +66,7 @@ def test_dsr_uses_blp_eq5_variance_term_for_normal_returns() -> None:
     returns = rng.normal(0.05, 0.1, size=512)
     out = deflated_sharpe(returns, n_trials=1)
     sr_hat = returns.mean() / returns.std(ddof=1)
-    # SR_hat is well above 0 for these 512 draws (mu/sigma ~= 0.5).  # noqa: RUF003
+    # SR_hat is well above 0 for these 512 draws (mu/sigma ~= 0.5).
     assert sr_hat > 0
     assert out > 0.5
 
@@ -96,7 +95,7 @@ def test_dsr_fat_tailed_input_yields_lower_score_when_above_threshold() -> None:
     the variance term is visible.
     """
     rng = np.random.default_rng(3)
-    # Strong-enough signal: mu/sigma ~= 0.3 so SR_hat clearly exceeds SR*  # noqa: RUF003
+    # Strong-enough signal: mu/sigma ~= 0.3 so SR_hat clearly exceeds SR*
     # even after n_trials=20 deflation.
     base = rng.normal(0.03, 0.1, size=512)
     benign = deflated_sharpe(base, n_trials=20, skew=0.0, kurt=0.0)
@@ -129,9 +128,7 @@ def test_a1_gaussian_iid_var_term_is_1_plus_half_sr_squared() -> None:
     z = _normal_ppf(0.95)
     expected_var_term = 1.5
     expected_n_star = 1.0 + expected_var_term * (z / sr) ** 2
-    got = minimum_track_record_length(
-        sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95
-    )
+    got = minimum_track_record_length(sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95)
     assert abs(got - expected_n_star) < 1e-9, (
         f"BLP eq. 5 var_term at Gaussian iid (SR=1) should be 1.5, "
         f"but MTRL yielded n*={got}, expected {expected_n_star}"
@@ -149,16 +146,10 @@ def test_a1_positive_skew_decreases_var_term() -> None:
     sr = 1.0
     baseline_var = _blp_var_term(sr, skew=0.0, excess_kurt=0.0)
     skewed_var = _blp_var_term(sr, skew=1.0, excess_kurt=0.0)
-    assert skewed_var < baseline_var, (
-        f"Positive skew should reduce var_term ({skewed_var} >= {baseline_var})"
-    )
+    assert skewed_var < baseline_var, f"Positive skew should reduce var_term ({skewed_var} >= {baseline_var})"
     # MTRL is monotone in var_term, so positive skew should reduce n*.
-    got_baseline = minimum_track_record_length(
-        sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95
-    )
-    got_skewed = minimum_track_record_length(
-        sr, 0.0, skew=1.0, excess_kurt=0.0, confidence=0.95
-    )
+    got_baseline = minimum_track_record_length(sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95)
+    got_skewed = minimum_track_record_length(sr, 0.0, skew=1.0, excess_kurt=0.0, confidence=0.95)
     assert got_skewed < got_baseline
 
 
@@ -177,16 +168,9 @@ def test_a1_positive_excess_kurtosis_increases_var_term() -> None:
     sr = 1.0
     baseline_var = _blp_var_term(sr, skew=0.0, excess_kurt=0.0)
     fat_var = _blp_var_term(sr, skew=0.0, excess_kurt=8.0)
-    assert fat_var > baseline_var, (
-        f"Positive excess kurtosis should inflate var_term "
-        f"({fat_var} <= {baseline_var})"
-    )
-    got_baseline = minimum_track_record_length(
-        sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95
-    )
-    got_fat = minimum_track_record_length(
-        sr, 0.0, skew=0.0, excess_kurt=8.0, confidence=0.95
-    )
+    assert fat_var > baseline_var, f"Positive excess kurtosis should inflate var_term ({fat_var} <= {baseline_var})"
+    got_baseline = minimum_track_record_length(sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95)
+    got_fat = minimum_track_record_length(sr, 0.0, skew=0.0, excess_kurt=8.0, confidence=0.95)
     assert got_fat > got_baseline
 
 
@@ -205,9 +189,7 @@ def test_mtrl_blp_closed_form_at_sr_one_gaussian() -> None:
     sr = 1.0
     z = _normal_ppf(0.95)
     expected = 1.0 + 1.5 * z * z
-    got = minimum_track_record_length(
-        sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95
-    )
+    got = minimum_track_record_length(sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95)
     assert abs(got - expected) < 1e-6
 
 
@@ -227,9 +209,7 @@ def test_mtrl_blp_closed_form_at_sr_two_gaussian() -> None:
     z = _normal_ppf(0.95)
     var_term = 1.0 + (0.0 + 2.0) / 4.0 * sr * sr
     expected = 1.0 + var_term * (z / sr) ** 2
-    got = minimum_track_record_length(
-        sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95
-    )
+    got = minimum_track_record_length(sr, 0.0, skew=0.0, excess_kurt=0.0, confidence=0.95)
     assert abs(got - expected) < 1e-9
 
 
@@ -263,13 +243,10 @@ def test_mtrl_sweeps_consistent_across_grid() -> None:
                     1e-12,
                 )
                 expected = 1.0 + var_term * (z / sr) ** 2
-                got = minimum_track_record_length(
-                    sr, 0.0, skew=skew, excess_kurt=kurt, confidence=0.95
-                )
+                got = minimum_track_record_length(sr, 0.0, skew=skew, excess_kurt=kurt, confidence=0.95)
                 assert math.isfinite(got), f"non-finite for SR={sr}"
                 assert abs(got - expected) < 1e-9, (
-                    f"closed-form mismatch at SR={sr}, skew={skew}, kurt={kurt}: "
-                    f"got={got}, expected={expected}"
+                    f"closed-form mismatch at SR={sr}, skew={skew}, kurt={kurt}: got={got}, expected={expected}"
                 )
 
 
@@ -307,12 +284,8 @@ def test_a2_pbo_embargo_additive_to_purge() -> None:
     rng = np.random.default_rng(20260512)
     perf = rng.normal(0.0, 1.0, size=(t, n_strats))
     df = pd.DataFrame(perf, columns=[f"s{i}" for i in range(n_strats)])
-    pbo_with_embargo = probability_of_backtest_overfitting(
-        df, n_partitions=n_partitions, purge=purge, embargo=embargo
-    )
-    pbo_no_embargo = probability_of_backtest_overfitting(
-        df, n_partitions=n_partitions, purge=purge, embargo=0
-    )
+    pbo_with_embargo = probability_of_backtest_overfitting(df, n_partitions=n_partitions, purge=purge, embargo=embargo)
+    pbo_no_embargo = probability_of_backtest_overfitting(df, n_partitions=n_partitions, purge=purge, embargo=0)
     assert pbo_with_embargo != pbo_no_embargo, (
         f"Expected PBO(purge=5, embargo=3) != PBO(purge=5, embargo=0); "
         f"got identical {pbo_with_embargo}. Embargo is being subsumed "
@@ -328,7 +301,7 @@ def test_a3_dsr_multiplicity_threshold_scales_with_moment_corrected_stderr() -> 
 
     The deflated threshold must scale with the moment-corrected stderr
     ``sqrt(var_term/(T−1))``, NOT with ``1/sqrt(T−1)`` alone. We
-    construct a fat-tail input (excess kurt=8, so var_term ≈ 2× the
+    construct a fat-tail input (excess kurt=8, so var_term ≈ 2x the
     Gaussian baseline) and verify the actual DSR matches the
     BLP-correct closed form, not the v1.5.1 buggy form.
     """
@@ -371,10 +344,9 @@ def test_a3_dsr_multiplicity_threshold_scales_with_moment_corrected_stderr() -> 
         f"sqrt(Var(SR_hat)) · E[max_z(N)] scaling."
     )
     # And the actual DSR must differ measurably from the buggy form —
-    # var_term is ~2× Gaussian here so the threshold scaling matters.
+    # var_term is ~2x Gaussian here so the threshold scaling matters.
     assert abs(actual_dsr - buggy_dsr) > 1e-4, (
-        f"DSR matches the buggy 1/sqrt(T-1) form ({buggy_dsr}); "
-        f"A3 fix may not have landed."
+        f"DSR matches the buggy 1/sqrt(T-1) form ({buggy_dsr}); A3 fix may not have landed."
     )
 
 
@@ -393,7 +365,6 @@ def test_a3_dsr_threshold_grows_with_n_trials() -> None:
     for n_trials in (1, 5, 25, 125, 625):
         dsr = deflated_sharpe(returns, n_trials=n_trials, skew=0.0, kurt=0.0)
         assert dsr <= prev + 1e-12, (
-            f"DSR should be monotone non-increasing in n_trials; "
-            f"got {dsr} after {prev} at n_trials={n_trials}"
+            f"DSR should be monotone non-increasing in n_trials; got {dsr} after {prev} at n_trials={n_trials}"
         )
         prev = dsr
