@@ -47,6 +47,7 @@ import pandas as pd
 from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
 from market_regime_engine.fixed_income.pit_guard import (
+    PitViolationError,
     assert_pit_safe,
 )
 from market_regime_engine.fixed_income.schemas import (
@@ -65,6 +66,7 @@ __all__ = [
     "HYSTERESIS_BANDS_CREDIT",
     "classify_with_hysteresis",
     "latest_credit_regime_score",
+    "latest_credit_regime_score_identity",
     "score_credit_regime",
     "write_credit_regime_score",
 ]
@@ -679,6 +681,71 @@ def latest_credit_regime_score(warehouse: Any) -> CreditRegimeOutput | None:
         return None
     row = df.iloc[-1]
     return _row_to_output(row)
+
+
+def latest_credit_regime_score_identity(
+    warehouse: Any,
+) -> tuple[str, str, str] | None:
+    """Return the ``(timestamp, model_run_id, artifact_hash)`` triple of
+    the most recent ``credit_regime_scores`` row, or ``None`` when the
+    table is empty.
+
+    v1.5 PR-8 (Tier-2 fix A-Q1): two writes with the same canonical
+    ``timestamp`` but different ``(model_run_id, artifact_hash)`` are
+    legal — two backfills, two retraining runs at the same close, etc.
+    Pre-fix the FastAPI per-process cache keyed on ``timestamp`` only,
+    so the second read returned the FIRST run's artifact silently.
+    The full triple is now the cache key so a new run with the same
+    timestamp invalidates the prior entry.
+
+    Implementation: prefer a parameterless SQL ``ORDER BY timestamp
+    DESC, model_run_id DESC LIMIT 1`` against the backend so we don't
+    pay a full-table read on every request (REVIEW.md §3.6 Tier-3 #9).
+    Falls back to the legacy ``read_credit_regime_scores()`` →
+    ``.iloc[-1]`` path when the backend doesn't expose ``read_sql``
+    (e.g. test doubles).
+    """
+    backend = getattr(warehouse, "_backend", None)
+    read_sql = getattr(backend, "read_sql", None) if backend is not None else None
+    if callable(read_sql):
+        try:
+            df = read_sql(
+                "SELECT timestamp, model_run_id, artifact_hash "
+                "FROM credit_regime_scores "
+                "ORDER BY timestamp DESC, model_run_id DESC "
+                "LIMIT 1"
+            )
+        except Exception:  # pragma: no cover - SQL-side failure
+            df = None
+        if df is not None and not df.empty:
+            row = df.iloc[0]
+            return (
+                _iso_z_or_str(row["timestamp"]),
+                str(row["model_run_id"]),
+                str(row["artifact_hash"]),
+            )
+        if df is not None and df.empty:
+            return None
+    # Fallback for in-memory / test-double warehouses.
+    df = warehouse.read_credit_regime_scores()
+    if df is None or df.empty:
+        return None
+    row = df.iloc[-1]
+    return (
+        _iso_z_or_str(row["timestamp"]),
+        str(row["model_run_id"]),
+        str(row["artifact_hash"]),
+    )
+
+
+def _iso_z_or_str(value: Any) -> str:
+    """Normalise a DuckDB / SQLite timestamp to its string form.
+
+    DuckDB returns ``Timestamp`` objects from ``read_sql``; SQLite
+    returns the underlying ``str``. We coerce to ``str(...)`` so the
+    cache key is canonical regardless of backend.
+    """
+    return str(value)
 
 
 def _row_to_output(row: pd.Series) -> CreditRegimeOutput:
