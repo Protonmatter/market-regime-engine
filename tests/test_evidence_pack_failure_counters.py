@@ -24,7 +24,6 @@ import json
 import secrets
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 import market_regime_engine.fixed_income  # noqa: F401  - register FI schema + metrics
@@ -51,10 +50,7 @@ def _hmac_failures_count(reason: str) -> float:
 
 def _evidence_pack_verify_fail_count(*, component: str, surface: str) -> float:
     snap = observability.metrics().snapshot()
-    key = (
-        "fi_evidence_pack_verify_fail_total"
-        f"{{component={component},surface={surface}}}"
-    )
+    key = f"fi_evidence_pack_verify_fail_total{{component={component},surface={surface}}}"
     return float(snap["counters"].get(key, 0.0))
 
 
@@ -149,25 +145,19 @@ def test_verify_pack_increments_with_correct_reason_label_for_each_path(
     before_missing = _hmac_failures_count("missing_signature")
     no_sig = dataclasses.replace(base, hmac_signature=None)
     assert verify_pack(no_sig) is False
-    assert _hmac_failures_count("missing_signature") == pytest.approx(
-        before_missing + 1.0
-    )
+    assert _hmac_failures_count("missing_signature") == pytest.approx(before_missing + 1.0)
 
     # malformed_signature: missing ":" separator.
     before_malformed = _hmac_failures_count("malformed_signature")
     bad_format = dataclasses.replace(base, hmac_signature="garbage-no-colon")
     assert verify_pack(bad_format) is False
-    assert _hmac_failures_count("malformed_signature") == pytest.approx(
-        before_malformed + 1.0
-    )
+    assert _hmac_failures_count("malformed_signature") == pytest.approx(before_malformed + 1.0)
 
     # key_not_found: version prefix is unknown.
     before_key_missing = _hmac_failures_count("key_not_found")
     unknown_key = dataclasses.replace(base, hmac_signature="v99:abcdef")
     assert verify_pack(unknown_key) is False
-    assert _hmac_failures_count("key_not_found") == pytest.approx(
-        before_key_missing + 1.0
-    )
+    assert _hmac_failures_count("key_not_found") == pytest.approx(before_key_missing + 1.0)
 
 
 def test_verify_pack_does_not_increment_on_success(
@@ -213,20 +203,14 @@ def test_verify_run_increments_evidence_pack_verify_fail_counter_on_envelope_inc
     try:
         _persist_pack(wh, model_run_id="run-counter", request_id="req-counter")
         df = wh.read_evidence_packs()
-        df.loc[df["model_run_id"] == "run-counter", "output_hash"] = (
-            "sha256:tampered"
-        )
+        df.loc[df["model_run_id"] == "run-counter", "output_hash"] = "sha256:tampered"
         wh.write_evidence_pack(df)
-        before = _evidence_pack_verify_fail_count(
-            component="credit_regime", surface="cli_verify_run"
-        )
+        before = _evidence_pack_verify_fail_count(component="credit_regime", surface="cli_verify_run")
         report = _verify_fi_evidence_pack(wh, "run-counter")
     finally:
         wh.close()
     assert report["fi_envelope_consistent"] is False
-    after = _evidence_pack_verify_fail_count(
-        component="credit_regime", surface="cli_verify_run"
-    )
+    after = _evidence_pack_verify_fail_count(component="credit_regime", surface="cli_verify_run")
     assert after == pytest.approx(before + 1.0)
 
 
@@ -238,14 +222,10 @@ def test_verify_run_does_not_increment_evidence_pack_counter_on_clean_pack(
     wh = Warehouse(str(tmp_path / "counter-clean.duckdb"))
     try:
         _persist_pack(wh, model_run_id="run-clean", request_id="req-clean")
-        before = _evidence_pack_verify_fail_count(
-            component="credit_regime", surface="cli_verify_run"
-        )
+        before = _evidence_pack_verify_fail_count(component="credit_regime", surface="cli_verify_run")
         report = _verify_fi_evidence_pack(wh, "run-clean")
     finally:
         wh.close()
     assert report["fi_envelope_consistent"] is True
-    after = _evidence_pack_verify_fail_count(
-        component="credit_regime", surface="cli_verify_run"
-    )
+    after = _evidence_pack_verify_fail_count(component="credit_regime", surface="cli_verify_run")
     assert after == pytest.approx(before)

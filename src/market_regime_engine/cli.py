@@ -1014,9 +1014,7 @@ def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
         out["fi_error"] = str(exc)
         # v1.5 PR-8 Tier-1 C-AUTO-3: surface pack-read failures on the
         # operator dashboard.
-        incr_evidence_pack_verify_fail(
-            component="unknown", surface="cli_verify_run"
-        )
+        incr_evidence_pack_verify_fail(component="unknown", surface="cli_verify_run")
         return out
     if pack is None:
         return out
@@ -1156,14 +1154,9 @@ def verify_run_cmd(args: argparse.Namespace) -> None:
         # not slip past verify-run. Use ``is False`` rather than
         # truthiness so we distinguish ``None`` (no pack present) from
         # ``False`` (pack present but inconsistent).
-        if fi_report.get("fi_evidence_pack_present") and not bool(
-            fi_report.get("fi_hmac_verified", True)
-        ):
+        if fi_report.get("fi_evidence_pack_present") and not bool(fi_report.get("fi_hmac_verified", True)):
             report["approved"] = False
-        if (
-            fi_report.get("fi_evidence_pack_present")
-            and fi_report.get("fi_envelope_consistent") is False
-        ):
+        if fi_report.get("fi_evidence_pack_present") and fi_report.get("fi_envelope_consistent") is False:
             report["approved"] = False
         log.info("verify_run", extra=report)
         print(json.dumps(report, indent=2, sort_keys=True, default=str))

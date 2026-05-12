@@ -105,9 +105,10 @@ def test_md_cell_numeric_value_renders_as_string() -> None:
 
 
 def _persist_malicious_evidence_pack(wh: Warehouse) -> None:
-    from market_regime_engine.fixed_income.evidence_pack import write_evidence_pack
-
-    from market_regime_engine.fixed_income.evidence_pack import build_evidence_pack
+    from market_regime_engine.fixed_income.evidence_pack import (
+        build_evidence_pack,
+        write_evidence_pack,
+    )
 
     pack = build_evidence_pack(
         model_run_id="run-mal\n<script>alert(1)</script>",
