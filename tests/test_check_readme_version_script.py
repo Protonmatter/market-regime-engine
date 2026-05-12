@@ -7,8 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "check_readme_version.py"
 
@@ -27,8 +25,7 @@ def test_check_readme_version_passes_on_current_repo() -> None:
     """The current ``__version__`` and README banner must agree."""
     result = _run_script()
     assert result.returncode == 0, (
-        f"check_readme_version exited {result.returncode}; "
-        f"stdout={result.stdout!r}; stderr={result.stderr!r}"
+        f"check_readme_version exited {result.returncode}; stdout={result.stdout!r}; stderr={result.stderr!r}"
     )
     assert "OK" in result.stdout
 
@@ -40,18 +37,12 @@ def test_check_readme_version_detects_drift(tmp_path: Path) -> None:
     # Build a fake "repo" with mismatched README and __init__.
     fake_repo = tmp_path / "repo"
     (fake_repo / "src" / "market_regime_engine").mkdir(parents=True)
-    (fake_repo / "src" / "market_regime_engine" / "__init__.py").write_text(
-        '__version__ = "2.0.0"\n', encoding="utf-8"
-    )
-    (fake_repo / "README.md").write_text(
-        "# Market Regime Engine v1.5.0\n\nbody\n", encoding="utf-8"
-    )
+    (fake_repo / "src" / "market_regime_engine" / "__init__.py").write_text('__version__ = "2.0.0"\n', encoding="utf-8")
+    (fake_repo / "README.md").write_text("# Market Regime Engine v1.5.0\n\nbody\n", encoding="utf-8")
     (fake_repo / "scripts").mkdir(parents=True)
     # Copy the real script over so it resolves _REPO_ROOT from its
     # own location.
-    (fake_repo / "scripts" / "check_readme_version.py").write_text(
-        SCRIPT.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    (fake_repo / "scripts" / "check_readme_version.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, str(fake_repo / "scripts" / "check_readme_version.py")],
         capture_output=True,
@@ -71,16 +62,10 @@ def test_check_readme_version_accepts_patch_release_family(tmp_path: Path) -> No
     """
     fake_repo = tmp_path / "repo"
     (fake_repo / "src" / "market_regime_engine").mkdir(parents=True)
-    (fake_repo / "src" / "market_regime_engine" / "__init__.py").write_text(
-        '__version__ = "1.5.1"\n', encoding="utf-8"
-    )
-    (fake_repo / "README.md").write_text(
-        "# Market Regime Engine v1.5.0\n\nbody\n", encoding="utf-8"
-    )
+    (fake_repo / "src" / "market_regime_engine" / "__init__.py").write_text('__version__ = "1.5.1"\n', encoding="utf-8")
+    (fake_repo / "README.md").write_text("# Market Regime Engine v1.5.0\n\nbody\n", encoding="utf-8")
     (fake_repo / "scripts").mkdir(parents=True)
-    (fake_repo / "scripts" / "check_readme_version.py").write_text(
-        SCRIPT.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    (fake_repo / "scripts" / "check_readme_version.py").write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, str(fake_repo / "scripts" / "check_readme_version.py")],
         capture_output=True,

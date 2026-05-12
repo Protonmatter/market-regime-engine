@@ -2073,9 +2073,7 @@ class Warehouse:
         )
 
     def read_dealer_response_stats(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start"
-        )
+        return self._backend.read_sql("SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start")
 
     def write_curve_snapshots(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2095,9 +2093,7 @@ class Warehouse:
         )
 
     def read_cds_curve_snapshots(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor"
-        )
+        return self._backend.read_sql("SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor")
 
     def write_credit_regime_score(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2120,9 +2116,7 @@ class Warehouse:
     def read_credit_regime_scores(self) -> pd.DataFrame:
         return self._backend.read_sql("SELECT * FROM credit_regime_scores ORDER BY timestamp, model_run_id")
 
-    def latest_credit_regime_score(
-        self, asof: datetime | pd.Timestamp | str | None = None
-    ) -> pd.DataFrame | None:
+    def latest_credit_regime_score(self, asof: datetime | pd.Timestamp | str | None = None) -> pd.DataFrame | None:
         """Return at most one row from ``credit_regime_scores`` as of ``asof``.
 
         v1.5.1 (PR-9 FIX 2): mirrors the indexed SQL fast path that
@@ -2141,9 +2135,7 @@ class Warehouse:
         asof_iso = _normalise_asof_for_sql(asof)
         if asof_iso is None:
             df = self._backend.read_sql(
-                "SELECT * FROM credit_regime_scores "
-                "ORDER BY timestamp DESC, model_run_id DESC "
-                "LIMIT 1"
+                "SELECT * FROM credit_regime_scores ORDER BY timestamp DESC, model_run_id DESC LIMIT 1"
             )
         else:
             df = self._backend.read_sql(
@@ -2177,9 +2169,7 @@ class Warehouse:
         )
 
     def read_liquidity_stress_scores(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id"
-        )
+        return self._backend.read_sql("SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id")
 
     def latest_liquidity_stress_score(
         self,
@@ -2286,19 +2276,13 @@ class Warehouse:
         where_sql = ""
         if clauses:
             where_sql = " WHERE " + " AND ".join(clauses)
-        sql = (
-            "SELECT * FROM tca_regime_segments"
-            + where_sql
-            + " ORDER BY timestamp DESC, model_run_id DESC LIMIT 1"
-        )
+        sql = "SELECT * FROM tca_regime_segments" + where_sql + " ORDER BY timestamp DESC, model_run_id DESC LIMIT 1"
         df = self._backend.read_sql(sql, params=tuple(params) if params else None)
         if df is None or df.empty:
             return None
         return df
 
-    def enrich_execution_requests_asof(
-        self, execution_requests: pd.DataFrame
-    ) -> pd.DataFrame:
+    def enrich_execution_requests_asof(self, execution_requests: pd.DataFrame) -> pd.DataFrame:
         """ASOF-join ``execution_requests`` to credit + liquidity scores.
 
         v1.5.1 (PR-9 FIX 2): on a DuckDB backend this rewrites the
@@ -2331,9 +2315,7 @@ class Warehouse:
             frame = execution_requests.copy()
             # Ensure types DuckDB can ASOF-join: timestamp must be a
             # TIMESTAMP / VARCHAR sortable column.
-            frame["timestamp"] = pd.to_datetime(
-                frame["timestamp"], utc=True, errors="coerce"
-            )
+            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
             conn.register("execution_requests_asof_input", frame)
             try:
                 joined = conn.execute(
@@ -2386,9 +2368,7 @@ class Warehouse:
         )
 
     def read_execution_confidence_predictions(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id"
-        )
+        return self._backend.read_sql("SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id")
 
     def write_execution_outcome(self, df: pd.DataFrame) -> int:
         """Persist execution outcomes; enforces ``observed_at > decision_timestamp``.
@@ -2407,8 +2387,7 @@ class Warehouse:
         if bad.any():
             offenders = df.loc[bad, "request_id"].tolist()
             raise ValueError(
-                "execution_outcomes requires observed_at > decision_timestamp; "
-                f"offending request_ids: {offenders!r}"
+                f"execution_outcomes requires observed_at > decision_timestamp; offending request_ids: {offenders!r}"
             )
         return self._write_fi(
             "execution_outcomes",
@@ -2454,9 +2433,7 @@ class Warehouse:
         )
 
     def read_tca_regime_segments(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name"
-        )
+        return self._backend.read_sql("SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name")
 
     def write_evidence_pack(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2548,9 +2525,7 @@ def read_bond_reference_asof(
     # DuckDB parses it as TIMESTAMP, SQLite compares it as TEXT against
     # the same ISO-8601 strings written by the writer.
     asof_str = asof_ts.isoformat()
-    sql_filter = (
-        "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
-    )
+    sql_filter = "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
     params: tuple[Any, ...] = (asof_str, asof_str)
     if not include_survivorship_failures:
         sql_filter += " AND default_date IS NULL AND delisted_date IS NULL"
@@ -2783,9 +2758,7 @@ def close_pooled_warehouses() -> None:
         _POOLED_WAREHOUSES.clear()
         _POOLED_LOCKS.clear()
     if errors:
-        raise RuntimeError(
-            f"close_pooled_warehouses encountered {len(errors)} errors: {errors!r}"
-        )
+        raise RuntimeError(f"close_pooled_warehouses encountered {len(errors)} errors: {errors!r}")
 
 
 def pooled_warehouse_paths() -> tuple[str, ...]:

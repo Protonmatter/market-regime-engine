@@ -30,7 +30,6 @@ from market_regime_engine.fixed_income.liquidity_stress import (
 )
 from market_regime_engine.fixed_income.pit_guard import PitViolationError
 
-
 # -- Fixtures -----------------------------------------------------------------
 
 
@@ -107,12 +106,8 @@ def test_enforce_pit_liquidity_vectorised_matches_legacy_clean(
     golden_features_clean: pd.DataFrame,
 ) -> None:
     asof = pd.Timestamp("2026-01-03 00:00", tz="UTC")
-    _enforce_pit_liquidity(
-        golden_features_clean, asof=asof, calendar=TradingCalendar.SIFMA_BOND
-    )
-    _enforce_pit_liquidity_legacy_iterrows(
-        golden_features_clean, asof=asof, calendar=TradingCalendar.SIFMA_BOND
-    )
+    _enforce_pit_liquidity(golden_features_clean, asof=asof, calendar=TradingCalendar.SIFMA_BOND)
+    _enforce_pit_liquidity_legacy_iterrows(golden_features_clean, asof=asof, calendar=TradingCalendar.SIFMA_BOND)
 
 
 def test_enforce_pit_liquidity_vectorised_matches_legacy_violation(
@@ -120,9 +115,7 @@ def test_enforce_pit_liquidity_vectorised_matches_legacy_violation(
 ) -> None:
     asof = pd.Timestamp("2026-01-03 00:00", tz="UTC")
     with pytest.raises((PitViolationError, ValueError)):
-        _enforce_pit_liquidity(
-            golden_features_violating, asof=asof, calendar=TradingCalendar.SIFMA_BOND
-        )
+        _enforce_pit_liquidity(golden_features_violating, asof=asof, calendar=TradingCalendar.SIFMA_BOND)
     with pytest.raises((PitViolationError, ValueError)):
         _enforce_pit_liquidity_legacy_iterrows(
             golden_features_violating, asof=asof, calendar=TradingCalendar.SIFMA_BOND
@@ -136,9 +129,7 @@ def test_enforce_pit_liquidity_kill_switch(
     """The kill-switch routes _enforce_pit_liquidity through the iterrows path."""
     monkeypatch.setenv("MRE_FI_LEGACY_VECTORIZE", "1")
     asof = pd.Timestamp("2026-01-03 00:00", tz="UTC")
-    _enforce_pit_liquidity(
-        golden_features_clean, asof=asof, calendar=TradingCalendar.SIFMA_BOND
-    )
+    _enforce_pit_liquidity(golden_features_clean, asof=asof, calendar=TradingCalendar.SIFMA_BOND)
 
 
 def test_enforce_pit_liquidity_calendar_violation_still_raises(
@@ -154,9 +145,7 @@ def test_enforce_pit_liquidity_calendar_violation_still_raises(
     # Use an asof past the Saturday so PIT itself does not fire.
     asof = saturday + pd.Timedelta(days=2)
     with pytest.raises(PitViolationError):
-        _enforce_pit_liquidity(
-            bad, asof=asof, calendar=TradingCalendar.SIFMA_BOND
-        )
+        _enforce_pit_liquidity(bad, asof=asof, calendar=TradingCalendar.SIFMA_BOND)
 
 
 def test_audit_pit_empty_frame_is_noop_under_both_paths() -> None:

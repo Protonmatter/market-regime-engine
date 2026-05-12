@@ -190,19 +190,17 @@ def tca_lift_test(
         if seg_var <= 0 and base_var <= 0:
             pooled_sd = 0.0
         else:
-            pooled_sd = math.sqrt(
-                ((seg_n - 1) * seg_var + (base_n - 1) * base_var) / max(seg_n + base_n - 2, 1)
-            )
+            pooled_sd = math.sqrt(((seg_n - 1) * seg_var + (base_n - 1) * base_var) / max(seg_n + base_n - 2, 1))
         cohen_d = (seg_mean - base_mean) / pooled_sd if pooled_sd > 0 else 0.0
-        # Welch's t-statistic + Welch–Satterthwaite degrees of freedom.
+        # Welch's t-statistic + Welch-Satterthwaite degrees of freedom.
         se = math.sqrt(seg_var / seg_n + base_var / base_n) if (seg_var + base_var) > 0 else 0.0
         if se <= 0:
             p_value = 1.0
         else:
             t_stat = (seg_mean - base_mean) / se
             df_num = (seg_var / seg_n + base_var / base_n) ** 2
-            df_den = (seg_var ** 2) / ((seg_n ** 2) * max(seg_n - 1, 1))
-            df_den += (base_var ** 2) / ((base_n ** 2) * max(base_n - 1, 1))
+            df_den = (seg_var**2) / ((seg_n**2) * max(seg_n - 1, 1))
+            df_den += (base_var**2) / ((base_n**2) * max(base_n - 1, 1))
             dof = df_num / df_den if df_den > 0 else float(seg_n + base_n - 2)
             # Two-sided p via the Student-t CDF; we use the normal
             # approximation when dof is large enough (avoids a scipy
@@ -526,9 +524,7 @@ def probability_of_backtest_overfitting(
         return float("nan")
 
     block_edges = np.linspace(0, t, n_partitions + 1, dtype=int)
-    block_indices: list[np.ndarray] = [
-        np.arange(block_edges[i], block_edges[i + 1]) for i in range(n_partitions)
-    ]
+    block_indices: list[np.ndarray] = [np.arange(block_edges[i], block_edges[i + 1]) for i in range(n_partitions)]
 
     from itertools import combinations
 
@@ -550,9 +546,7 @@ def probability_of_backtest_overfitting(
     n_overfit = 0
     n_total = 0
 
-    def _purge_and_embargo(
-        is_indices: np.ndarray, oos_combo: tuple[int, ...]
-    ) -> np.ndarray:
+    def _purge_and_embargo(is_indices: np.ndarray, oos_combo: tuple[int, ...]) -> np.ndarray:
         """Drop ``purge`` rows on either side and ``embargo`` rows after every OOS block."""
         if purge == 0 and embargo == 0:
             return is_indices
@@ -647,8 +641,8 @@ def minimum_track_record_length(
 
 
 __all__ = [
-    "BinaryValidationResult",
     "EPS",
+    "BinaryValidationResult",
     "brier_score",
     "calibration_table",
     "deflated_sharpe",

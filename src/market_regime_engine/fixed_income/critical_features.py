@@ -35,8 +35,8 @@ __all__ = [
     "CREDIT_CRITICAL_COLUMNS",
     "CRITICAL_LABEL_CREDIT",
     "CRITICAL_LABEL_LIQUIDITY",
-    "CriticalFeatureAudit",
     "LIQUIDITY_CRITICAL_COLUMNS",
+    "CriticalFeatureAudit",
     "evaluate_critical_features",
 ]
 
@@ -92,9 +92,7 @@ class CriticalFeatureAudit:
         return bool(self.missing)
 
 
-def _column_is_present_and_observed(
-    wide: pd.DataFrame, column: str
-) -> bool:
+def _column_is_present_and_observed(wide: pd.DataFrame, column: str) -> bool:
     """Return True iff ``column`` is in the frame AND has at least one non-NaN observation.
 
     Mirrors the semantic of :func:`_apply_nan_policy`'s "no observation

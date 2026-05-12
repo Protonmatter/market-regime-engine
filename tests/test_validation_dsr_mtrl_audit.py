@@ -29,7 +29,6 @@ from market_regime_engine.validation import (
     minimum_track_record_length,
 )
 
-
 # -- DSR audit ----------------------------------------------------------------
 
 
@@ -47,7 +46,7 @@ def test_dsr_uses_blp_eq5_variance_term_for_normal_returns() -> None:
     returns = rng.normal(0.05, 0.1, size=512)
     out = deflated_sharpe(returns, n_trials=1)
     sr_hat = returns.mean() / returns.std(ddof=1)
-    # SR_hat is well above 0 for these 512 draws (μ/σ ≈ 0.5).
+    # SR_hat is well above 0 for these 512 draws (mu/sigma ~= 0.5).
     assert sr_hat > 0
     assert out > 0.5
 
@@ -76,7 +75,7 @@ def test_dsr_fat_tailed_input_yields_lower_score_when_above_threshold() -> None:
     where the variance term is visible.
     """
     rng = np.random.default_rng(3)
-    # Strong-enough signal: μ/σ ≈ 0.3 so SR_hat clearly exceeds SR*
+    # Strong-enough signal: mu/sigma ~= 0.3 so SR_hat clearly exceeds SR*
     # even after n_trials=20 deflation.
     base = rng.normal(0.03, 0.1, size=512)
     benign = deflated_sharpe(base, n_trials=20, skew=0.0, kurt=0.0)
@@ -91,7 +90,7 @@ def test_dsr_fat_tailed_input_yields_lower_score_when_above_threshold() -> None:
 def test_mtrl_blp_closed_form_at_sr_one_gaussian() -> None:
     """Locked closed form (BLP eq. 5, 8) for SR=1, γ_3=0, γ_4=0:
 
-        n* = 1 + (1 − 1/4) · (Z / 1)² = 1 + 0.75 · Z²
+    n* = 1 + (1 − 1/4) · (Z / 1)² = 1 + 0.75 · Z²
     """
     sr = 1.0
     z = _normal_ppf(0.95)
@@ -136,13 +135,10 @@ def test_mtrl_sweeps_consistent_across_grid() -> None:
             for kurt in (0.0, 1.0, 4.0, 8.0):
                 var_term = max(1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr * sr, 1e-12)
                 expected = 1.0 + var_term * (z / sr) ** 2
-                got = minimum_track_record_length(
-                    sr, 0.0, skew=skew, excess_kurt=kurt, confidence=0.95
-                )
+                got = minimum_track_record_length(sr, 0.0, skew=skew, excess_kurt=kurt, confidence=0.95)
                 assert math.isfinite(got), f"non-finite for SR={sr}"
                 assert abs(got - expected) < 1e-9, (
-                    f"closed-form mismatch at SR={sr}, skew={skew}, kurt={kurt}: "
-                    f"got={got}, expected={expected}"
+                    f"closed-form mismatch at SR={sr}, skew={skew}, kurt={kurt}: got={got}, expected={expected}"
                 )
 
 

@@ -202,14 +202,10 @@ class BOCPDMuse:
 
             # --- model 0: NIW Student-t -----------------------------
             joint_niw = log_joint_per_model[0]
-            pred_logs_niw = np.array(
-                [st.predictive_logpdf(xt) for st in niw_states], dtype=float
-            )
+            pred_logs_niw = np.array([st.predictive_logpdf(xt) for st in niw_states], dtype=float)
             cp_log_niw = _logsumexp(joint_niw + pred_logs_niw + log_h)
             growth_logs_niw = joint_niw + pred_logs_niw + log_1mh
-            new_log_joint_niw = np.empty(
-                min(len(growth_logs_niw) + 1, self.max_run + 1), dtype=float
-            )
+            new_log_joint_niw = np.empty(min(len(growth_logs_niw) + 1, self.max_run + 1), dtype=float)
             new_log_joint_niw[0] = cp_log_niw
             kept = growth_logs_niw[: self.max_run]
             new_log_joint_niw[1 : 1 + len(kept)] = kept
@@ -217,15 +213,11 @@ class BOCPDMuse:
             probs_niw = np.exp(new_log_joint_niw)
             probs_niw = probs_niw / probs_niw.sum()
             cp_probs.append(float(probs_niw[0]))
-            run_means.append(
-                float(np.sum(np.arange(len(probs_niw), dtype=float) * probs_niw))
-            )
+            run_means.append(float(np.sum(np.arange(len(probs_niw), dtype=float) * probs_niw)))
             map_runs.append(int(np.argmax(probs_niw)))
             ll_per_model.append(float(_logsumexp(joint_niw + pred_logs_niw)))
             new_joints.append(np.log(np.maximum(probs_niw, self.min_prob)))
-            prior_niw = NIWState.prior(
-                dim, kappa0=self.prior_kappa, psi_scale=self.prior_psi_scale
-            )
+            prior_niw = NIWState.prior(dim, kappa0=self.prior_kappa, psi_scale=self.prior_psi_scale)
             new_states_niw: list[NIWState] = [prior_niw.update(xt)] + [
                 st.update(xt) for st in niw_states[: self.max_run]
             ]
@@ -233,14 +225,10 @@ class BOCPDMuse:
 
             # --- model 1: diagonal Student-t ------------------------
             joint_diag = log_joint_per_model[1]
-            pred_logs_diag = np.array(
-                [_student_t_logpdf_diag(xt, st) for st in diag_states], dtype=float
-            )
+            pred_logs_diag = np.array([_student_t_logpdf_diag(xt, st) for st in diag_states], dtype=float)
             cp_log_diag = _logsumexp(joint_diag + pred_logs_diag + log_h)
             growth_logs_diag = joint_diag + pred_logs_diag + log_1mh
-            new_log_joint_diag = np.empty(
-                min(len(growth_logs_diag) + 1, self.max_run + 1), dtype=float
-            )
+            new_log_joint_diag = np.empty(min(len(growth_logs_diag) + 1, self.max_run + 1), dtype=float)
             new_log_joint_diag[0] = cp_log_diag
             kept_diag = growth_logs_diag[: self.max_run]
             new_log_joint_diag[1 : 1 + len(kept_diag)] = kept_diag
@@ -248,9 +236,7 @@ class BOCPDMuse:
             probs_diag = np.exp(new_log_joint_diag)
             probs_diag = probs_diag / probs_diag.sum()
             cp_probs.append(float(probs_diag[0]))
-            run_means.append(
-                float(np.sum(np.arange(len(probs_diag), dtype=float) * probs_diag))
-            )
+            run_means.append(float(np.sum(np.arange(len(probs_diag), dtype=float) * probs_diag)))
             map_runs.append(int(np.argmax(probs_diag)))
             ll_per_model.append(float(_logsumexp(joint_diag + pred_logs_diag)))
             new_joints.append(np.log(np.maximum(probs_diag, self.min_prob)))
@@ -262,14 +248,10 @@ class BOCPDMuse:
 
             # --- model 2: AR(1) -------------------------------------
             joint_ar = log_joint_per_model[2]
-            pred_logs_ar = np.array(
-                [st.predict(xt) for st in ar1_states], dtype=float
-            )
+            pred_logs_ar = np.array([st.predict(xt) for st in ar1_states], dtype=float)
             cp_log_ar = _logsumexp(joint_ar + pred_logs_ar + log_h)
             growth_logs_ar = joint_ar + pred_logs_ar + log_1mh
-            new_log_joint_ar = np.empty(
-                min(len(growth_logs_ar) + 1, self.max_run + 1), dtype=float
-            )
+            new_log_joint_ar = np.empty(min(len(growth_logs_ar) + 1, self.max_run + 1), dtype=float)
             new_log_joint_ar[0] = cp_log_ar
             kept_ar = growth_logs_ar[: self.max_run]
             new_log_joint_ar[1 : 1 + len(kept_ar)] = kept_ar
@@ -277,9 +259,7 @@ class BOCPDMuse:
             probs_ar = np.exp(new_log_joint_ar)
             probs_ar = probs_ar / probs_ar.sum()
             cp_probs.append(float(probs_ar[0]))
-            run_means.append(
-                float(np.sum(np.arange(len(probs_ar), dtype=float) * probs_ar))
-            )
+            run_means.append(float(np.sum(np.arange(len(probs_ar), dtype=float) * probs_ar)))
             map_runs.append(int(np.argmax(probs_ar)))
             ll_per_model.append(float(_logsumexp(joint_ar + pred_logs_ar)))
             new_joints.append(np.log(np.maximum(probs_ar, self.min_prob)))

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 from dataclasses import replace
 
 import pandas as pd
@@ -54,17 +53,17 @@ def hmac_keys(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
 
 
 def _build_pack(**overrides) -> FixedIncomeEvidencePack:
-    defaults = dict(
-        model_run_id="run-test",
-        component_name="execution_confidence",
-        model_version="v0.1.0",
-        code_sha="abc1234",
-        model_hash="sha256:m",
-        input_features_hash="sha256:i",
-        output_hash="sha256:o",
-        release_gate=True,
-        timestamp="2026-05-08T16:00:00Z",
-    )
+    defaults = {
+        "model_run_id": "run-test",
+        "component_name": "execution_confidence",
+        "model_version": "v0.1.0",
+        "code_sha": "abc1234",
+        "model_hash": "sha256:m",
+        "input_features_hash": "sha256:i",
+        "output_hash": "sha256:o",
+        "release_gate": True,
+        "timestamp": "2026-05-08T16:00:00Z",
+    }
     defaults.update(overrides)
     return build_evidence_pack(**defaults)
 
@@ -205,9 +204,7 @@ def test_production_guard_skips_non_execution_confidence_components(
     assert verify_pack(signed)
 
 
-def test_fi_evidence_resign_v1_to_v2_preserves_null_request_id_and_warns(
-    hmac_keys: dict[str, str], tmp_path
-) -> None:
+def test_fi_evidence_resign_v1_to_v2_preserves_null_request_id_and_warns(hmac_keys: dict[str, str], tmp_path) -> None:
     """v1 → v2 resign keeps ``request_id=null`` semantics; emit a warning."""
     from market_regime_engine.fixed_income.cli import run
     from market_regime_engine.fixed_income.evidence_pack import (
@@ -238,9 +235,7 @@ def test_fi_evidence_resign_v1_to_v2_preserves_null_request_id_and_warns(
         request_id=None,
     )
     signed_v1 = sign_pack(legacy_pack, key_version="v1")
-    wh.write_evidence_pack(
-        pd.DataFrame([evidence_pack_to_row(signed_v1, request_id="req-legacy")])
-    )
+    wh.write_evidence_pack(pd.DataFrame([evidence_pack_to_row(signed_v1, request_id="req-legacy")]))
     wh.close()
 
     rc = run(
@@ -270,9 +265,7 @@ def test_fi_evidence_resign_v1_to_v2_preserves_null_request_id_and_warns(
     assert verify_pack(pack_after)
 
 
-def test_new_v2_pack_round_trips_request_id_binding(
-    hmac_keys: dict[str, str], tmp_path
-) -> None:
+def test_new_v2_pack_round_trips_request_id_binding(hmac_keys: dict[str, str], tmp_path) -> None:
     """A freshly built v2 pack written + read back preserves the binding."""
     from market_regime_engine.fixed_income.evidence_pack import (
         evidence_pack_to_row,
@@ -284,9 +277,7 @@ def test_new_v2_pack_round_trips_request_id_binding(
     wh = Warehouse(path=str(db))
     new_pack = _build_pack(model_run_id="run-new", request_id="req-X")
     signed = sign_pack(new_pack, key_version="v2")
-    wh.write_evidence_pack(
-        pd.DataFrame([evidence_pack_to_row(signed, request_id="req-X")])
-    )
+    wh.write_evidence_pack(pd.DataFrame([evidence_pack_to_row(signed, request_id="req-X")]))
     wh.close()
 
     wh2 = Warehouse(path=str(db))

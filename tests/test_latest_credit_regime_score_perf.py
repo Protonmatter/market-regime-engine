@@ -39,10 +39,7 @@ def warehouse_100k(tmp_path_factory: pytest.TempPathFactory) -> Warehouse:
     wh = Warehouse(path=str(db_dir / "credit.duckdb"))
     n = 100_000
     base_ts = pd.Timestamp("2024-01-01T00:00:00Z")
-    timestamps = [
-        (base_ts + pd.Timedelta(minutes=int(i))).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for i in range(n)
-    ]
+    timestamps = [(base_ts + pd.Timedelta(minutes=int(i))).strftime("%Y-%m-%dT%H:%M:%SZ") for i in range(n)]
     rows = pd.DataFrame(
         {
             "model_run_id": [f"run-{i % 100}" for i in range(n)],

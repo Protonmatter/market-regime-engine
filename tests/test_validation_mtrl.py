@@ -49,7 +49,7 @@ def test_mtrl_matches_blp_closed_form_for_gaussian_returns() -> None:
     sr = 1.0
     sr_target = 0.0
     # Φ⁻¹(0.95) ≈ 1.6449.
-    var_term = 1.0 - (sr * sr) / 4.0  # γ_3=0, γ_4=0 → (γ_4 − 1)/4 · SR² = −SR²/4
+    var_term = 1.0 - (sr * sr) / 4.0
     expected = 1.0 + var_term * (1.6449 / (sr - sr_target)) ** 2
     out = minimum_track_record_length(sr, sr_target, confidence=0.95)
     assert abs(out - expected) < 0.01

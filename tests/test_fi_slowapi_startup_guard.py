@@ -71,9 +71,7 @@ def test_rate_limit_enabled_accepts_truthy_values(monkeypatch: pytest.MonkeyPatc
         assert not fi_api.rate_limit_enabled()
 
 
-def test_burst_beyond_limit_returns_429_when_slowapi_enabled(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+def test_burst_beyond_limit_returns_429_when_slowapi_enabled(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """Integration test: with the limiter wired, burst > limit => 429.
 
     Builds a router-only FastAPI app with a 2/second limit and confirms
