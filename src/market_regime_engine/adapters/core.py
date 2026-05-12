@@ -47,7 +47,7 @@ def _first_existing(frame: pd.DataFrame, names: tuple[str, ...], default: object
         return default.reindex(frame.index)
     if isinstance(default, pd.Index) or (hasattr(default, "__len__") and not isinstance(default, str)):
         try:
-            if len(default) == len(frame):  # type: ignore[arg-type]
+            if len(default) == len(frame):
                 return pd.Series(default, index=frame.index)
         except TypeError:
             pass
@@ -169,24 +169,24 @@ def export_governed_signals(
     """Normalize, validate, and export governed signals."""
 
     out = Path(out_path)
-    fmt = fmt or out.suffix.lower().lstrip(".") or "csv"
+    resolved_fmt: str = fmt or out.suffix.lower().lstrip(".") or "csv"
     signals = normalize_governed_signals(frame)
     assert_governed_signal_contract(signals)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    if fmt == "csv":
+    if resolved_fmt == "csv":
         signals.to_csv(out, index=False)
-    elif fmt == "json":
+    elif resolved_fmt == "json":
         out.write_text(signals.to_json(orient="records", indent=2), encoding="utf-8")
-    elif fmt == "jsonl":
+    elif resolved_fmt == "jsonl":
         out.write_text(signals.to_json(orient="records", lines=True) + "\n", encoding="utf-8")
     else:
-        raise ValueError(f"unsupported governed signal export format: {fmt!r}")
+        raise ValueError(f"unsupported governed signal export format: {resolved_fmt!r}")
 
     return GovernedSignalExport(
         path=str(out),
         rows=len(signals),
-        format=fmt,
+        format=resolved_fmt,
         columns=tuple(signals.columns),
     )
 
