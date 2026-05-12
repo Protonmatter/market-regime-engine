@@ -2029,7 +2029,9 @@ class Warehouse:
         )
 
     def read_dealer_response_stats(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start")
+        return self._backend.read_sql(
+            "SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start"
+        )
 
     def write_curve_snapshots(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2049,7 +2051,9 @@ class Warehouse:
         )
 
     def read_cds_curve_snapshots(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor")
+        return self._backend.read_sql(
+            "SELECT * FROM cds_curve_snapshots ORDER BY timestamp, reference_entity, tenor"
+        )
 
     def write_credit_regime_score(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2092,7 +2096,9 @@ class Warehouse:
         )
 
     def read_liquidity_stress_scores(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id")
+        return self._backend.read_sql(
+            "SELECT * FROM liquidity_stress_scores ORDER BY timestamp, scope_type, scope_id"
+        )
 
     def write_execution_confidence_prediction(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2119,7 +2125,9 @@ class Warehouse:
         )
 
     def read_execution_confidence_predictions(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id")
+        return self._backend.read_sql(
+            "SELECT * FROM execution_confidence_predictions ORDER BY timestamp, request_id"
+        )
 
     def write_execution_outcome(self, df: pd.DataFrame) -> int:
         """Persist execution outcomes; enforces ``observed_at > decision_timestamp``.
@@ -2138,7 +2146,8 @@ class Warehouse:
         if bad.any():
             offenders = df.loc[bad, "request_id"].tolist()
             raise ValueError(
-                f"execution_outcomes requires observed_at > decision_timestamp; offending request_ids: {offenders!r}"
+                "execution_outcomes requires observed_at > decision_timestamp; "
+                f"offending request_ids: {offenders!r}"
             )
         return self._write_fi(
             "execution_outcomes",
@@ -2184,7 +2193,9 @@ class Warehouse:
         )
 
     def read_tca_regime_segments(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name")
+        return self._backend.read_sql(
+            "SELECT * FROM tca_regime_segments ORDER BY timestamp, model_run_id, metric_name"
+        )
 
     def write_evidence_pack(self, df: pd.DataFrame) -> int:
         return self._write_fi(
@@ -2276,7 +2287,9 @@ def read_bond_reference_asof(
     # DuckDB parses it as TIMESTAMP, SQLite compares it as TEXT against
     # the same ISO-8601 strings written by the writer.
     asof_str = asof_ts.isoformat()
-    sql_filter = "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+    sql_filter = (
+        "valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+    )
     params: tuple[Any, ...] = (asof_str, asof_str)
     if not include_survivorship_failures:
         sql_filter += " AND default_date IS NULL AND delisted_date IS NULL"
@@ -2430,7 +2443,7 @@ def migrate_warehouse(
 # pool provides a recommended write-serialization helper so the caller does
 # not need to roll their own).
 
-_POOLED_WAREHOUSES: dict[str, Warehouse] = {}
+_POOLED_WAREHOUSES: dict[str, "Warehouse"] = {}
 _POOLED_LOCKS: dict[str, threading.RLock] = {}
 _POOL_LOCK = threading.RLock()
 
@@ -2439,7 +2452,7 @@ def _resolve_pool_key(path: str | Path) -> str:
     return str(Path(path).resolve())
 
 
-def get_pooled_warehouse(path: str | Path) -> Warehouse:
+def get_pooled_warehouse(path: str | Path) -> "Warehouse":
     """Return the per-process :class:`Warehouse` for ``path``.
 
     Construction is serialised through ``_POOL_LOCK`` (re-entrant); after
@@ -2509,7 +2522,9 @@ def close_pooled_warehouses() -> None:
         _POOLED_WAREHOUSES.clear()
         _POOLED_LOCKS.clear()
     if errors:
-        raise RuntimeError(f"close_pooled_warehouses encountered {len(errors)} errors: {errors!r}")
+        raise RuntimeError(
+            f"close_pooled_warehouses encountered {len(errors)} errors: {errors!r}"
+        )
 
 
 def pooled_warehouse_paths() -> tuple[str, ...]:
@@ -2518,11 +2533,31 @@ def pooled_warehouse_paths() -> tuple[str, ...]:
         return tuple(_POOLED_WAREHOUSES)
 
 
+def is_pooled_warehouse(warehouse: "Warehouse") -> bool:
+    """Return True iff ``warehouse`` is currently owned by the process pool.
+
+    Used by FI GET handlers (``fixed_income/api.py``) to guard against the
+    legacy ``finally: wh.close()`` pattern poisoning the pool: a pooled
+    :class:`Warehouse` lives for the lifetime of the FastAPI process and
+    is released via the ``_lifespan`` shutdown hook
+    (``close_pooled_warehouses``). Closing it from inside a request
+    handler leaves a dead instance in the registry and the next request
+    hits a closed DuckDB connection.
+
+    Identity-based: compares by ``is`` so a non-pooled :class:`Warehouse`
+    instance constructed against the same path (e.g. test factories that
+    bypass the pool) is correctly classified as not-pool-owned.
+    """
+    with _POOL_LOCK:
+        return any(warehouse is wh for wh in _POOLED_WAREHOUSES.values())
+
+
 __all__ = [
     "TableSpec",
     "Warehouse",
     "close_pooled_warehouses",
     "get_pooled_warehouse",
+    "is_pooled_warehouse",
     "migrate_warehouse",
     "pooled_warehouse_paths",
     "pooled_warehouse_write_lock",
