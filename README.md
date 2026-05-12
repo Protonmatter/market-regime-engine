@@ -1,4 +1,4 @@
-# Market Regime Engine v1.5.0
+# Market Regime Engine v1.5.2
 
 Python-first, Rust-ready probabilistic macro/market regime intelligence
 engine with a 2026-2027-frontier modeling layer **and the v1.5
@@ -27,6 +27,35 @@ Fixed-Income RCIE / X-Pro Auto-X adapter**.
 > §"Fail-Closed Contract" (PR-9 FIX 8), plus
 > [`docs/V1_5_HMAC_OPERATIONS.md`](docs/V1_5_HMAC_OPERATIONS.md)
 > §8 (PR-9 FIX 3).
+>
+> **v1.5.2 (validation-primitive bug fixes):** a patch release on top
+> of v1.5.1 that closes three Bailey-López de Prado (2014, 2017)
+> conformance bugs in the validation primitives flagged by an
+> out-of-band code review of `validation.py`:
+>
+> - **A1** — `deflated_sharpe` and `minimum_track_record_length` were
+>   evaluating BLP eq. 5's Pearson-kurtosis form `(γ_4 − 1)/4` on the
+>   *excess* kurtosis returned by `_sample_skew_kurt`. Off by 3/4 in
+>   the kurt term. The corrected excess-form coefficient is
+>   `(γ_4_excess + 2)/4`; for Gaussian iid returns the var_term now
+>   correctly collapses to `1 + 0.5·SR²`.
+> - **A2** — `probability_of_backtest_overfitting`'s `_purge_and_embargo`
+>   was applying max-style overlap so embargo was silently subsumed
+>   when `embargo <= purge`. The fix makes embargo additive on the
+>   right side of every OOS block (`purge + embargo` total drop),
+>   matching the union semantics in
+>   `walk_forward.purge_and_embargo_searchsorted`.
+> - **A3** — the DSR multiplicity threshold was scaling by
+>   `1/sqrt(T−1)` instead of the *moment-corrected* stderr
+>   `sqrt(Var(SR_hat))` per BLP eq. 9. For skewed or fat-tailed
+>   inputs the v1.5.1 threshold was systematically biased by a factor
+>   of `sqrt(var_term)`.
+>
+> The behavioural surface is otherwise the v1.5.1 release; v1.5.2 only
+> tightens the validation primitives' BLP conformance. The PR-9 audit
+> tests in `tests/test_validation_dsr_mtrl_audit.py` were updated to
+> encode the BLP-correct expectations and four new property-style
+> anchors were added (one per bug plus a Gaussian-iid sanity).
 >
 > v1.5.0 references:
 > [`docs/V1_5_FIXED_INCOME_RCIE.md`](docs/V1_5_FIXED_INCOME_RCIE.md)
