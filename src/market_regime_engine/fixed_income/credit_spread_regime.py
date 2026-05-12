@@ -48,7 +48,6 @@ from market_regime_engine.fixed_income.hashing import canonical_sha256
 from market_regime_engine.fixed_income.hysteresis import apply_hysteresis
 from market_regime_engine.fixed_income.pit_guard import (
     PitViolationError,
-    assert_pit_safe,
 )
 from market_regime_engine.fixed_income.schemas import (
     CreditRegimeOutput,
@@ -620,25 +619,38 @@ def _apply_nan_policy(
 
 
 def _audit_pit(features: pd.DataFrame, *, asof: pd.Timestamp) -> None:
-    """Row-level PIT enforcement on the long-form feature frame."""
-    if "source_timestamp" not in features.columns:
+    """Row-level PIT enforcement on the long-form feature frame.
+
+    v1.5 PR-8 (Tier-2 fix A2, REVIEW.md): vectorised replacement of
+    the legacy ``features.iterrows()`` + per-row :func:`assert_pit_safe`
+    loop. At 200k rows the old path spent hundreds of ms; the
+    vectorised :func:`audit_pit_dataframe` runs in O(few ms) per
+    column comparison and produces the same accept/reject semantics
+    with a richer report. On any violation we raise
+    :class:`PitViolationError` with the first offending row's label so
+    operators see the same error shape as before.
+    """
+    if features.empty or "source_timestamp" not in features.columns:
         return
-    for _, row in features.iterrows():
-        source = pd.Timestamp(row["source_timestamp"])
-        if source.tzinfo is None:
-            source = source.tz_localize("UTC")
-        vintage = row.get("vintage_date")
-        if vintage is not None and not pd.isna(vintage):
-            vintage_ts = pd.Timestamp(vintage)
-            if vintage_ts.tzinfo is None:
-                vintage_ts = vintage_ts.tz_localize("UTC")
-        else:
-            vintage_ts = None
-        assert_pit_safe(
-            feature_timestamp=source,
-            decision_timestamp=asof,
-            vintage_timestamp=vintage_ts,
-            label=str(row.get("feature_name", "feature")),
+    from market_regime_engine.fixed_income.pit_guard import audit_pit_dataframe
+
+    df = features.copy()
+    df["__decision_ts"] = asof
+    vintage_col = "vintage_date" if "vintage_date" in df.columns else None
+    report = audit_pit_dataframe(
+        df,
+        decision_timestamp_col="__decision_ts",
+        feature_timestamp_col="source_timestamp",
+        vintage_timestamp_col=vintage_col,
+    )
+    if report.violation_count > 0:
+        first = report.violations.iloc[0]
+        label = str(first.get("feature_name", "feature"))
+        reason = str(first.get("pit_violation_reason", ""))
+        raise PitViolationError(
+            f"PIT audit failed: {report.violation_count} row(s) violate PIT "
+            f"(asof={asof}, first violator label={label!r} "
+            f"reason={reason!r})"
         )
 
 
