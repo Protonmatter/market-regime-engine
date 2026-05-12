@@ -72,7 +72,7 @@ def build_vectorbt_portfolio(price: pd.Series | pd.DataFrame, signals: VectorBTS
     """Build a vectorbt Portfolio if vectorbt is installed."""
 
     try:
-        import vectorbt as vbt  # type: ignore[import-not-found]
+        import vectorbt as vbt
     except ImportError as exc:  # pragma: no cover - optional adapter path
         raise ImportError("Install vectorbt to build a Portfolio from governed signals.") from exc
     return vbt.Portfolio.from_signals(price, signals.entries, signals.exits, **kwargs)

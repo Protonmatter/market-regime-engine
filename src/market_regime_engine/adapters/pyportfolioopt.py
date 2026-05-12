@@ -102,7 +102,7 @@ def build_efficient_frontier(inputs: RegimeConditionedInputs, **kwargs):
     if not inputs.allocation_allowed:
         raise RuntimeError(f"allocation blocked: {inputs.block_reason}")
     try:
-        from pypfopt import EfficientFrontier  # type: ignore[import-not-found]
+        from pypfopt import EfficientFrontier
     except ImportError as exc:  # pragma: no cover - optional adapter path
         raise ImportError("Install PyPortfolioOpt to build an EfficientFrontier from governed inputs.") from exc
     return EfficientFrontier(inputs.expected_returns, inputs.covariance, **kwargs)
