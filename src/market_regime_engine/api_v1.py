@@ -48,7 +48,12 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from market_regime_engine import __version__
 from market_regime_engine.analogs import analog_summary
 from market_regime_engine.explain import latest_explanation
-from market_regime_engine.observability import metrics, prometheus_text, time_block
+from market_regime_engine.observability import (
+    incr,
+    metrics,
+    prometheus_text,
+    time_block,
+)
 from market_regime_engine.storage import (
     Warehouse,
     close_pooled_warehouses,
@@ -326,9 +331,13 @@ def _read(name: str, fn: Callable[[Warehouse], object]) -> object:
     cache = _get_cache()
     cached = cache.get(name)
     if cached is not None:
-        metrics().incr("mre_api_cache_hits_total", endpoint=name)
+        # v1.5 PR-8 (Tier-2 fix C-AUTO-4): route through module-level
+        # ``incr`` so cache hits/misses mirror to OTel alongside the
+        # legacy registry. ``metrics().incr(...)`` only writes to
+        # _GLOBAL and silently bypasses the OTel meter.
+        incr("mre_api_cache_hits_total", endpoint=name)
         return cached
-    metrics().incr("mre_api_cache_misses_total", endpoint=name)
+    incr("mre_api_cache_misses_total", endpoint=name)
     # v1.5 PR-5 (ASK-8): pooled per-process Warehouse so the FastAPI hot
     # path no longer pays DuckDB catalog + WAL teardown per request. The
     # pool is closed on shutdown (see ``_lifespan`` below).
@@ -389,8 +398,6 @@ def _mount_fixed_income_router() -> None:
     try:
         from market_regime_engine.fixed_income.api import (
             _build_rate_limiter,
-        )
-        from market_regime_engine.fixed_income.api import (
             build_router as _fi_build_router,
         )
 
@@ -407,7 +414,9 @@ def _mount_fixed_income_router() -> None:
 
                 app.state.limiter = limiter
 
-                async def _rate_limit_handler(request: _RLRequest, exc: RateLimitExceeded) -> _RLJSONResponse:
+                async def _rate_limit_handler(
+                    request: _RLRequest, exc: RateLimitExceeded
+                ) -> _RLJSONResponse:
                     return _RLJSONResponse(
                         {"detail": f"rate limit exceeded: {exc.detail}"},
                         status_code=429,
