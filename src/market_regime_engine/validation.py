@@ -444,8 +444,11 @@ def deflated_sharpe(
     sr_star_threshold = float(sharpe_target) + (_expected_max_z(n_trials) / math.sqrt(max(n - 1, 1)))
 
     # Non-normality adjustment per BLP eq. (5).
-    # Var(SR_hat) ~= (1 - skew*SR + ((kurt - 1)/4)*SR^2) / (n - 1).
-    var_term = 1.0 - skew * sharpe_hat + (kurt - 1.0) / 4.0 * sharpe_hat * sharpe_hat
+    # `_sample_skew_kurt` returns *excess* kurtosis (γ_4 − 3), so BLP's
+    # Pearson-kurtosis form `(γ_4 − 1)/4` becomes `(γ_4_excess + 2)/4`.
+    # For Gaussian iid returns this collapses to `var_term = 1 + 0.5·SR²`.
+    # Var(SR_hat) ≈ (1 − skew·SR + ((kurt + 2)/4)·SR²) / (n − 1).
+    var_term = 1.0 - skew * sharpe_hat + (kurt + 2.0) / 4.0 * sharpe_hat * sharpe_hat
     var_term = max(var_term, 1e-12)
     denom = math.sqrt(var_term / max(n - 1, 1))
 
@@ -634,7 +637,10 @@ def minimum_track_record_length(
     if sharpe_observed <= sharpe_target:
         return float("inf")
     z = _normal_ppf(confidence)
-    var_term = 1.0 - skew * sharpe_observed + (excess_kurt - 1.0) / 4.0 * sharpe_observed * sharpe_observed
+    # BLP eq. (5) variance term using the excess-kurtosis convention
+    # (Gaussian γ_4_excess = 0). Equivalent to `(γ_4 − 1)/4` when γ_4 is
+    # the Pearson (full) kurtosis. See `deflated_sharpe` for derivation.
+    var_term = 1.0 - skew * sharpe_observed + (excess_kurt + 2.0) / 4.0 * sharpe_observed * sharpe_observed
     var_term = max(var_term, 1e-12)
     diff = sharpe_observed - sharpe_target
     return 1.0 + var_term * (z / diff) ** 2
