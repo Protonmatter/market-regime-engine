@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Literal
 
@@ -60,6 +61,19 @@ def production_profile() -> dict[str, Any]:
         "promotion_method": "mcs",
         "min_dsr": 0.5,
         "max_pbo": 0.05,
+        # v1.5.1 (PR-9 FIX 4b): Brier / ECE rails on the production
+        # profile per Naeini et al. (2015). Both are optional columns
+        # on the confidence frame; absence skips the rail so legacy
+        # callers stay green.
+        "max_brier": 0.20,
+        "max_ece": 0.05,
+        # v1.5.1 (PR-9 FIX 4c): TCA-lift rail. When set, the gate
+        # consumes a ``tca_lift`` column on the confidence frame
+        # (per-row dict {regime: {p_value, effect_size, n}}) and
+        # requires at least one regime where p_value <= max_tca_p AND
+        # |effect_size| >= min_tca_effect.
+        "max_tca_p": 0.05,
+        "min_tca_effect": 0.2,
     }
 
 
@@ -85,6 +99,13 @@ def default_profile() -> dict[str, Any]:
         "promotion_method": "mcs",
         "min_dsr": None,
         "max_pbo": None,
+        # PR-9 FIX 4: dev / staging skip the calibration + TCA-lift
+        # rails so a partial-input integration test does not have to
+        # plumb every column.
+        "max_brier": None,
+        "max_ece": None,
+        "max_tca_p": None,
+        "min_tca_effect": None,
     }
 
 
@@ -92,6 +113,26 @@ _PROFILE_FACTORIES: dict[str, Any] = {
     "production": production_profile,
     "default": default_profile,
 }
+
+
+def _coerce_tca_lift_payload(value: Any) -> dict[str, dict[str, float]]:
+    """Decode a ``tca_lift`` confidence-frame cell to the canonical dict.
+
+    v1.5.1 (PR-9 FIX 4c): the ``confidence`` frame is allowed to carry
+    the per-regime lift dict either as a Python dict (in-process call)
+    or a JSON string (warehouse round-trip). Anything else maps to an
+    empty dict so the rail fails closed.
+    """
+    if isinstance(value, dict):
+        return {str(k): dict(v) for k, v in value.items()}
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return {str(k): dict(v) for k, v in parsed.items()}
+    return {}
 
 
 def _resolve_profile(profile: str | None) -> str:
@@ -139,6 +180,10 @@ def evaluate_release_gate(
     profile: Literal["default", "production"] | None = None,
     min_dsr: Any = _UNSET,
     max_pbo: Any = _UNSET,
+    max_brier: Any = _UNSET,
+    max_ece: Any = _UNSET,
+    max_tca_p: Any = _UNSET,
+    min_tca_effect: Any = _UNSET,
 ) -> pd.DataFrame:
     """Evaluate the release gate.
 
@@ -238,11 +283,36 @@ def evaluate_release_gate(
         max_pbo = float(prof_pbo) if prof_pbo is not None else None
     else:
         max_pbo = float(max_pbo) if max_pbo is not None else None
+    # v1.5.1 (PR-9 FIX 4): Brier / ECE / TCA-lift rails. Each is
+    # optional; absence on the confidence frame skips the rail.
+    if max_brier is _UNSET:
+        prof_brier = prof_kwargs.get("max_brier")
+        max_brier = float(prof_brier) if prof_brier is not None else None
+    else:
+        max_brier = float(max_brier) if max_brier is not None else None
+    if max_ece is _UNSET:
+        prof_ece = prof_kwargs.get("max_ece")
+        max_ece = float(prof_ece) if prof_ece is not None else None
+    else:
+        max_ece = float(max_ece) if max_ece is not None else None
+    if max_tca_p is _UNSET:
+        prof_tca_p = prof_kwargs.get("max_tca_p")
+        max_tca_p = float(prof_tca_p) if prof_tca_p is not None else None
+    else:
+        max_tca_p = float(max_tca_p) if max_tca_p is not None else None
+    if min_tca_effect is _UNSET:
+        prof_tca_eff = prof_kwargs.get("min_tca_effect")
+        min_tca_effect = float(prof_tca_eff) if prof_tca_eff is not None else None
+    else:
+        min_tca_effect = float(min_tca_effect) if min_tca_effect is not None else None
     conf_val = 0.0
     conf_grade = "F"
     date = None
     dsr_val: float | None = None
     pbo_val: float | None = None
+    brier_val: float | None = None
+    ece_val: float | None = None
+    tca_lift_raw: Any = None
     if confidence is not None and not confidence.empty:
         latest = confidence.sort_values("date").iloc[-1]
         conf_val = float(latest.get("confidence", 0.0))
@@ -257,6 +327,18 @@ def evaluate_release_gate(
         if "pbo" in confidence.columns:
             raw = latest.get("pbo")
             pbo_val = float(raw) if raw is not None and not pd.isna(raw) else None
+        # v1.5.1 (PR-9 FIX 4b): Brier / ECE columns are optional.
+        if "brier" in confidence.columns:
+            raw = latest.get("brier")
+            brier_val = float(raw) if raw is not None and not pd.isna(raw) else None
+        if "ece" in confidence.columns:
+            raw = latest.get("ece")
+            ece_val = float(raw) if raw is not None and not pd.isna(raw) else None
+        # v1.5.1 (PR-9 FIX 4c): TCA-lift column carries the
+        # ``tca_lift_test`` output dict. We accept either a dict or a
+        # JSON string for back-compat with warehouse round-trips.
+        if "tca_lift" in confidence.columns:
+            tca_lift_raw = latest.get("tca_lift")
     severe_drift = 0
     major_drift = 0
     max_psi = 0.0
@@ -368,6 +450,30 @@ def evaluate_release_gate(
         reasons.append(f"deflated_sharpe_below_{min_dsr:.2f}")
     if max_pbo is not None and pbo_val is not None and pbo_val > max_pbo:
         reasons.append(f"probability_of_overfit_above_{max_pbo:.2f}")
+    # v1.5.1 (PR-9 FIX 4b): Brier / ECE rails. Optional. When the
+    # threshold is configured AND the confidence frame carries a finite
+    # value we fire the rail.
+    if max_brier is not None and brier_val is not None and brier_val > max_brier:
+        reasons.append(f"brier_above_{max_brier:.2f}")
+    if max_ece is not None and ece_val is not None and ece_val > max_ece:
+        reasons.append(f"ece_above_{max_ece:.2f}")
+    # v1.5.1 (PR-9 FIX 4c): TCA-lift rail. The gate FAILS unless at
+    # least one regime in ``tca_lift`` reports
+    # ``p_value <= max_tca_p`` AND ``|effect_size| >= min_tca_effect``.
+    if (
+        max_tca_p is not None
+        and min_tca_effect is not None
+        and tca_lift_raw is not None
+    ):
+        lift = _coerce_tca_lift_payload(tca_lift_raw)
+        if lift:
+            best_passes = any(
+                row.get("p_value", float("nan")) <= max_tca_p
+                and abs(float(row.get("effect_size", 0.0))) >= min_tca_effect
+                for row in lift.values()
+            )
+            if not best_passes:
+                reasons.append("tca_lift_no_significant_segment")
     approved = len(reasons) == 0
     return pd.DataFrame(
         [
