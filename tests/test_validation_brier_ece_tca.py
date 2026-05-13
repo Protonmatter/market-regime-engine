@@ -11,6 +11,7 @@ import pytest
 
 from market_regime_engine.validation import (
     brier_score,
+    calibration_table,
     expected_calibration_error,
     reliability_diagram_bins,
     tca_lift_test,
@@ -121,3 +122,119 @@ def test_brier_handles_nan_inputs_gracefully() -> None:
     p = [0.1, 0.5, 0.9]
     score = brier_score(y, p)
     assert math.isfinite(score)
+
+
+# ---------------------------------------------------------------------------
+# v1.6.0 (REVIEW_DEEP_V1_5_2.md §2.2 S4): ECE bin_strategy parameter
+# ---------------------------------------------------------------------------
+
+
+def test_ece_equal_width_honest_on_clustered_probabilities() -> None:
+    """All predicted probs cluster in [0.45, 0.55] but outcomes are bimodal.
+
+    Under v1.5.x ``pd.cut(..., duplicates="drop")`` the calibration table
+    would collapse to a single bin and the reported ECE would silently
+    average across that one bucket — understating miscalibration.
+    v1.6.0 ``equal_width`` keeps all 10 fixed bins so the count-weighted
+    mean of ``|pred − obs|`` reflects honest dispersion across the
+    populated buckets only. The honest ECE for a forecaster that
+    predicts ~0.5 when the true label rate is also ~0.8 is large
+    (~ 0.3 in the surviving bins).
+    """
+    rng = np.random.default_rng(42)
+    n = 1000
+    p = rng.uniform(0.45, 0.55, size=n)
+    y = (rng.uniform(0, 1, size=n) < 0.8).astype(float)
+    with pytest.warns(RuntimeWarning, match=r"ECE bin collapse"):
+        ece = expected_calibration_error(
+            y, p, n_bins=10, bin_strategy="equal_width"
+        )
+    assert ece >= 0.25, (
+        "equal_width ECE should reflect honest miscalibration on "
+        "clustered probability inputs"
+    )
+
+
+def test_ece_bin_collapse_warning_fires_when_triggered() -> None:
+    """A forecaster that lands only in 2 of 10 bins triggers the warning."""
+    p = [0.05] * 100 + [0.95] * 100
+    y = [0.0] * 100 + [1.0] * 100
+    with pytest.warns(RuntimeWarning, match=r"ECE bin collapse: only \d+/10"):
+        _ = expected_calibration_error(y, p, n_bins=10)
+
+
+def test_ece_no_collapse_warning_on_uniform_probabilities() -> None:
+    """Probabilities spread evenly populate all bins; no warning."""
+    rng = np.random.default_rng(0)
+    p = rng.uniform(0, 1, size=2000)
+    y = (rng.uniform(0, 1, size=2000) < 0.5).astype(float)
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("error", RuntimeWarning)
+        ece = expected_calibration_error(y, p, n_bins=10)
+    assert 0.0 <= ece <= 1.0
+
+
+def test_ece_equal_mass_documented_collapse_with_small_n() -> None:
+    """``equal_mass`` with small N and tied probabilities collapses bins;
+    warning fires but the function still returns a defined ECE."""
+    p = [0.5] * 50 + [0.51] * 50
+    y = [0.0, 1.0] * 50
+    with pytest.warns(RuntimeWarning, match=r"ECE bin collapse"):
+        ece = expected_calibration_error(
+            y, p, n_bins=10, bin_strategy="equal_mass"
+        )
+    assert 0.0 <= ece <= 1.0
+
+
+def test_ece_equal_mass_balanced_bins_no_warning() -> None:
+    """``equal_mass`` with a smooth distribution populates all bins."""
+    rng = np.random.default_rng(1)
+    p = rng.uniform(0.05, 0.95, size=1000)
+    y = (rng.uniform(0, 1, size=1000) < p).astype(float)
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("error", RuntimeWarning)
+        ece = expected_calibration_error(
+            y, p, n_bins=10, bin_strategy="equal_mass"
+        )
+    assert 0.0 <= ece <= 1.0
+
+
+def test_ece_invalid_bin_strategy_raises() -> None:
+    with pytest.raises(ValueError, match="bin_strategy must be"):
+        expected_calibration_error(
+            [0.0, 1.0], [0.1, 0.9], n_bins=10, bin_strategy="exotic"  # type: ignore[arg-type]
+        )
+
+
+def test_calibration_table_equal_width_vs_equal_mass_differ() -> None:
+    """The two strategies produce different bin layouts and counts."""
+    rng = np.random.default_rng(0)
+    n = 1000
+    p = rng.beta(2, 5, size=n)
+    y = (rng.uniform(0, 1, size=n) < p).astype(float)
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("ignore", RuntimeWarning)
+        table_ew = calibration_table(y, p, bins=10, bin_strategy="equal_width")
+        table_em = calibration_table(y, p, bins=10, bin_strategy="equal_mass")
+    counts_ew = table_ew["count"].to_numpy()
+    counts_em = table_em["count"].to_numpy()
+    assert counts_em.std() < counts_ew.std()
+
+
+def test_release_gate_default_routes_to_equal_width() -> None:
+    """Default ``bin_strategy`` matches explicit ``equal_width`` — preserves
+    the v1.5.x ECE contract for callers that do not opt in."""
+    rng = np.random.default_rng(11)
+    p = rng.uniform(0.05, 0.95, size=500)
+    y = (rng.uniform(0, 1, size=500) < p).astype(float)
+    default = expected_calibration_error(y, p, n_bins=10)
+    explicit = expected_calibration_error(
+        y, p, n_bins=10, bin_strategy="equal_width"
+    )
+    assert default == pytest.approx(explicit, abs=1e-12)

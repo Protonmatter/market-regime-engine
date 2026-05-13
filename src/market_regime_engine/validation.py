@@ -23,13 +23,46 @@ The release gate consumes the DSR + PBO columns (when present in the
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
 EPS = 1e-9
+
+# v1.6.0 (REVIEW_DEEP_V1_5_2.md §2.2 S4): valid binning strategies for
+# the calibration-table / ECE machinery. ``equal_width`` is the legacy
+# Naeini et al. 2015 default; ``equal_mass`` is the Naeini-Cooper-
+# Hauskrecht recommendation for small N or for samples where predicted
+# probabilities cluster (and would otherwise collapse the equal-width
+# bin count under ``duplicates="drop"``).
+BinStrategy = Literal["equal_width", "equal_mass"]
+
+
+def _emit_bin_collapse_warning(populated: int, requested: int) -> None:
+    """Fire a :class:`RuntimeWarning` when fewer than half the requested
+    bins are populated.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md S4): when predicted probabilities
+    cluster (e.g. an over-confident sigmoid head producing only mid-band
+    outputs), ``pd.cut(..., duplicates="drop")`` or even an honest
+    equal-width split can populate substantially fewer bins than the
+    operator requested. The downstream ECE is then a weighted mean over
+    surviving bins, which silently understates miscalibration on the
+    empty buckets. This helper fires the canonical warning that the
+    release-gate runbook documents as the "ECE may understate
+    miscalibration" alarm.
+    """
+    if requested >= 2 and populated * 2 < requested:
+        warnings.warn(
+            f"ECE bin collapse: only {populated}/{requested} bins populated; "
+            "ECE may understate miscalibration",
+            RuntimeWarning,
+            stacklevel=3,
+        )
 
 
 def _clip_prob(p: np.ndarray | pd.Series) -> np.ndarray:
@@ -56,15 +89,55 @@ def log_loss_score(y_true: Iterable[float], p_pred: Iterable[float]) -> float:
     return float(-np.mean(y[mask] * np.log(p[mask]) + (1.0 - y[mask]) * np.log(1.0 - p[mask])))
 
 
-def calibration_table(y_true: Iterable[float], p_pred: Iterable[float], bins: int = 10) -> pd.DataFrame:
-    """Reliability table: predicted probability bucket vs realized frequency."""
+def calibration_table(
+    y_true: Iterable[float],
+    p_pred: Iterable[float],
+    bins: int = 10,
+    *,
+    bin_strategy: BinStrategy = "equal_width",
+) -> pd.DataFrame:
+    """Reliability table: predicted probability bucket vs realized frequency.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md §2.2 S4): the ``bin_strategy`` kwarg
+    selects between the two Naeini et al. 2015 binning regimes:
+
+    - ``equal_width`` (default, current behaviour): fixed boundaries
+      ``np.linspace(0, 1, bins + 1)``. Empty bins are dropped from the
+      table (so plot consumers don't see zero-count rows) but the
+      collapse warning at :func:`_emit_bin_collapse_warning` fires when
+      ``populated * 2 < requested`` so callers can see honest miscalibration
+      even when probabilities cluster. The legacy ``duplicates="drop"``
+      argument to :func:`pandas.cut` is removed — fixed boundaries are
+      already unique by construction, so the argument was a no-op for
+      ``equal_width`` while silently masking the collapse on
+      ``equal_mass`` callers who used to share this code path.
+    - ``equal_mass``: :func:`pandas.qcut` quantile bins with
+      ``duplicates="drop"``. Bin count may be less than the requested
+      value when many predicted probabilities tie (the
+      Naeini-Cooper-Hauskrecht recommendation for over-confident heads).
+
+    Both strategies trigger the bin-collapse warning when populated
+    bins fall below half the requested count.
+    """
+    requested_bins = int(bins)
     y = np.asarray(list(y_true), dtype=float)
     p = _clip_prob(np.asarray(list(p_pred), dtype=float))
     mask = np.isfinite(y) & np.isfinite(p)
     if mask.sum() == 0:
         return pd.DataFrame(columns=["bin", "count", "pred_mean", "actual_rate", "calibration_error"])
     frame = pd.DataFrame({"y": y[mask], "p": p[mask]})
-    frame["bin"] = pd.cut(frame["p"], np.linspace(0, 1, bins + 1), include_lowest=True, duplicates="drop")
+    if bin_strategy == "equal_mass":
+        try:
+            frame["bin"] = pd.qcut(frame["p"], requested_bins, duplicates="drop")
+        except ValueError:
+            return pd.DataFrame(columns=["bin", "count", "pred_mean", "actual_rate", "calibration_error"])
+    elif bin_strategy == "equal_width":
+        edges = np.linspace(0.0, 1.0, requested_bins + 1)
+        frame["bin"] = pd.cut(frame["p"], edges, include_lowest=True)
+    else:
+        raise ValueError(
+            f"bin_strategy must be 'equal_width' or 'equal_mass'; got {bin_strategy!r}"
+        )
     out = (
         frame.groupby("bin", observed=True)
         .agg(count=("y", "size"), pred_mean=("p", "mean"), actual_rate=("y", "mean"))
@@ -72,6 +145,8 @@ def calibration_table(y_true: Iterable[float], p_pred: Iterable[float], bins: in
     )
     out["calibration_error"] = out["actual_rate"] - out["pred_mean"]
     out["bin"] = out["bin"].astype(str)
+    populated = int((out["count"] > 0).sum())
+    _emit_bin_collapse_warning(populated, requested_bins)
     return out
 
 
@@ -81,22 +156,44 @@ def expected_calibration_error(
     bins: int = 10,
     *,
     n_bins: int | None = None,
+    bin_strategy: BinStrategy = "equal_width",
 ) -> float:
     """Expected Calibration Error (Naeini et al. 2015).
 
     The ECE is a count-weighted mean of ``|mean_pred - mean_obs|`` over
-    ``bins`` equal-width buckets of predicted probabilities. A perfect
-    forecaster gets ECE = 0; the worst-case forecaster gets ECE = 1.
+    ``bins`` buckets of predicted probabilities. A perfect forecaster
+    gets ECE = 0; the worst-case forecaster gets ECE = 1.
 
     v1.5.1 (PR-9 FIX 4b): the ``n_bins`` kwarg is the canonical
     contract going forward; ``bins`` is kept as a positional alias for
     backwards compatibility with v1.5.0 callers. Production callers
     should prefer ``n_bins=15`` (the BBLZ-style default that better
     resolves miscalibration in the tails).
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md §2.2 S4): ``bin_strategy`` selects
+    between :func:`pandas.cut` (``equal_width``, default — the current
+    contract) and :func:`pandas.qcut` (``equal_mass``).
+
+    ``equal_width`` uses fixed boundaries so the ECE is honest under
+    clustered probability inputs: empty bins contribute exactly 0 to
+    the count-weighted mean rather than being silently dropped, and
+    the weight denominator is the populated-bin count (not the
+    requested ``n_bins``). When fewer than ``n_bins / 2`` bins are
+    populated, a :class:`RuntimeWarning` fires.
+
+    ``equal_mass`` uses quantile bins with ``duplicates="drop"`` —
+    documented behaviour: bin count may collapse when probabilities
+    tie. The same bin-collapse warning fires when the populated count
+    drops below half the requested count.
+
+    The release-gate code paths default to ``equal_width`` so existing
+    callers see no behavioural change; opt into ``equal_mass`` only
+    when probabilities are tightly clustered AND a true equal-mass
+    calibration audit is desired.
     """
     if n_bins is not None:
         bins = int(n_bins)
-    table = calibration_table(y_true, p_pred, bins=bins)
+    table = calibration_table(y_true, p_pred, bins=bins, bin_strategy=bin_strategy)
     if table.empty or table["count"].sum() == 0:
         return float("nan")
     weights = table["count"] / table["count"].sum()
@@ -698,6 +795,7 @@ def minimum_track_record_length(
 
 __all__ = [
     "EPS",
+    "BinStrategy",
     "BinaryValidationResult",
     "brier_score",
     "calibration_table",
