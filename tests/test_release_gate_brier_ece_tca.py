@@ -106,7 +106,9 @@ def test_release_gate_passes_when_some_tca_segment_significant() -> None:
 
 def test_release_gate_accepts_tca_lift_as_json_string() -> None:
     """The ``tca_lift`` cell may be a JSON string after a warehouse round-trip."""
-    tca_lift_json = json.dumps({"stressed": {"p_value": 0.001, "effect_size": 0.5, "n": 200}})
+    tca_lift_json = json.dumps(
+        {"stressed": {"p_value": 0.001, "effect_size": 0.5, "n": 200}}
+    )
     conf = _baseline_confidence(tca_lift=tca_lift_json)
     out = evaluate_release_gate(
         confidence=conf,
@@ -129,10 +131,55 @@ def test_release_gate_skips_brier_when_column_absent() -> None:
 
 def test_release_gate_skips_tca_lift_when_threshold_unset() -> None:
     """``profile='default'`` opts out of the TCA rail entirely."""
-    conf = _baseline_confidence(tca_lift={"alone": {"p_value": 1.0, "effect_size": 0.0, "n": 10}})
+    conf = _baseline_confidence(
+        tca_lift={"alone": {"p_value": 1.0, "effect_size": 0.0, "n": 10}}
+    )
     out = evaluate_release_gate(
         confidence=conf,
         promotion=_baseline_promotion(),
         profile="default",
     )
     assert "tca_lift_no_significant_segment" not in str(out.iloc[0]["reasons"])
+
+
+# ---------------------------------------------------------------------------
+# v1.6.0 fail-closed regression tests (REVIEW_DEEP_V1_5_2.md A4 / Finding #8)
+# ---------------------------------------------------------------------------
+
+
+def test_release_gate_fails_when_tca_lift_payload_is_invalid_json() -> None:
+    """Bad JSON in ``tca_lift`` (e.g. truncated) coerces to {} → rail must
+    FAIL. The previous behaviour silently passed when the payload was
+    unparsable; the v1.6 fix surfaces ``tca_lift_missing_or_invalid``."""
+    conf = _baseline_confidence(tca_lift="{not valid json")
+    out = evaluate_release_gate(
+        confidence=conf,
+        promotion=_baseline_promotion(),
+        coverage_report=_baseline_coverage(),
+    )
+    assert bool(out.iloc[0]["approved"]) is False
+    assert "tca_lift_missing_or_invalid" in str(out.iloc[0]["reasons"])
+
+
+def test_release_gate_fails_when_tca_lift_payload_wrong_type() -> None:
+    """A list (vs the expected dict) coerces to {} → rail must FAIL."""
+    conf = _baseline_confidence(tca_lift=json.dumps([1, 2, 3]))
+    out = evaluate_release_gate(
+        confidence=conf,
+        promotion=_baseline_promotion(),
+        coverage_report=_baseline_coverage(),
+    )
+    assert bool(out.iloc[0]["approved"]) is False
+    assert "tca_lift_missing_or_invalid" in str(out.iloc[0]["reasons"])
+
+
+def test_release_gate_fails_when_tca_lift_payload_is_empty_dict() -> None:
+    """An empty dict (no segments at all) must FAIL the rail."""
+    conf = _baseline_confidence(tca_lift={})
+    out = evaluate_release_gate(
+        confidence=conf,
+        promotion=_baseline_promotion(),
+        coverage_report=_baseline_coverage(),
+    )
+    assert bool(out.iloc[0]["approved"]) is False
+    assert "tca_lift_missing_or_invalid" in str(out.iloc[0]["reasons"])

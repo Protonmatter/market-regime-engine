@@ -460,9 +460,23 @@ def evaluate_release_gate(
     # v1.5.1 (PR-9 FIX 4c): TCA-lift rail. The gate FAILS unless at
     # least one regime in ``tca_lift`` reports
     # ``p_value <= max_tca_p`` AND ``|effect_size| >= min_tca_effect``.
-    if max_tca_p is not None and min_tca_effect is not None and tca_lift_raw is not None:
+    #
+    # v1.6.0 fail-closed fix (REVIEW_DEEP_V1_5_2.md A4 / Finding #8): when
+    # ``_coerce_tca_lift_payload`` returns an empty dict (bad JSON, wrong
+    # type, no rows), the prior code skipped the rail entirely so the
+    # release gate silently passed. The contract is that an enabled TCA
+    # rail with a missing-or-invalid payload must FAIL the gate; only a
+    # well-formed payload with no significant segment may emit the
+    # ``tca_lift_no_significant_segment`` rejection reason.
+    if (
+        max_tca_p is not None
+        and min_tca_effect is not None
+        and tca_lift_raw is not None
+    ):
         lift = _coerce_tca_lift_payload(tca_lift_raw)
-        if lift:
+        if not lift:
+            reasons.append("tca_lift_missing_or_invalid")
+        else:
             best_passes = any(
                 row.get("p_value", float("nan")) <= max_tca_p
                 and abs(float(row.get("effect_size", 0.0))) >= min_tca_effect
