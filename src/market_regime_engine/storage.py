@@ -2386,6 +2386,16 @@ class Warehouse:
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
             conn.register("execution_requests_asof_input", frame)
             try:
+                # v1.6.0 (REVIEW_DEEP_V1_5_2.md A14 / Finding
+                # §3.8): the ASOF JOIN MUST restrict to
+                # release-gated rows so a not-yet-promoted
+                # candidate score never colours an execution
+                # decision. Previously every credit / liquidity
+                # row qualified, including release_gate=0
+                # candidates — a governance contract violation
+                # because downstream consumers (TCA segmentation,
+                # execution-confidence dashboards) treat the
+                # joined label as if it had cleared the gate.
                 joined = conn.execute(
                     """
                     SELECT
@@ -2395,10 +2405,12 @@ class Warehouse:
                     FROM execution_requests_asof_input AS e
                     ASOF LEFT JOIN credit_regime_scores AS c
                         ON e.timestamp >= c.timestamp
+                       AND c.release_gate = 1
                     ASOF LEFT JOIN liquidity_stress_scores AS l
                         ON e.timestamp >= l.timestamp
                        AND e.cusip = l.scope_id
                        AND l.scope_type = 'cusip'
+                       AND l.release_gate = 1
                     """
                 ).fetchdf()
             finally:
