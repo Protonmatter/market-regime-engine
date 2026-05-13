@@ -20,6 +20,7 @@ Public API:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,6 +28,8 @@ import numpy as np
 import pandas as pd
 
 from market_regime_engine.dfm import DFMDomainModel
+
+log = logging.getLogger(__name__)
 
 
 def _statsmodels_available() -> tuple[bool, Any]:
@@ -65,6 +68,7 @@ class MQDynamicFactorModel:
     _model: Any = None
     _results: Any = None
     _fallback_model: DFMDomainModel | None = None
+    _panel: pd.DataFrame | None = None
     _last_factor: float = 0.0
     _last_factor_se: float = 1.0
 
@@ -80,6 +84,12 @@ class MQDynamicFactorModel:
             return self
         self.columns = list(panel.columns)
         self.frequencies = dict(frequencies or {})
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md A15 / Finding #10): cache the full
+        # panel index so .nowcast(asof) can apply a PIT-safe filter at
+        # nowcast time. The Bańbura-Modugno smoothed state at index t uses
+        # observations after t — cannot be reported without leakage when
+        # asof < latest_index.
+        self._panel = panel.copy()
         installed, dfm_cls = _statsmodels_available()
         if installed:
             try:
@@ -96,11 +106,13 @@ class MQDynamicFactorModel:
                 self._model = model
                 self._results = results
                 self.backend = "statsmodels"
-                # Cache the latest filtered factor mean and its standard error.
-                factor_series = self._extract_factor_series(results)
+                # Cache the latest FILTERED (not smoothed) factor mean for
+                # nowcast PIT-safety; smoothed states use future obs.
+                factor_series = self._extract_factor_series(results, filtered=True)
                 if factor_series is not None and len(factor_series) > 0:
                     self._last_factor = float(factor_series.iloc[-1])
-                    self._last_factor_se = float(self._extract_factor_se(results))
+                    se = self._extract_factor_se(results, strict=False)
+                    self._last_factor_se = float(se) if se is not None else float("nan")
                 self.fitted = True
                 return self
             except Exception:
@@ -119,19 +131,42 @@ class MQDynamicFactorModel:
         return self
 
     @staticmethod
-    def _extract_factor_series(results: Any) -> pd.Series | None:
-        """Return the (smoothed) latent factor series from a fitted model."""
+    def _extract_factor_series(results: Any, *, filtered: bool = True) -> pd.Series | None:
+        """Return the latent factor series from a fitted model.
+
+        Parameters
+        ----------
+        results:
+            Statsmodels ``DynamicFactorMQResults``-like object exposing a
+            ``factors``-style structured state attribute.
+        filtered:
+            When ``True`` (default), prefer the **filtered** state
+            (``factors.filtered``) — uses only observations up to time
+            ``t`` and is the PIT-safe choice for nowcasting. When
+            ``False``, fall back to the smoothed state (uses the entire
+            sample's information including future observations).
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md A15 / Finding #10): the previous
+        implementation defaulted to smoothed and silently leaked
+        future information into ``nowcast``. The default is now
+        ``filtered=True``; callers explicitly opt in to smoothed for
+        backtesting / retrospective analysis.
+        """
+        preferred = "filtered" if filtered else "smoothed"
+        fallback_attr = "smoothed" if filtered else "filtered"
         for attr in ("factors", "smoothed_state"):
             try:
                 candidate = getattr(results, attr, None)
                 if candidate is None:
                     continue
-                if hasattr(candidate, "smoothed"):
-                    smoothed = candidate.smoothed
-                    if isinstance(smoothed, pd.DataFrame):
-                        return smoothed.iloc[:, 0]
-                    if isinstance(smoothed, np.ndarray):
-                        return pd.Series(smoothed[:, 0])
+                for state_attr in (preferred, fallback_attr):
+                    state = getattr(candidate, state_attr, None)
+                    if state is None:
+                        continue
+                    if isinstance(state, pd.DataFrame):
+                        return state.iloc[:, 0]
+                    if isinstance(state, np.ndarray):
+                        return pd.Series(state[:, 0])
                 if isinstance(candidate, pd.DataFrame):
                     return candidate.iloc[:, 0]
                 if isinstance(candidate, np.ndarray) and candidate.ndim == 2:
@@ -141,37 +176,96 @@ class MQDynamicFactorModel:
         return None
 
     @staticmethod
-    def _extract_factor_se(results: Any) -> float:
-        """Best-effort extraction of the latest factor standard error."""
+    def _extract_factor_se(results: Any, *, strict: bool = False) -> float | None:
+        """Extract the latest factor standard error.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md A15 / Finding #10): previously the
+        fallback returned ``max(abs(params))`` as a "rough proxy" — this
+        is **not** a standard error in any statistical sense and was
+        indistinguishable downstream from a real Kalman-derived SE. The
+        new contract:
+
+        - Structured covariance (``smoothed_state_cov[0, 0, -1]``)
+          present → return ``sqrt(...)`` as before. Real SE.
+        - Structured covariance unavailable AND ``strict=True`` → raise
+          ``ValueError`` so the caller can decide.
+        - Structured covariance unavailable AND ``strict=False`` (default)
+          → log a warning and return ``None`` (NaN-equivalent in the
+          numeric pipeline). Callers receive an explicit "no SE
+          available" signal rather than a misleading proxy.
+        """
         try:
             cov = getattr(results, "smoothed_state_cov", None)
             if cov is not None and isinstance(cov, np.ndarray) and cov.ndim == 3:
                 return float(np.sqrt(max(cov[0, 0, -1], 1e-12)))
-            params = getattr(results, "params", None)
-            if isinstance(params, pd.Series):
-                # Use the largest covariance-of-state parameter as a rough
-                # proxy when the structured output isn't available.
-                return float(np.sqrt(max(np.abs(params).max(), 1e-12)))
         except Exception:  # pragma: no cover - defensive
             pass
-        return 1.0
+        if strict:
+            raise ValueError(
+                "factor_se: structured smoothed_state_cov unavailable; refusing "
+                "to return params-based proxy (REVIEW_DEEP_V1_5_2.md A15)."
+            )
+        log.warning(
+            "MQDynamicFactorModel: structured smoothed_state_cov unavailable; "
+            "factor_se will be reported as NaN (no params-based proxy emitted)"
+        )
+        return None
 
     def nowcast(self, asof: pd.Timestamp) -> dict[str, Any]:
-        """Return the latest factor mean + standard error.
+        """Return the latest factor mean + standard error at or before ``asof``.
 
-        Parameters
-        ----------
-        asof:
-            Used only to populate the returned ``"as_of"`` field; the model
-            already advances internally each time :meth:`update` is called.
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md A15 / Finding #10): previously the
+        ``asof`` argument was ignored (only used to label the response);
+        the cached ``_last_factor`` was returned regardless of ``asof``,
+        which is PIT-unsafe when ``asof`` lies in the past. The new
+        contract filters the cached panel to ``index <= asof`` and
+        recomputes the latest factor over that prefix using the same
+        filtered-state / fallback machinery as ``.fit``.
         """
-        return {
-            "as_of": str(pd.Timestamp(asof).date()),
+        asof_ts = pd.Timestamp(asof)
+        # Default response shape: factor + SE from the last successful fit.
+        response = {
+            "as_of": str(asof_ts.date()),
             "factor": float(self._last_factor),
-            "factor_se": float(self._last_factor_se),
+            "factor_se": float(self._last_factor_se) if self._last_factor_se is not None else float("nan"),
             "backend": self.backend,
             "fitted": self.fitted,
         }
+        if not self.fitted or self._panel is None:
+            return response
+        # PIT-safe filter: only rows at or before asof contribute to the factor.
+        prefix = self._panel[self._panel.index <= asof_ts]
+        if prefix.empty:
+            return response
+        if self.backend == "statsmodels" and self._results is not None:
+            try:
+                installed, dfm_cls = _statsmodels_available()
+                if installed:
+                    pit_model = dfm_cls(
+                        endog=prefix,
+                        factors=self.n_factors,
+                        factor_orders=self.factor_orders,
+                        enforce_stationarity=self.enforce_stationarity,
+                    )
+                    pit_results = pit_model.fit(disp=False)
+                    series = self._extract_factor_series(pit_results, filtered=True)
+                    if series is not None and len(series) > 0:
+                        response["factor"] = float(series.iloc[-1])
+                        se = self._extract_factor_se(pit_results, strict=False)
+                        response["factor_se"] = float(se) if se is not None else float("nan")
+            except Exception:  # pragma: no cover - defensive
+                # PIT-safe nowcast on a sub-panel may fail; fall back to the
+                # cached final-fit response (still labelled with ``asof``).
+                pass
+        elif self.backend == "fallback" and self._fallback_model is not None:
+            try:
+                series = self._fallback_model.transform(prefix)
+                if not series.empty:
+                    response["factor"] = float(series.iloc[-1])
+                    response["factor_se"] = 1.0
+            except Exception:  # pragma: no cover - defensive
+                pass
+        return response
 
     def update(self, new_observation: pd.Series) -> dict[str, Any]:
         """Roll the latent factor forward with a single new row.
@@ -187,10 +281,11 @@ class MQDynamicFactorModel:
                 row = pd.DataFrame([new_observation], columns=self.columns)
                 applied = self._results.append(row)
                 self._results = applied
-                factor_series = self._extract_factor_series(applied)
+                factor_series = self._extract_factor_series(applied, filtered=True)
                 if factor_series is not None and len(factor_series) > 0:
                     self._last_factor = float(factor_series.iloc[-1])
-                    self._last_factor_se = float(self._extract_factor_se(applied))
+                    se = self._extract_factor_se(applied, strict=False)
+                    self._last_factor_se = float(se) if se is not None else float("nan")
             except Exception:  # pragma: no cover - defensive
                 pass
         elif self.backend == "fallback" and self._fallback_model is not None:
@@ -202,6 +297,13 @@ class MQDynamicFactorModel:
                     self._last_factor_se = 1.0
             except Exception:  # pragma: no cover - defensive
                 pass
+        # Append the new observation to the cached panel so subsequent
+        # .nowcast(asof) calls can apply a PIT-safe prefix filter.
+        if self._panel is not None and new_observation.name is not None:
+            new_row = pd.DataFrame(
+                [new_observation], columns=self.columns, index=[pd.Timestamp(new_observation.name)]
+            )
+            self._panel = pd.concat([self._panel, new_row]).sort_index()
         return self.nowcast(
             pd.Timestamp(new_observation.name) if new_observation.name is not None else pd.Timestamp.today()
         )
