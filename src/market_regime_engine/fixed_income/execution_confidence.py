@@ -61,6 +61,7 @@ import math
 import os
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -93,8 +94,10 @@ log = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_LIMIT_TOLERANCE_BPS",
+    "DEFAULT_LOGIT_COEFFICIENTS",
     "DEFAULT_WEIGHTS",
     "MAX_SIGNAL_STALENESS_ENV",
+    "LogitCoefficients",
     "build_execution_features",
     "latest_execution_confidence_prediction",
     "score_execution_confidence",
@@ -108,24 +111,145 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-DEFAULT_WEIGHTS: dict[str, float] = {
-    "base_intercept": 0.5,
-    "liquidity_coef": -0.01,
-    "notional_coef": -0.15,
-    "regime_coef": -0.008,
-    "protocol_auto_x": 0.10,
-    "protocol_rfq": 0.05,
-    "protocol_manual": -0.10,
-    "urgency_low": 0.0,
-    "urgency_normal": -0.05,
-    "urgency_high": -0.15,
-    "rating_ig": 0.10,
-    "rating_hy": -0.10,
-    "limit_distance_coef": -0.05,
-}
+@dataclass(frozen=True)
+class LogitCoefficients:
+    """Hand-tuned 2026-Q1 coefficients for the deterministic
+    execution-confidence baseline.
 
-DEFAULT_LIMIT_TOLERANCE_BPS: float = 10.0
-"""Limit-price tolerance (bps from mid) below which no penalty applies."""
+    These coefficients were chosen to deliver the documented
+    confidence-score range (5 bps minimum, 200 bps cap on
+    expected_slippage_bps) with realistic dispersion across the
+    regime / liquidity feature space. They are NOT fitted from data —
+    see ``execution_outcomes`` once enough flow accumulates for
+    empirical fitting.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md §4 — Phase 5.4): promoted from
+    bare magic numbers in ``DEFAULT_WEIGHTS`` so that:
+
+    1. each coefficient gets a docstring rationale rather than a
+       comment-block reference inside the function;
+    2. callers can swap a single coefficient with named-argument
+       safety (``LogitCoefficients(notional_penalty_per_log10=-0.20)``)
+       instead of the error-prone ``dict[str, float]`` overlay;
+    3. mypy enforces both the field name and the float type at the
+       call site.
+
+    The legacy :data:`DEFAULT_WEIGHTS` dict is preserved for back-compat
+    (the v1.5 ``Mapping[str, float]`` overlay path keeps working);
+    Phase 5.4 introduces the typed surface alongside it.
+
+    TODO(v1.7.0): fit empirically from ``execution_outcomes`` per
+    RS-4917 once we have ~10k joined (request, outcome) rows.
+
+    Attributes
+    ----------
+    base_intercept:
+        50% prior. Pulled toward the centre of the sigmoid so an
+        information-less request lands at confidence ~0.62 after the
+        average of the small bonuses / penalties.
+    liquidity_penalty_per_unit:
+        Per-unit liquidity_index penalty. With liquidity_index ~50
+        (typical mid-cycle) this contributes ~-0.5 to the logit.
+    notional_penalty_per_log10:
+        Per-log10-of-notional penalty applied above
+        :attr:`notional_log_threshold`. A $10MM order (log10=7) thus
+        loses 0.15 of logit; a $100MM order (log10=8) loses 0.30.
+    notional_log_threshold:
+        Log10 below which notional carries zero penalty (10^6 = $1MM).
+        Designed to leave retail-size orders (<$1MM) un-penalised.
+    regime_penalty_per_unit:
+        Per-unit regime_score penalty. Smaller in magnitude than
+        the liquidity penalty because regime_score is roughly 10x
+        wider in range (-100..+100 vs liquidity ~0..100).
+    protocol_bonus_auto_x:
+        Auto-X protocol prior bonus (the dealer-pricing path is the
+        most predictable execution mode in normal markets).
+    protocol_bonus_rfq:
+        RFQ protocol prior bonus (intermediate predictability).
+    protocol_bonus_manual:
+        Manual protocol penalty (lowest predictability).
+    urgency_penalty_normal:
+        Normal-urgency penalty (the default if the request omits
+        urgency). Small because most non-urgent flow lands here.
+    urgency_penalty_high:
+        High-urgency penalty (3x normal — reflects the lower
+        likelihood of a fill at the desired level).
+    rating_bonus_ig:
+        Investment-grade rating bonus (tighter spreads, more
+        liquidity, more predictable execution).
+    rating_bonus_hy:
+        High-yield rating penalty (wider spreads, thinner liquidity).
+    limit_distance_bps_threshold:
+        bps from mid below which no limit-distance penalty applies.
+        Designed to give 10 bps of "free" tolerance before penalising.
+    limit_distance_penalty_per_bp:
+        Per-bp penalty above :attr:`limit_distance_bps_threshold`.
+        A 30 bps limit (20 bps over threshold) loses 1.0 of logit.
+    """
+
+    base_intercept: float = 0.5
+    liquidity_penalty_per_unit: float = -0.01
+    notional_penalty_per_log10: float = -0.15
+    notional_log_threshold: float = 6.0  # 10^6 = $1MM
+    regime_penalty_per_unit: float = -0.008
+    protocol_bonus_auto_x: float = 0.10
+    protocol_bonus_rfq: float = 0.05
+    protocol_bonus_manual: float = -0.10
+    urgency_penalty_normal: float = -0.05
+    urgency_penalty_high: float = -0.15
+    rating_bonus_ig: float = 0.10
+    rating_bonus_hy: float = -0.10
+    limit_distance_bps_threshold: float = 10.0
+    limit_distance_penalty_per_bp: float = -0.05
+
+    def to_weights_dict(self) -> dict[str, float]:
+        """Return the legacy ``Mapping[str, float]`` shape for the
+        existing :data:`DEFAULT_WEIGHTS` callers and the
+        ``Mapping[str, float]`` overlay path inside
+        :func:`score_execution_confidence`.
+
+        The legacy keys are intentionally retained 1:1 to keep PR-15
+        analytics tooling that introspects ``logit_components`` and
+        ``weights_used`` working without code changes.
+        """
+        return {
+            "base_intercept": self.base_intercept,
+            "liquidity_coef": self.liquidity_penalty_per_unit,
+            "notional_coef": self.notional_penalty_per_log10,
+            "regime_coef": self.regime_penalty_per_unit,
+            "protocol_auto_x": self.protocol_bonus_auto_x,
+            "protocol_rfq": self.protocol_bonus_rfq,
+            "protocol_manual": self.protocol_bonus_manual,
+            "urgency_low": 0.0,
+            "urgency_normal": self.urgency_penalty_normal,
+            "urgency_high": self.urgency_penalty_high,
+            "rating_ig": self.rating_bonus_ig,
+            "rating_hy": self.rating_bonus_hy,
+            "limit_distance_coef": self.limit_distance_penalty_per_bp,
+        }
+
+
+DEFAULT_LOGIT_COEFFICIENTS: LogitCoefficients = LogitCoefficients()
+"""Module-level default :class:`LogitCoefficients` instance.
+
+Use as the default value of the ``coefficients`` parameter of
+:func:`score_execution_confidence` and as the canonical reference for
+report writers that need to surface the production logit weights.
+"""
+
+DEFAULT_WEIGHTS: dict[str, float] = DEFAULT_LOGIT_COEFFICIENTS.to_weights_dict()
+"""Back-compat alias of the v1.5 ``Mapping[str, float]`` weights view of
+:data:`DEFAULT_LOGIT_COEFFICIENTS`. New callers should use the typed
+:class:`LogitCoefficients` dataclass directly.
+"""
+
+DEFAULT_LIMIT_TOLERANCE_BPS: float = DEFAULT_LOGIT_COEFFICIENTS.limit_distance_bps_threshold
+"""Limit-price tolerance (bps from mid) below which no penalty applies.
+
+Aliased to :attr:`LogitCoefficients.limit_distance_bps_threshold` so a
+caller that overrides the threshold via a custom :class:`LogitCoefficients`
+also affects the report-writer's reference to it.
+"""
 
 MAX_SIGNAL_STALENESS_ENV: str = "MRE_FI_MAX_SIGNAL_STALENESS_SEC"
 _DEFAULT_MAX_STALENESS_SEC: float = 900.0  # 15 minutes
@@ -135,7 +259,9 @@ _CONFIDENCE_CEIL: float = 0.95
 _EXPECTED_SLIPPAGE_FLOOR_BPS: float = 1.0
 _EXPECTED_SLIPPAGE_CEIL_BPS: float = 200.0
 
-_SEVERE_OR_CRISIS_LIQUIDITY: frozenset[str] = frozenset({"Severe Stress", "Crisis Liquidity"})
+_SEVERE_OR_CRISIS_LIQUIDITY: frozenset[str] = frozenset(
+    {"Severe Stress", "Crisis Liquidity"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -171,20 +297,16 @@ def _coerce_decision_ts(timestamp: str | pd.Timestamp) -> pd.Timestamp:
 
 
 def _signal_age_seconds(signal_ts_iso: str | None, decision_ts: pd.Timestamp) -> float:
-    """Return ``decision_ts - signal_ts`` in seconds.
+    """Return signal age in seconds (decision_ts - signal_ts).
 
-    v1.6.0 (REVIEW_DEEP_V1_5_2.md F4 / Finding §3.10): a NEGATIVE
-    delta means the signal timestamp is in the FUTURE relative to
-    the decision timestamp — that is a PIT violation and MUST
-    NEVER be silently clamped. The v1.5.x implementation clamped
-    to 0, which masked the violation in the metadata float and
-    let downstream consumers silently consume a future-dated
-    signal. The new contract raises :class:`PitViolationError`
-    so the violation is surfaced to the caller, mirroring the
-    upstream :func:`assert_pit_safe` rail. Hot-path callers
-    (``score_execution_confidence``, ``build_execution_features``)
-    already invoke ``assert_pit_safe`` first so the additional
-    raise here is defence-in-depth.
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F4 / Finding §3.10): a NEGATIVE delta
+    means the signal timestamp is in the FUTURE relative to the
+    decision timestamp — that is a PIT violation and must NEVER be
+    silently clamped. Previously we clamped to 0, which masked the
+    violation in the metadata float and let downstream consumers
+    silently consume a future-dated signal. The new contract raises
+    :class:`PitViolationError` so the violation is surfaced to the
+    caller, mirroring the upstream :func:`assert_pit_safe` rail.
     """
     if signal_ts_iso is None:
         return float("inf")
@@ -194,8 +316,8 @@ def _signal_age_seconds(signal_ts_iso: str | None, decision_ts: pd.Timestamp) ->
     delta = (decision_ts - signal_ts).total_seconds()
     if delta < 0:
         raise PitViolationError(
-            f"signal timestamp {signal_ts.isoformat()} is after "
-            f"decision timestamp {decision_ts.isoformat()} by "
+            f"signal timestamp {signal_ts.isoformat()} is after decision "
+            f"timestamp {decision_ts.isoformat()} by "
             f"{-delta:.3f}s (PIT violation; refusing to clamp)"
         )
     return float(delta)
@@ -249,13 +371,19 @@ def _logit_components(
     rating_class: str | None,
     limit_distance_bps: float | None,
     weights: Mapping[str, float],
+    notional_log_threshold: float = 6.0,
+    limit_distance_bps_threshold: float = DEFAULT_LIMIT_TOLERANCE_BPS,
 ) -> dict[str, float]:
     components: dict[str, float] = {}
     components["base_intercept"] = float(weights["base_intercept"])
-    components["liquidity_penalty"] = float(weights["liquidity_coef"]) * float(liquidity_index)
+    components["liquidity_penalty"] = float(weights["liquidity_coef"]) * float(
+        liquidity_index
+    )
     components["regime_penalty"] = float(weights["regime_coef"]) * float(regime_score)
     notional_log10 = math.log10(max(float(request.notional), 1.0))
-    components["notional_penalty"] = float(weights["notional_coef"]) * max(0.0, notional_log10 - 6.0)
+    components["notional_penalty"] = float(weights["notional_coef"]) * max(
+        0.0, notional_log10 - float(notional_log_threshold)
+    )
     protocol = (request.protocol or "").strip()
     if protocol == "Auto-X":
         components["protocol_bonus"] = float(weights["protocol_auto_x"])
@@ -278,9 +406,12 @@ def _logit_components(
         components["rating_bonus"] = float(weights["rating_hy"])
     else:
         components["rating_bonus"] = 0.0
-    if limit_distance_bps is not None and limit_distance_bps > DEFAULT_LIMIT_TOLERANCE_BPS:
+    if (
+        limit_distance_bps is not None
+        and limit_distance_bps > float(limit_distance_bps_threshold)
+    ):
         components["limit_distance_penalty"] = float(weights["limit_distance_coef"]) * (
-            float(limit_distance_bps) - DEFAULT_LIMIT_TOLERANCE_BPS
+            float(limit_distance_bps) - float(limit_distance_bps_threshold)
         )
     else:
         components["limit_distance_penalty"] = 0.0
@@ -317,7 +448,10 @@ def _decision_rule(
     ``(recommended_action, human_review_required)``."""
     if not release_gate:
         return ExecutionRecommendation.MANUAL_REVIEW_REQUIRED, True
-    if confidence_score >= 0.80 and liquidity_label not in _SEVERE_OR_CRISIS_LIQUIDITY:
+    if (
+        confidence_score >= 0.80
+        and liquidity_label not in _SEVERE_OR_CRISIS_LIQUIDITY
+    ):
         return ExecutionRecommendation.AUTO_X_ALLOWED, False
     if confidence_score >= 0.60:
         return ExecutionRecommendation.AUTO_X_CAUTION, False
@@ -337,6 +471,7 @@ def score_execution_confidence(
     release_gate: bool = True,
     profile: str = "production",
     weights: Mapping[str, float] | None = None,
+    coefficients: LogitCoefficients | None = None,
 ) -> ExecutionConfidenceResponse:
     """Score a single execution-confidence request.
 
@@ -367,8 +502,17 @@ def score_execution_confidence(
         Operating profile tag for the metadata blob; downstream tooling
         differentiates production runs from dev runs.
     weights:
-        Optional override of the logit weights; missing keys fall back to
-        :data:`DEFAULT_WEIGHTS`.
+        Optional override of the logit weights as a ``Mapping[str, float]``;
+        missing keys fall back to :data:`DEFAULT_WEIGHTS`. Preserved for
+        v1.5.x callers; new callers should prefer ``coefficients=`` for
+        a typed surface.
+    coefficients:
+        Optional :class:`LogitCoefficients` override. v1.6.0 (Phase 5.4)
+        addition: when supplied, the fields of this dataclass take
+        precedence over :data:`DEFAULT_LOGIT_COEFFICIENTS` and over any
+        ``weights`` mapping (the explicit named-field surface beats the
+        legacy ``Mapping[str, float]``). When ``None`` (default), the
+        module-level :data:`DEFAULT_LOGIT_COEFFICIENTS` is used.
 
     Returns
     -------
@@ -387,8 +531,16 @@ def score_execution_confidence(
     """
     decision_ts = _coerce_decision_ts(request.timestamp)
     decision_iso = iso8601_z(decision_ts)
-    merged_weights: dict[str, float] = dict(DEFAULT_WEIGHTS)
-    if weights:
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md §4 — Phase 5.4): the precedence order
+    # is ``coefficients`` (typed dataclass, new) > ``weights`` (legacy
+    # ``Mapping[str, float]``) > :data:`DEFAULT_LOGIT_COEFFICIENTS`.
+    # The dataclass takes priority because it is the explicit
+    # named-field contract and because mixing both surfaces in one call
+    # is almost always a bug (the dict-overlay path would silently
+    # shadow a dataclass field).
+    active_coefficients = coefficients or DEFAULT_LOGIT_COEFFICIENTS
+    merged_weights: dict[str, float] = active_coefficients.to_weights_dict()
+    if weights and coefficients is None:
         merged_weights.update({k: float(v) for k, v in weights.items()})
 
     resolved_run_id = (
@@ -398,7 +550,9 @@ def score_execution_confidence(
     )
 
     regime = latest_credit_regime_score(warehouse)
-    liquidity = latest_liquidity_stress_score(warehouse, scope_type="cusip", scope_id=request.cusip)
+    liquidity = latest_liquidity_stress_score(
+        warehouse, scope_type="cusip", scope_id=request.cusip
+    )
     if liquidity is None:
         # Fallback per AGENT.md: cusip scope missing → use market scope.
         liquidity = latest_liquidity_stress_score(warehouse)
@@ -455,23 +609,18 @@ def score_execution_confidence(
         )
 
     # Limit-distance in bps (None when the caller did not pass a limit).
-    # v1.6.0 (REVIEW_DEEP_V1_5_2.md A5 / Finding §3.1): route through the
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md A5 / Finding #14): route through the
     # Decimal-precision bps_precision helpers instead of raw float math.
     # Per-request error is negligible (~1e-13 relative) but accumulates
     # over millions of evaluations into a coefficient drift on the
-    # decision boundary; using Decimal eliminates that drift and brings
-    # this call site into agreement with the rest of the FI TCA stack.
+    # decision boundary; using Decimal eliminates that drift.
     limit_distance_bps: float | None = None
     if request.limit_price is not None:
         # The exec-confidence dataclass intentionally does not carry a
         # mid-market quote; the request body's ``metadata.mid_price`` is
         # the canonical caller-supplied reference (informational input
         # only — the deterministic baseline can score without it).
-        mid_price = (
-            request.metadata.get("mid_price")
-            if isinstance(request.metadata, Mapping)
-            else None
-        )
+        mid_price = request.metadata.get("mid_price") if isinstance(request.metadata, dict) else None
         if mid_price is not None:
             try:
                 mid_dec = to_decimal(mid_price)
@@ -492,11 +641,15 @@ def score_execution_confidence(
         rating_class=rating_class,
         limit_distance_bps=limit_distance_bps,
         weights=merged_weights,
+        notional_log_threshold=active_coefficients.notional_log_threshold,
+        limit_distance_bps_threshold=active_coefficients.limit_distance_bps_threshold,
     )
 
     logit = sum(components.values())
     confidence_score = max(_CONFIDENCE_FLOOR, min(_CONFIDENCE_CEIL, _sigmoid(logit)))
-    expected_slippage_bps = _expected_slippage_bps(confidence_score, liquidity.liquidity_index)
+    expected_slippage_bps = _expected_slippage_bps(
+        confidence_score, liquidity.liquidity_index
+    )
     ci_low, ci_high = _confidence_interval(confidence_score)
 
     drivers = _drivers_from_components(components)
@@ -518,7 +671,9 @@ def score_execution_confidence(
         "drivers": list(drivers),
         "logit_components": {k: float(v) for k, v in components.items()},
         "rating_class": rating_class,
-        "limit_distance_bps": (float(limit_distance_bps) if limit_distance_bps is not None else None),
+        "limit_distance_bps": (
+            float(limit_distance_bps) if limit_distance_bps is not None else None
+        ),
         "signal_age_seconds_credit_regime": float(regime_age),
         "signal_age_seconds_liquidity": float(liquidity_age),
         "max_signal_age_seconds": float(max_age),
@@ -582,18 +737,30 @@ def _stale_response(
     ``release_gate=False`` so downstream consumers fail closed. The
     ``signal_age_seconds_*`` keys remain populated (NaN when the
     corresponding signal was absent entirely) for telemetry."""
-    regime_age = _signal_age_seconds(regime.timestamp if regime is not None else None, decision_ts)
-    liquidity_age = _signal_age_seconds(liquidity.timestamp if liquidity is not None else None, decision_ts)
+    regime_age = _signal_age_seconds(
+        regime.timestamp if regime is not None else None, decision_ts
+    )
+    liquidity_age = _signal_age_seconds(
+        liquidity.timestamp if liquidity is not None else None, decision_ts
+    )
     max_age = max(regime_age, liquidity_age)
     metadata: dict[str, Any] = {
         "profile": profile,
         "reason": reason,
         "regime_score": float(regime.regime_score) if regime is not None else None,
         "regime_label": regime.regime_label if regime is not None else None,
-        "liquidity_index": (float(liquidity.liquidity_index) if liquidity is not None else None),
-        "liquidity_label": (liquidity.liquidity_label if liquidity is not None else None),
-        "liquidity_scope_type": (liquidity.scope_type if liquidity is not None else None),
-        "liquidity_scope_id": (liquidity.scope_id if liquidity is not None else None),
+        "liquidity_index": (
+            float(liquidity.liquidity_index) if liquidity is not None else None
+        ),
+        "liquidity_label": (
+            liquidity.liquidity_label if liquidity is not None else None
+        ),
+        "liquidity_scope_type": (
+            liquidity.scope_type if liquidity is not None else None
+        ),
+        "liquidity_scope_id": (
+            liquidity.scope_id if liquidity is not None else None
+        ),
         "drivers": [],
         "logit_components": {},
         "signal_age_seconds_credit_regime": float(regime_age),
@@ -662,13 +829,19 @@ def write_execution_confidence_prediction(
         "protocol": response.protocol,
         "confidence_score": float(response.confidence_score),
         "expected_slippage_bps": (
-            float(response.expected_slippage_bps) if response.expected_slippage_bps is not None else None
+            float(response.expected_slippage_bps)
+            if response.expected_slippage_bps is not None
+            else None
         ),
         "confidence_interval_low": (
-            float(response.confidence_interval_low) if response.confidence_interval_low is not None else None
+            float(response.confidence_interval_low)
+            if response.confidence_interval_low is not None
+            else None
         ),
         "confidence_interval_high": (
-            float(response.confidence_interval_high) if response.confidence_interval_high is not None else None
+            float(response.confidence_interval_high)
+            if response.confidence_interval_high is not None
+            else None
         ),
         "recommended_action": response.recommended_action,
         "human_review_required": 1 if response.human_review_required else 0,
@@ -715,11 +888,17 @@ def write_execution_outcome(
         "cusip": str(observed.get("cusip", "")),
         "side": str(observed.get("side", "")),
         "notional": float(observed.get("notional", 0.0)),
-        "filled_quantity": (float(observed["filled_quantity"]) if "filled_quantity" in observed else None),
-        "execution_price": (float(observed["execution_price"]) if "execution_price" in observed else None),
+        "filled_quantity": (
+            float(observed["filled_quantity"]) if "filled_quantity" in observed else None
+        ),
+        "execution_price": (
+            float(observed["execution_price"]) if "execution_price" in observed else None
+        ),
         "observed_at": str(observed["observed_at"]),
         "outcome_observation_lag": (
-            float(observed["outcome_observation_lag"]) if "outcome_observation_lag" in observed else None
+            float(observed["outcome_observation_lag"])
+            if "outcome_observation_lag" in observed
+            else None
         ),
         "decision_timestamp": str(observed["decision_timestamp"]),
         "metadata_json": json.dumps(metadata, sort_keys=True, default=str),
@@ -757,13 +936,19 @@ def latest_execution_confidence_prediction(
         protocol=str(row["protocol"]),
         confidence_score=float(row["confidence_score"]),
         expected_slippage_bps=(
-            float(row["expected_slippage_bps"]) if pd.notna(row.get("expected_slippage_bps")) else None
+            float(row["expected_slippage_bps"])
+            if pd.notna(row.get("expected_slippage_bps"))
+            else None
         ),
         confidence_interval_low=(
-            float(row["confidence_interval_low"]) if pd.notna(row.get("confidence_interval_low")) else None
+            float(row["confidence_interval_low"])
+            if pd.notna(row.get("confidence_interval_low"))
+            else None
         ),
         confidence_interval_high=(
-            float(row["confidence_interval_high"]) if pd.notna(row.get("confidence_interval_high")) else None
+            float(row["confidence_interval_high"])
+            if pd.notna(row.get("confidence_interval_high"))
+            else None
         ),
         recommended_action=str(row["recommended_action"]),
         human_review_required=bool(int(row["human_review_required"])),
@@ -817,7 +1002,9 @@ def build_execution_features(
         "notional_log10": math.log10(max(float(request.notional), 1.0)),
         "protocol": str(request.protocol),
         "urgency": str(request.urgency or "normal"),
-        "limit_price": (float(request.limit_price) if request.limit_price is not None else None),
+        "limit_price": (
+            float(request.limit_price) if request.limit_price is not None else None
+        ),
         "sector": request.sector,
         "rating": request.rating,
         "rating_class": _rating_class(request.rating),
@@ -841,9 +1028,13 @@ def build_execution_features(
         out["regime_score"] = float(regime.regime_score)
         out["regime_label"] = regime.regime_label
         out["regime_release_gate"] = bool(regime.release_gate)
-        out["signal_age_seconds_credit_regime"] = _signal_age_seconds(regime.timestamp, decision_ts)
+        out["signal_age_seconds_credit_regime"] = _signal_age_seconds(
+            regime.timestamp, decision_ts
+        )
 
-    liquidity = latest_liquidity_stress_score(warehouse, scope_type="cusip", scope_id=request.cusip)
+    liquidity = latest_liquidity_stress_score(
+        warehouse, scope_type="cusip", scope_id=request.cusip
+    )
     if liquidity is None:
         liquidity = latest_liquidity_stress_score(warehouse)
     if liquidity is not None:
@@ -858,7 +1049,9 @@ def build_execution_features(
         out["liquidity_scope_type"] = liquidity.scope_type
         out["liquidity_scope_id"] = liquidity.scope_id
         out["liquidity_release_gate"] = bool(liquidity.release_gate)
-        out["signal_age_seconds_liquidity"] = _signal_age_seconds(liquidity.timestamp, decision_ts)
+        out["signal_age_seconds_liquidity"] = _signal_age_seconds(
+            liquidity.timestamp, decision_ts
+        )
 
     # bond_reference asof — best-effort; survivorship-safe via the
     # storage helper.
@@ -870,25 +1063,32 @@ def build_execution_features(
             sub = ref.loc[ref["cusip"].astype(str) == str(request.cusip)]
             if not sub.empty:
                 row = sub.iloc[0]
-                out["bond_ref_sector"] = str(row["sector"]) if pd.notna(row.get("sector")) else None
-                out["bond_ref_rating"] = str(row["rating"]) if pd.notna(row.get("rating")) else None
-                out["bond_ref_duration"] = float(row["duration"]) if pd.notna(row.get("duration")) else None
+                out["bond_ref_sector"] = (
+                    str(row["sector"]) if pd.notna(row.get("sector")) else None
+                )
+                out["bond_ref_rating"] = (
+                    str(row["rating"]) if pd.notna(row.get("rating")) else None
+                )
+                out["bond_ref_duration"] = (
+                    float(row["duration"]) if pd.notna(row.get("duration")) else None
+                )
                 out["bond_ref_amount_outstanding"] = (
-                    float(row["amount_outstanding"]) if pd.notna(row.get("amount_outstanding")) else None
+                    float(row["amount_outstanding"])
+                    if pd.notna(row.get("amount_outstanding"))
+                    else None
                 )
                 if pd.notna(row.get("amount_outstanding")):
-                    out["amount_outstanding_log10"] = math.log10(max(float(row["amount_outstanding"]), 1.0))
+                    out["amount_outstanding_log10"] = math.log10(
+                        max(float(row["amount_outstanding"]), 1.0)
+                    )
     except Exception as exc:  # pragma: no cover - defensive
         log.debug("bond_reference_asof lookup failed: %s", exc)
 
     # dealer_response_stats summary over the lookback window.
-    # v1.6.0 (REVIEW_DEEP_V1_5_2.md A7 / Finding §3.2): pushes the
-    # time-range filter into the SQL layer via the new
-    # ``Warehouse.read_dealer_response_stats(window_start, window_end)``
-    # method. The prior path reached through ``warehouse._backend``
-    # (private attribute) to issue ``SELECT *``, then filtered the
-    # whole table in pandas — O(N) in deployment age. The indexed
-    # read now scales with the requested lookback window only.
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md A7 / Finding #16): pushes the time-
+    # range filter into SQL via the new ``Warehouse.read_dealer_response_stats``
+    # method; the prior path read the entire table via private
+    # ``_backend.read_sql("SELECT *")`` and filtered in pandas.
     window_start_ts = decision_ts - pd.Timedelta(days=int(lookback_days))
     try:
         dealer_stats = warehouse.read_dealer_response_stats(
@@ -909,9 +1109,13 @@ def build_execution_features(
             requests_total = float(recent["requests"].fillna(0).sum())
             responses_total = float(recent["responses"].fillna(0).sum())
             out["dealer_response_count"] = responses_total
-            out["dealer_fill_rate"] = responses_total / requests_total if requests_total > 0 else None
+            out["dealer_fill_rate"] = (
+                responses_total / requests_total if requests_total > 0 else None
+            )
             avg_ms = recent["avg_response_ms"].dropna()
-            out["dealer_avg_response_ms"] = float(avg_ms.mean()) if not avg_ms.empty else None
+            out["dealer_avg_response_ms"] = (
+                float(avg_ms.mean()) if not avg_ms.empty else None
+            )
 
     # historical execution_outcomes for this cusip — observed slippage
     # mean / count as a deterministic prior.
@@ -921,7 +1125,9 @@ def build_execution_features(
         outcomes = None
     if outcomes is not None and not outcomes.empty:
         outcomes = outcomes.copy()
-        outcomes["observed_at_ts"] = pd.to_datetime(outcomes["observed_at"], utc=True, errors="coerce")
+        outcomes["observed_at_ts"] = pd.to_datetime(
+            outcomes["observed_at"], utc=True, errors="coerce"
+        )
         window_start = decision_ts - pd.Timedelta(days=int(lookback_days))
         sub = outcomes.loc[
             (outcomes["cusip"].astype(str) == str(request.cusip))
