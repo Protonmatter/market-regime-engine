@@ -23,41 +23,59 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 dependencies = [
-  "numpy>=1.26",
-  "pandas>=2.1",
-  "scikit-learn>=1.3",
-  "requests>=2.31",
-  "pyyaml>=6.0",
-  "fastapi>=0.110",
-  "uvicorn>=0.27",
+  # v1.6.0 (REVIEW_DEEP_V1_5_2.md §4 — Phase 5.3): explicit upper bounds
+  # cap each major-version dep at the next major release. Without these
+  # caps a silent surprise from a numpy 3 / pandas 3 / fastapi 1.0
+  # release on a fresh pip install would pull in API breakage that the
+  # engine has not yet been verified against.
+  "numpy>=1.26,<3.0",
+  # pandas is at 3.0.x in the platform lockfiles already; the next-major
+  # cap is therefore <4.0 (not <3.0). Mirrors the principle "current
+  # major + 1" applied to the actual lockfile state, not the v1.5
+  # baseline lockfile.
+  "pandas>=2.1,<4.0",
+  "scikit-learn>=1.3,<2.0",
+  "requests>=2.31,<3.0",
+  "pyyaml>=6.0,<7.0",
+  "fastapi>=0.110,<1.0",
+  "uvicorn>=0.27,<1.0",
+  # v1.6.0 (Phase 5.3): pydantic is a transitive of fastapi but the
+  # /v1 API surface uses pydantic v2 features directly (model_config,
+  # field_validator). Pin explicitly so a fastapi minor that loosens
+  # the pydantic constraint cannot pull in v3 underneath us.
+  "pydantic>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]
-dashboard = ["streamlit>=1.33", "plotly>=5.20"]
-analytics = ["duckdb>=1.0", "pyarrow>=15.0", "polars>=0.20"]
-nowcast = ["statsmodels>=0.14", "scipy>=1.10"]
-frontier = ["statsmodels>=0.14", "ngboost>=0.5", "torch>=2.0"]
-explain = ["shap>=0.44"]
+# v1.6.0 (REVIEW_DEEP_V1_5_2.md §4 — Phase 5.3): each optional extra
+# also gets explicit upper bounds for the same reason as the core deps.
+# pre-1.0 packages (streamlit, plotly, polars, etc.) cap at <2.0 / <1.0
+# per the package's own pre-release contract.
+dashboard = ["streamlit>=1.33,<2.0", "plotly>=5.20,<7.0"]
+analytics = ["duckdb>=1.0,<2.0", "pyarrow>=15.0,<26.0", "polars>=0.20,<2.0"]
+nowcast = ["statsmodels>=0.14,<1.0", "scipy>=1.10,<2.0"]
+frontier = ["statsmodels>=0.14,<1.0", "ngboost>=0.5,<1.0", "torch>=2.0,<3.0"]
+explain = ["shap>=0.44,<1.0"]
 observability = [
-  "prometheus-client>=0.20",
-  "structlog>=24.1",
+  "prometheus-client>=0.20,<1.0",
+  "structlog>=24.1,<26.0",
   # v1.5 PR-7 §E (AF-4): OpenTelemetry SDK + OTLP exporter for cross-
   # worker metric aggregation. Marked optional so a vanilla install
   # keeps the in-process registry path. When the deps are present
   # ``observability.configure_otel(...)`` lights up the OTLP path; the
   # legacy ``_GLOBAL.incr`` / ``record_histogram`` API stays as the
   # fall-back adapter.
-  "opentelemetry-api>=1.30",
-  "opentelemetry-sdk>=1.30",
-  "opentelemetry-exporter-otlp>=1.30",
-  "opentelemetry-instrumentation-fastapi>=0.51b0",
+  "opentelemetry-api>=1.30,<2.0",
+  "opentelemetry-sdk>=1.30,<2.0",
+  "opentelemetry-exporter-otlp>=1.30,<2.0",
+  "opentelemetry-instrumentation-fastapi>=0.51b0,<1.0",
 ]
 # v1.5 (PR-3 task D.3): optional pandas_market_calendars adapter for
 # the SIFMA bond calendar. The hand-curated YAML at
 # data/calendars/sifma_bond.yaml is the audit-grade fallback; pmc is
 # only consulted when MRE_FI_USE_PMC=1 is set so a stale pmc install
 # on a dev laptop cannot override the reference YAML.
-fixed_income = ["pandas-market-calendars>=4.4"]
+fixed_income = ["pandas-market-calendars>=4.4,<6.0"]
 # v1.3 supply-chain hardening: SBOM, license audit, and static
 # security scan tooling. Pinned to broad ranges so the CI matrix
 # can refresh without bumping pyproject every minor.
@@ -69,56 +87,56 @@ fixed_income = ["pandas-market-calendars>=4.4"]
 # env var is set but slowapi is not installed so production cannot
 # silently degrade to an unlimited handler.
 security = [
-  "cyclonedx-bom>=4.0",
-  "pip-licenses>=4.0",
-  "bandit>=1.7",
-  "slowapi>=0.1.9",
+  "cyclonedx-bom>=4.0,<6.0",
+  "pip-licenses>=4.0,<6.0",
+  "bandit>=1.7,<2.0",
+  "slowapi>=0.1.9,<1.0",
 ]
 # v1.3 shared API cache. Optional because Redis is environment-conditional;
 # the local TTL cache is the default and remains zero-dependency.
-redis = ["redis>=5.0"]
+redis = ["redis>=5.0,<7.0"]
 # v1.4 (item A) Bayesian NumPyro MS-VAR. Platform-conditional like
 # ``[frontier]`` because JAX wheels split CUDA/CPU/Apple-silicon.
 # ``jax[cpu]`` is the lockable variant; CUDA / TPU stays
 # operator-installed.
-bayesian = ["numpyro>=0.13", "jax[cpu]>=0.4", "arviz>=0.17"]
+bayesian = ["numpyro>=0.13,<1.0", "jax[cpu]>=0.4,<1.0", "arviz>=0.17,<2.0"]
 # v1.4 (item D) live release calendar fetchers. Pulled in only when
 # the operator runs ``mre refresh-release-calendars``; the engine
 # ships hand-curated YAML so the import is gated behind the optional
 # extra.
-scraping = ["beautifulsoup4>=4.12", "lxml>=5.0"]
+scraping = ["beautifulsoup4>=4.12,<5.0", "lxml>=5.0,<7.0"]
 dev = [
-  "pytest>=8.0",
-  "pytest-xdist>=3.5",
-  "pytest-cov>=5.0",
-  "hypothesis>=6.100",
-  "ruff>=0.4",
-  "mypy>=1.10",
-  "pre-commit>=3.7",
-  "build>=1.2",
+  "pytest>=8.0,<10.0",
+  "pytest-xdist>=3.5,<4.0",
+  "pytest-cov>=5.0,<8.0",
+  "hypothesis>=6.100,<7.0",
+  "ruff>=0.4,<1.0",
+  "mypy>=1.10,<3.0",
+  "pre-commit>=3.7,<5.0",
+  "build>=1.2,<2.0",
   "types-requests",
   "types-PyYAML",
   # v1.3: vcrpy records ALFRED HTTP fixtures so the PIT ingestion path
   # can be exercised in CI without network access; fakeredis backs the
   # /v1 API Redis cache parametrized tests; responses + requests-mock
   # back the alert-sink HTTP transports.
-  "vcrpy>=6.0",
-  "fakeredis>=2.20",
-  "responses>=0.25",
-  "requests-mock>=1.11",
+  "vcrpy>=6.0,<8.0",
+  "fakeredis>=2.20,<3.0",
+  "responses>=0.25,<1.0",
+  "requests-mock>=1.11,<2.0",
   # v1.5 (PR-2 task I.2): httpx is the transport that
   # fastapi.testclient.TestClient drives under the hood. Before PR-5
   # adds the POST /v1/execution_confidence Pydantic body validation
   # tests the FI dev profile already pulls it in for the api_v1 hardening
   # suite; pin here so a clean ``pip install -e .[dev]`` runs the test
   # client without an out-of-band ``pip install httpx`` step.
-  "httpx>=0.27",
+  "httpx>=0.27,<1.0",
   # v1.5 (PR-3 task I): tabulate powers ``pd.DataFrame.to_markdown``
   # used by ``report_writer.consolidate``; PR-2 noted the
   # ``test_report_writer_consolidation_emits_known_sections`` test was
   # skipped on a clean dev install without it. Pinning here keeps the
   # dev profile self-contained.
-  "tabulate>=0.9",
+  "tabulate>=0.9,<1.0",
 ]
 
 [project.scripts]
