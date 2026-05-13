@@ -93,6 +93,19 @@ class CovariateBOCPDHazard:
     def hazard_series(self, covariates: pd.DataFrame) -> pd.Series:
         if not self.fitted or covariates is None or covariates.empty:
             return pd.Series([], dtype=float)
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md §4.2 — safety-critical):
+        # ``self.fitted`` does not statically imply ``self.pipeline is not
+        # None`` so mypy correctly flags the bare ``.predict_proba`` call.
+        # More importantly a caller that mutates ``fitted=True`` without
+        # ever calling ``.fit(...)`` (e.g. unpickling a partially
+        # constructed object, or a test fixture) would hit a confusing
+        # ``AttributeError`` deep inside sklearn instead of a clean
+        # contract violation. Raise an explicit ``RuntimeError`` so the
+        # failure mode is loud and pinned to the API boundary.
+        if self.pipeline is None:
+            raise RuntimeError(
+                "hazard classifier not fitted; call .fit(regime_path, covariates) first"
+            )
         Xp = covariates.reindex(columns=self.feature_columns, fill_value=0.0)
         prob = self.pipeline.predict_proba(Xp.to_numpy(float))[:, 1]
         return pd.Series(np.clip(prob, self.floor, self.ceiling), index=covariates.index, name="hazard_t")

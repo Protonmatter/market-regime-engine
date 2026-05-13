@@ -476,13 +476,22 @@ def christoffersen_coverage(hits: Sequence[int], alpha: float) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def murphy_decomposition(y: Sequence[float], p: Sequence[float], *, bins: int = 10) -> dict:
+def murphy_decomposition(
+    y: Sequence[float] | np.ndarray,
+    p: Sequence[float] | np.ndarray,
+    *,
+    bins: int = 10,
+) -> dict:
     """Murphy (1973) decomposition of the Brier score.
 
     Returns ``{"reliability": REL, "resolution": RES, "uncertainty": UNC,
     "brier": REL - RES + UNC}``. REL is the calibration error term (smaller is
     better), RES is the discrimination term (larger is better), UNC is the
     irreducible base-rate variance.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md §4.2): inputs widened to also accept
+    ``np.ndarray`` so :mod:`prediction_evidence` can pass the output of
+    ``_finite_pair`` directly. Internally we ``np.asarray`` either way.
     """
     y_arr = np.asarray([float(v) for v in y if np.isfinite(v)], dtype=float)
     p_arr = np.asarray([float(v) for v in p if np.isfinite(v)], dtype=float)
