@@ -742,8 +742,31 @@ def build_router(
                         "release_gate": False,
                     },
                 ) from exc
+            except Exception as exc:
+                # v1.6.0 (REVIEW_DEEP_V1_5_2.md A10 / Finding
+                # §3.5): the v1.5.x handler caught only
+                # PitViolationError, so any other exception inside
+                # score_execution_confidence left ``response``
+                # unbound and the subsequent JSONResponse(...)
+                # raised UnboundLocalError, leaking a 500 with no
+                # governance envelope. Map every unexpected scorer
+                # failure to a stable 503 fail-closed shape so the
+                # release-gate contract holds even on scorer bugs.
+                log.exception(
+                    "execution_confidence score failed (request_id=%s)",
+                    body.request_id,
+                )
+                raise HTTPException(
+                    status_code=_HTTP_SERVICE_UNAVAILABLE,
+                    detail={
+                        "detail": "score_failed",
+                        "release_gate": False,
+                    },
+                ) from exc
             try:
-                write_execution_confidence_prediction(wh, response, request_id=body.request_id)
+                write_execution_confidence_prediction(
+                    wh, response, request_id=body.request_id
+                )
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",
