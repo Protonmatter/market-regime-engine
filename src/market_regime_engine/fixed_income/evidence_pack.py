@@ -712,7 +712,24 @@ def read_evidence_pack(
     When ``request_id`` is omitted, returns the most recent pack for
     ``model_run_id`` (ordered by ``timestamp``). Returns ``None`` if no
     matching row exists.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md A8 / Finding §3.3): now uses the
+    indexed :meth:`Warehouse.latest_evidence_pack` SQL fast path
+    instead of reading the whole ``fixed_income_evidence_packs``
+    table and filtering in pandas. Falls back to the legacy full-
+    table read when the warehouse object does not yet expose
+    ``latest_evidence_pack`` (older callers / test mocks).
     """
+    if hasattr(warehouse, "latest_evidence_pack"):
+        sub = warehouse.latest_evidence_pack(
+            model_run_id, request_id=request_id
+        )
+        if sub is None or sub.empty:
+            return None
+        row = sub.iloc[0]
+        return _row_to_pack(row)
+    # Legacy fallback for callers / test mocks that only expose
+    # read_evidence_packs(); preserves the v1.5.x semantics.
     df = warehouse.read_evidence_packs()
     if df is None or df.empty:
         return None

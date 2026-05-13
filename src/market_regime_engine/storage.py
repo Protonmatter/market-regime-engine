@@ -2503,6 +2503,50 @@ class Warehouse:
             "SELECT * FROM fixed_income_evidence_packs ORDER BY timestamp, model_run_id, request_id"
         )
 
+    def latest_evidence_pack(
+        self,
+        model_run_id: str,
+        *,
+        request_id: str | None = None,
+        asof: datetime | pd.Timestamp | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Return at most one ``fixed_income_evidence_packs`` row.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md A8 / Finding §3.3): mirrors
+        :meth:`latest_credit_regime_score` and pushes filtering into
+        the SQL layer instead of reading the whole table and
+        filtering in pandas. Backed by the existing
+        ``idx_evidence_packs_run_id`` index on
+        ``fixed_income_evidence_packs(model_run_id)`` defined in
+        :mod:`fixed_income.schema`.
+
+        Filters:
+        - ``model_run_id`` — required exact match.
+        - ``request_id`` — optional exact match.
+        - ``asof`` — when present, restrict to ``timestamp <= asof``.
+
+        Returns the most-recent matching row (by
+        ``timestamp DESC, request_id DESC``) as a single-row
+        DataFrame, or ``None`` when no row matches.
+        """
+        clauses: list[str] = ["model_run_id = ?"]
+        params: list[object] = [str(model_run_id)]
+        if request_id is not None:
+            clauses.append("request_id = ?")
+            params.append(str(request_id))
+        if asof is not None:
+            clauses.append("timestamp <= ?")
+            params.append(pd.Timestamp(asof).isoformat())
+        sql = (
+            "SELECT * FROM fixed_income_evidence_packs WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY timestamp DESC, request_id DESC LIMIT 1"
+        )
+        out = self._backend.read_sql(sql, params)
+        if out is None or out.empty:
+            return None
+        return out
+
     def write_bond_reference(self, df: pd.DataFrame) -> int:
         return self._write_fi(
             "bond_reference",
