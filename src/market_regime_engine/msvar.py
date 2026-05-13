@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Markov-Switching VAR (Hamilton 1989) regime model.
 
+
 The plain Gaussian-emission HMM in :mod:`hmm` answers "which regime are we in
 right now?" but assumes the *cross-section* of the eight domain factors is iid
 within a regime. That misses one of the most important features of real macro
@@ -83,6 +84,11 @@ class MarkovSwitchingVAR:
 
     fitted: bool = False
     fit_log: dict[str, float] = field(default_factory=dict)
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.5): the prior emission means at
+    # init time act as the pin reference so EM-converged labels stay
+    # stable across re-fits (mirrors HMMRegimePosterior._pin_to_handprior_labels).
+    _prior_emission_means: np.ndarray = field(default_factory=lambda: np.array([]))
+    _label_pin: list[int] = field(default_factory=list)
 
     # ------------------------------------------------------------------
     # filter / smoother
@@ -160,12 +166,16 @@ class MarkovSwitchingVAR:
         np.fill_diagonal(self.transition, 0.6)
         self.transition = self.transition / self.transition.sum(axis=1, keepdims=True)
 
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.5): cache the prior-emission means
+        # for label pinning at .score time so the reported regime label is
+        # stable across re-fits (without this the EM converges to whatever
+        # state-0 happens to be — classical MS-VAR label-switching).
+        self._prior_emission_means = self.intercepts.copy()
         prev_ll = -np.inf
         for it in range(self.max_iter):
             log_alpha, ll = self._hamilton_filter(Y)
             log_gamma = self._kim_smoother(log_alpha)
             gamma = np.exp(log_gamma)
-            gamma[self.p :].sum(axis=0)
             # M step: weighted regression per regime
             new_intercepts = np.zeros((K, d))
             new_coefficients = np.zeros((K, self.p, d, d))
@@ -222,10 +232,81 @@ class MarkovSwitchingVAR:
         return self
 
     # ------------------------------------------------------------------
+    # label pinning (v1.6.0 §1.5 fix)
+    # ------------------------------------------------------------------
+
+    def _pin_to_prior_labels(self) -> list[int]:
+        """Greedy Hungarian-style assignment of EM-converged regimes to
+        the prior emission-mean order.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.5): mirrors
+        ``HMMRegimePosterior._pin_to_handprior_labels``. Without this
+        pinning two EM re-fits on the same panel can produce different
+        ``self.states`` orderings (the classical MS-VAR label-switching
+        problem; Frühwirth-Schnatter 2006 §3.5).
+
+        Returns a permutation list ``perm`` such that
+        ``perm[k] = j`` means EM-state ``k`` is the closest match to
+        the prior-emission state ``j``. The score-time output then uses
+        ``self.states[perm[k]]`` as the canonical label for EM-state
+        ``k``.
+        """
+        K = len(self.states)
+        if (
+            self._prior_emission_means.size == 0
+            or self.intercepts.size == 0
+            or self._prior_emission_means.shape != self.intercepts.shape
+        ):
+            return list(range(K))
+        # Cost matrix: distance from EM-converged intercept to prior-mean.
+        cost = np.zeros((K, K), dtype=float)
+        for em_k in range(K):
+            for prior_j in range(K):
+                diff = self.intercepts[em_k] - self._prior_emission_means[prior_j]
+                cost[em_k, prior_j] = float(np.sum(diff * diff))
+        # Greedy assignment (O(K^2) — sufficient for K <= 9).
+        perm = [-1] * K
+        used_priors: set[int] = set()
+        for em_k in np.argsort([cost[k].min() for k in range(K)]):
+            best_prior = -1
+            best_cost = float("inf")
+            for prior_j in range(K):
+                if prior_j in used_priors:
+                    continue
+                if cost[em_k, prior_j] < best_cost:
+                    best_cost = cost[em_k, prior_j]
+                    best_prior = prior_j
+            if best_prior >= 0:
+                perm[em_k] = best_prior
+                used_priors.add(best_prior)
+        # Any unfilled slot defaults to identity.
+        for k in range(K):
+            if perm[k] == -1:
+                for j in range(K):
+                    if j not in used_priors:
+                        perm[k] = j
+                        used_priors.add(j)
+                        break
+        return perm
+
+    # ------------------------------------------------------------------
     # online filtering
     # ------------------------------------------------------------------
 
     def score(self, panel: pd.DataFrame) -> pd.DataFrame:
+        """Score the MS-VAR posterior over ``panel``.
+
+        v1.6.0 documented behaviour (REVIEW_DEEP_V1_5_2.md §1.5): the
+        first ``p`` rows of the panel are emitted with NaN regime / NaN
+        confidence so the output frame is index-aligned with the input
+        panel (instead of silently truncating). Downstream consumers
+        (BMA mix, release-gate decision) align on date and previously
+        saw a misaligned index.
+
+        Labels are also pinned to the prior emission-mean order via
+        ``_pin_to_prior_labels`` so re-fits do not swap regime labels
+        (the classical MS-VAR label-switching problem).
+        """
         if not self.fitted or panel is None or panel.empty:
             return pd.DataFrame(columns=["date", "msvar_regime", "msvar_confidence"])
         frame = panel.copy()
@@ -235,19 +316,38 @@ class MarkovSwitchingVAR:
         Y = frame[self.domains].replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0).to_numpy(float)
         n = Y.shape[0]
         log_alpha, _ = self._hamilton_filter(Y)
+        # Compute the EM->prior label permutation once per .score call.
+        if not self._label_pin:
+            self._label_pin = self._pin_to_prior_labels()
+        perm = self._label_pin
         rows: list[dict] = []
+        # v1.6.0: emit NaN sentinel rows for the first p indices so the
+        # output frame is index-aligned with the input.
+        for t in range(self.p):
+            row: dict = {
+                "date": frame.index[t],
+                "msvar_regime": None,
+                "msvar_confidence": float("nan"),
+            }
+            for s in self.states:
+                row[f"msvar_prob_{s}"] = float("nan")
+            rows.append(row)
         for t in range(self.p, n):
             la = log_alpha[t]
             la = la - _logsumexp(la)
             probs = np.exp(la)
-            best = int(np.argmax(probs))
+            # Pinned probabilities: probs_pinned[j] = probs[em_k] where perm[em_k] == j.
+            probs_pinned = np.zeros_like(probs)
+            for em_k, prior_j in enumerate(perm):
+                probs_pinned[prior_j] = probs[em_k]
+            best = int(np.argmax(probs_pinned))
             row = {
                 "date": frame.index[t],
                 "msvar_regime": self.states[best],
-                "msvar_confidence": float(probs[best]),
+                "msvar_confidence": float(probs_pinned[best]),
             }
             for i, s in enumerate(self.states):
-                row[f"msvar_prob_{s}"] = float(probs[i])
+                row[f"msvar_prob_{s}"] = float(probs_pinned[i])
             rows.append(row)
         return pd.DataFrame(rows)
 

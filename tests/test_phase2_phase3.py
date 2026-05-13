@@ -123,8 +123,42 @@ def test_msvar_fit_score_runs():
     assert model.fitted
     out = model.score(df)
     cols = [c for c in out.columns if c.startswith("msvar_prob_")]
-    sums = out[cols].sum(axis=1)
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.5): the first p rows are now
+    # emitted as NaN sentinels so the output frame is index-aligned with
+    # the input panel. Drop those before checking sum-to-one.
+    valid = out[cols].dropna(how="all")
+    sums = valid.sum(axis=1)
     assert (sums - 1.0).abs().max() < 1e-6
+    # Index-aligned with the input panel.
+    assert len(out) == len(df)
+    # First p rows are NaN sentinels for confidence and regime label.
+    assert out["msvar_regime"].iloc[: model.p].isna().all()
+    assert out["msvar_confidence"].iloc[: model.p].isna().all()
+
+
+def test_msvar_label_pinning_stable_across_refits():
+    """REVIEW_DEEP_V1_5_2.md §1.5: the EM-converged regime ordering is
+    pinned to the prior emission-mean order so two refits on the same
+    panel produce the same regime labels (no label switching).
+    """
+    rng = np.random.default_rng(0)
+    n = 200
+    idx = pd.date_range("2000-01-01", periods=n, freq="MS")
+    df = pd.DataFrame(
+        rng.normal(scale=0.4, size=(n, 8)),
+        index=idx,
+        columns=["labor", "rates", "inflation", "credit", "housing", "energy", "fx", "fiscal"],
+    )
+    df.iloc[60:120] += np.array([1.5, 0.9, 1.7, 0.8, 0.8, 1.2, 0.6, 0.8])
+    a = MarkovSwitchingVAR(max_iter=6).fit(df)
+    b = MarkovSwitchingVAR(max_iter=6).fit(df)
+    assert a.fitted and b.fitted
+    out_a = a.score(df).dropna(subset=["msvar_regime"])
+    out_b = b.score(df).dropna(subset=["msvar_regime"])
+    # Most-likely regime label must agree on at least 80% of rows; the
+    # remainder is normal Hamilton-filter wobble at boundary rows.
+    agree = (out_a["msvar_regime"].values == out_b["msvar_regime"].values).mean()
+    assert agree >= 0.8, f"label-pinning failed: agreement={agree:.3f}"
 
 
 # ---------------------------------------------------------------------------
