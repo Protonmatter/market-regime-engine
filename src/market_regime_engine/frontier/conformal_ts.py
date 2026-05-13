@@ -542,29 +542,55 @@ class LocalizedSplitConformal:
 
 @dataclass
 class SequentialEConformal:
-    """E-process based anytime-valid binary conformal.
+    """E-process based anytime-valid binary conformal (betting e-process).
 
-    Maintains a per-bucket e-statistic that is the running product of
-    "calibration evidence" likelihood ratios under the null
-    ``H_0: P(Y_t = 1 | X_t) = p_hat_t``::
+    Maintains a per-bucket e-statistic that is the running product of a
+    **betting e-process** per Ramdas-Manole 2023 §3:
 
-        E_t = E_{t-1} * f(y_t, p_hat_t)
+        E_t = E_{t-1} * (1 + lambda_t * (y_t - p_hat_t))
 
-    where ``f(y, p) = (2 * (1 - score) ) / (1 - 2 * EPS)`` is a bounded,
-    expectation-1 e-variable under the null (trivially valid by construction;
-    a richer choice is left as a future enhancement). Under Vovk-Wang 2021,
-    the rejection region ``E_t >= 1 / alpha`` gives an *anytime-valid*
-    type-I-error control, and the corresponding prediction set ``{y :
-    E_t(y) < 1 / alpha}`` has long-run coverage at least ``1 - alpha``.
+    where ``y_t in {0, 1}`` is the realised binary outcome,
+    ``p_hat_t in [EPS, 1-EPS]`` is the forecaster's predicted P(Y=1),
+    and ``lambda_t in [-1/(1-p_hat_t), 1/p_hat_t]`` is the betting
+    coefficient. We use ``lambda_t = 1`` (GROW-conservative; admissible
+    for any ``p_hat_t in [EPS, 1-EPS]``) — this is the canonical
+    Vovk-Wang 2021 / Ramdas-Manole 2023 default. Under H_0
+    ("forecaster is calibrated", ``y_t ~ Bernoulli(p_hat_t)``):
 
-    Use :meth:`fit` exactly like the other backends to bootstrap a per-bucket
-    threshold from a historical window; use :meth:`update` to roll the
-    e-statistic forward at production time.
+        E[1 + lambda_t * (y_t - p_hat_t) | F_{t-1}]
+            = 1 + lambda_t * (E[y_t | F_{t-1}] - p_hat_t)
+            = 1 + lambda_t * (p_hat_t - p_hat_t)
+            = 1
+
+    so the increment is a valid e-variable (expectation 1 under H_0) and
+    ``E_t`` is a non-negative martingale. By Ville's inequality
+    ``P(sup_t E_t >= 1/alpha) <= alpha`` under H_0; the rejection region
+    ``E_t >= 1/alpha`` therefore has *anytime-valid* type-I error control.
+
+    v1.6.0 bug fix (REVIEW_DEEP_V1_5_2.md §1.7 / Finding #3): the prior
+    increment ``2 * (1 - score)`` is only expectation-1 at ``p_hat = 0.5``
+    — for any non-balanced forecaster ``E[increment | H_0] > 1``, so the
+    Ville-inequality control did not hold. The new betting e-process
+    requires *both* the prediction ``p_hat_t`` *and* the realised outcome
+    ``y_t`` to roll the e-statistic forward; the ``_increment`` method
+    signature reflects that.
+
+    Use :meth:`fit` to bootstrap from a calibration window (with both
+    ``y`` and ``p`` columns); use :meth:`update` to roll forward online.
+
+    References:
+    - Ramdas & Manole (2023), "Randomized and exchangeable improvements
+      of Markov's, Chebyshev's and Chernoff's inequalities", §3.
+    - Vovk & Wang (2021), "E-values: Calibration, combination and
+      applications", JASA 2024.
+    - Howard, Ramdas, McAuliffe, Sekhon (2021), "Time-uniform,
+      nonparametric, nonasymptotic confidence sequences", AOS.
     """
 
     alpha: float = 0.10
     bucket_col: str = "regime_bucket"
     e_floor: float = 1e-9
+    lambda_t: float = 1.0
     thresholds: dict[str, float] = field(default_factory=dict)
     bucket_counts: dict[str, int] = field(default_factory=dict)
     fallback_threshold: float = float("inf")
@@ -582,34 +608,48 @@ class SequentialEConformal:
         self.e_per_bucket = {}
         for bucket, group in frame.groupby(self.bucket_col, observed=True):
             scores = group["__score__"].to_numpy(dtype=float)
+            preds = group["p"].astype(float).to_numpy()
+            outcomes = group["y"].astype(int).to_numpy()
             self.bucket_counts[str(bucket)] = len(scores)
             # Marginal threshold = standard split-conformal quantile so
             # transform() and the warehouse mirror it 1:1. The e-process is
             # the *online* contract; the threshold here is the "static" view.
             self.thresholds[str(bucket)] = _quantile_inflated(scores, self.alpha)
-            # Initialize e-stat to the running product of expectation-1
-            # increments seen on the calibration set.
+            # Initialize e-stat to the running product of betting e-process
+            # increments seen on the calibration set. Both p_hat and y are
+            # required (Ramdas-Manole 2023 §3); we walk the calibration in
+            # order so the e-process matches an online roll-out.
             e = 1.0
-            for s in scores:
-                e *= self._increment_from_score(float(s))
+            for p_hat_val, y_val in zip(preds, outcomes, strict=True):
+                e *= self._increment(float(p_hat_val), int(y_val))
                 e = max(e, self.e_floor)
             self.e_per_bucket[str(bucket)] = float(e)
         all_scores = frame["__score__"].to_numpy(dtype=float)
         self.fallback_threshold = _quantile_inflated(all_scores, self.alpha)
         return self
 
-    @staticmethod
-    def _increment_from_score(score: float) -> float:
-        # Bounded e-variable in [0, 2/(1 - 2*EPS)]: maps lower nonconformity
-        # to a multiplier > 1 (evidence the model is calibrated) and high
-        # nonconformity to a multiplier < 1.
-        return float(2.0 * (1.0 - max(min(score, 1 - EPS), EPS)))
+    def _increment(self, p_hat: float, y: int) -> float:
+        """Betting e-process increment ``1 + lambda * (y - p_hat)``.
+
+        Clips ``p_hat`` to ``[EPS, 1-EPS]`` so the admissible interval
+        ``lambda in [-1/(1-p_hat), 1/p_hat]`` is non-degenerate. With the
+        default ``lambda_t = 1.0`` the increment lies in
+        ``[1 - p_hat, 2 - p_hat]`` — strictly positive for any clipped
+        ``p_hat``, expectation-1 under H_0 (verified in
+        ``tests/test_sequential_e_conformal_valid_e_process.py``).
+        """
+        p_hat_clipped = max(min(float(p_hat), 1.0 - EPS), EPS)
+        y_int = 1 if int(y) == 1 else 0
+        return float(1.0 + float(self.lambda_t) * (y_int - p_hat_clipped))
 
     def update(self, x: object, y: int | float, pred: float) -> dict:
         """Roll the e-statistic forward with a single (x, y, pred) triple.
 
         ``x`` may be any hashable bucket label; if it is a dict / Series we
         try ``x[bucket_col]`` first and fall back to the string repr.
+        ``y`` is the realised binary outcome and ``pred`` is the
+        forecaster's predicted P(Y=1). Both are required by the betting
+        e-process (Ramdas-Manole 2023 §3).
         Returns ``{"e_value": float, "is_significant": bool}``.
         """
         bucket: str
@@ -619,7 +659,7 @@ class SequentialEConformal:
             bucket = str(x)
         score = _binary_score(float(pred), int(y))
         e_prev = self.e_per_bucket.get(bucket, 1.0)
-        e_new = max(e_prev * self._increment_from_score(score), self.e_floor)
+        e_new = max(e_prev * self._increment(float(pred), int(y)), self.e_floor)
         self.e_per_bucket[bucket] = float(e_new)
         is_sig = bool(e_new >= 1.0 / max(float(self.alpha), EPS))
         self.history.append(
