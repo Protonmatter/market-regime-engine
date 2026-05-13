@@ -58,7 +58,7 @@ def test_idx_credit_regime_ts_run_is_created(wh_sqlite: Warehouse) -> None:
     """The secondary index must exist on the credit_regime_scores table
     after the warehouse boots its FI schema."""
     _seed(wh_sqlite, n=10)
-    backend = wh_sqlite._backend  # noqa: SLF001  inspect-only
+    backend = wh_sqlite._backend
     rows = backend.read_sql(
         "SELECT name FROM sqlite_master WHERE type='index' "
         "AND tbl_name='credit_regime_scores'"
@@ -75,7 +75,7 @@ def test_latest_credit_regime_score_plan_hits_secondary_index(
     """EXPLAIN QUERY PLAN must reference ``idx_credit_regime_ts_run`` for
     the ``latest_credit_regime_score`` SQL fast path."""
     _seed(wh_sqlite, n=200)
-    backend = wh_sqlite._backend  # noqa: SLF001  inspect-only
+    backend = wh_sqlite._backend
     plan = backend.read_sql(
         "EXPLAIN QUERY PLAN "
         "SELECT * FROM credit_regime_scores "
