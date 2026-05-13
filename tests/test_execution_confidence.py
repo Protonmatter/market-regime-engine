@@ -478,3 +478,46 @@ def test_limit_distance_bps_returns_none_on_zero_mid(wh: Warehouse) -> None:
     out = score_execution_confidence(request, warehouse=wh, release_gate=True)
     assert out.metadata["limit_distance_bps"] is None
 
+# ---------------------------------------------------------------------------
+# v1.6.0 F4 — _signal_age_seconds raises PitViolationError on future delta
+# (REVIEW_DEEP_V1_5_2.md F4 / Finding §3.10)
+# ---------------------------------------------------------------------------
+
+
+def test_signal_age_seconds_raises_on_future_signal_timestamp() -> None:
+    """A signal timestamp AFTER the decision timestamp is a PIT
+    violation. The helper must raise rather than silently clamping
+    the delta to 0 (the v1.5.x behaviour)."""
+    from market_regime_engine.fixed_income.execution_confidence import (
+        _signal_age_seconds,
+    )
+
+    decision_ts = pd.Timestamp("2026-05-01T16:00:00Z")
+    future_signal = "2026-05-01T17:00:00Z"
+    with pytest.raises(PitViolationError, match="PIT violation"):
+        _signal_age_seconds(future_signal, decision_ts)
+
+
+def test_signal_age_seconds_returns_positive_delta_for_past_signal() -> None:
+    from market_regime_engine.fixed_income.execution_confidence import (
+        _signal_age_seconds,
+    )
+
+    decision_ts = pd.Timestamp("2026-05-01T16:00:00Z")
+    past_signal = "2026-05-01T15:00:00Z"
+    delta = _signal_age_seconds(past_signal, decision_ts)
+    assert delta == 3600.0
+
+
+def test_signal_age_seconds_returns_inf_for_none_signal() -> None:
+    """Cold-start: a missing signal returns +inf — by convention this
+    exceeds any sane staleness threshold."""
+    import math
+
+    from market_regime_engine.fixed_income.execution_confidence import (
+        _signal_age_seconds,
+    )
+
+    decision_ts = pd.Timestamp("2026-05-01T16:00:00Z")
+    assert math.isinf(_signal_age_seconds(None, decision_ts))
+

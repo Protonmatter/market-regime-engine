@@ -78,6 +78,7 @@ from market_regime_engine.fixed_income.liquidity_stress import (
     latest_liquidity_stress_score,
 )
 from market_regime_engine.fixed_income.pit_guard import (
+    PitViolationError,
     assert_pit_safe,
 )
 from market_regime_engine.fixed_income.schemas import (
@@ -170,16 +171,34 @@ def _coerce_decision_ts(timestamp: str | pd.Timestamp) -> pd.Timestamp:
 
 
 def _signal_age_seconds(signal_ts_iso: str | None, decision_ts: pd.Timestamp) -> float:
+    """Return ``decision_ts - signal_ts`` in seconds.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F4 / Finding §3.10): a NEGATIVE
+    delta means the signal timestamp is in the FUTURE relative to
+    the decision timestamp — that is a PIT violation and MUST
+    NEVER be silently clamped. The v1.5.x implementation clamped
+    to 0, which masked the violation in the metadata float and
+    let downstream consumers silently consume a future-dated
+    signal. The new contract raises :class:`PitViolationError`
+    so the violation is surfaced to the caller, mirroring the
+    upstream :func:`assert_pit_safe` rail. Hot-path callers
+    (``score_execution_confidence``, ``build_execution_features``)
+    already invoke ``assert_pit_safe`` first so the additional
+    raise here is defence-in-depth.
+    """
     if signal_ts_iso is None:
         return float("inf")
     signal_ts = pd.Timestamp(signal_ts_iso)
     if signal_ts.tzinfo is None:
         signal_ts = signal_ts.tz_localize("UTC")
     delta = (decision_ts - signal_ts).total_seconds()
-    # Negative deltas (signal *after* decision) are PIT violations and
-    # surface in the assert_pit_safe rail upstream; here we clamp to 0
-    # so the metadata float never confuses downstream tooling.
-    return float(max(0.0, delta))
+    if delta < 0:
+        raise PitViolationError(
+            f"signal timestamp {signal_ts.isoformat()} is after "
+            f"decision timestamp {decision_ts.isoformat()} by "
+            f"{-delta:.3f}s (PIT violation; refusing to clamp)"
+        )
+    return float(delta)
 
 
 def _sigmoid(x: float) -> float:
