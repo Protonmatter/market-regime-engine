@@ -852,4 +852,8 @@ def output_to_dict(output: CreditRegimeOutput) -> dict[str, Any]:
     """
     out = asdict(output)
     out["drivers"] = list(output.drivers)
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md F2): coerce metadata to plain
+    # dict so callers can mutate downstream without tripping the
+    # read-only ``_ReadOnlyMetadata`` (dict subclass) guard.
+    out["metadata"] = dict(out.get("metadata", {}) or {})
     return out

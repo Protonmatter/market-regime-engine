@@ -318,8 +318,15 @@ def credit_regime_output_to_dict(output: CreditRegimeOutput) -> dict[str, Any]:
     """
     out = asdict(output)
     out["drivers"] = list(output.drivers)
-    out.setdefault("metadata", {})
-    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md F2 / Finding §3.15):
+    # ``output.metadata`` is a read-only ``_ReadOnlyMetadata``
+    # (dict subclass). ``dataclasses.asdict`` preserves the
+    # subclass and the subclass raises on mutation, so coerce
+    # to a plain dict before attaching derived fields.
+    out["metadata"] = dict(out.get("metadata", {}) or {})
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
     return out
 
 
@@ -355,8 +362,11 @@ def liquidity_stress_output_to_dict(output: LiquidityStressOutput) -> dict[str, 
     staleness signal across all FI endpoints.
     """
     out = liquidity_output_to_dict(output)
-    out.setdefault("metadata", {})
-    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
+    # v1.6.0 F2: coerce read-only metadata to plain dict before mutation.
+    out["metadata"] = dict(out.get("metadata", {}) or {})
+    out["metadata"].setdefault(
+        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
+    )
     return out
 
 
