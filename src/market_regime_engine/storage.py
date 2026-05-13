@@ -2072,8 +2072,46 @@ class Warehouse:
             ["dealer_id", "window_start", "window_end", "requests", "responses", "avg_response_ms", "metadata_json"],
         )
 
-    def read_dealer_response_stats(self) -> pd.DataFrame:
-        return self._backend.read_sql("SELECT * FROM dealer_response_stats ORDER BY dealer_id, window_start")
+    def read_dealer_response_stats(
+        self,
+        window_start: datetime | pd.Timestamp | str | None = None,
+        window_end: datetime | pd.Timestamp | str | None = None,
+    ) -> pd.DataFrame:
+        """Read ``dealer_response_stats`` rows in the requested window.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md A7 / Finding §3.2): pushes the
+        ``window_end`` time-range filter into the SQL layer instead of
+        reading the whole table and filtering in pandas. Removes the
+        ``warehouse._backend.read_sql("SELECT *")`` private-attribute
+        access in
+        :func:`execution_confidence.build_execution_features` and lets
+        the read scale with the requested lookback window instead of
+        with the deployment age.
+
+        ``window_start`` and ``window_end`` are inclusive bounds
+        against ``dealer_response_stats.window_end`` (the right edge
+        of the statistics window — a row is in scope iff its
+        ``window_end`` lies in ``[window_start, window_end]``). Pass
+        ``None`` for either bound to disable that side of the
+        filter.
+
+        Backed by ``idx_dealer_response_stats_window_end`` (see
+        :mod:`fixed_income.schema`) so the ``WHERE window_end <= ?``
+        leading filter is index-satisfied on both DuckDB and SQLite.
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if window_start is not None:
+            clauses.append("window_end >= ?")
+            params.append(pd.Timestamp(window_start).isoformat())
+        if window_end is not None:
+            clauses.append("window_end <= ?")
+            params.append(pd.Timestamp(window_end).isoformat())
+        sql = "SELECT * FROM dealer_response_stats"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY dealer_id, window_start"
+        return self._backend.read_sql(sql, params if params else None)
 
     def write_curve_snapshots(self, df: pd.DataFrame) -> int:
         return self._write_fi(
