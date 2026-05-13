@@ -5,7 +5,7 @@ Public API entry points are re-exported here for convenience. Submodules can
 also be imported directly.
 """
 
-__version__ = "1.5.2"
+__version__ = "1.6.1"
 
 from market_regime_engine.logging_setup import configure_logging, get_logger
 

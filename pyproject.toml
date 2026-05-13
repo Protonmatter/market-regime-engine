@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "market-regime-engine"
-version = "1.5.2"
+version = "1.6.1"
 description = "Python-first, Rust-ready macro/market regime intelligence engine"
 readme = "README.md"
 requires-python = ">=3.11"
