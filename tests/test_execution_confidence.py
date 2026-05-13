@@ -77,27 +77,28 @@ def _make_credit_regime_output(*, asof: pd.Timestamp, regime_score: float):
     """Build a CreditRegimeOutput by routing a hand-crafted feature frame
     through the deterministic scorer.
 
-    Easier than constructing the frozen dataclass by hand because the
-    scorer mints model_run_id / artifact_hash deterministically."""
+    Seeds BOTH critical credit features (``cdx_ig_5y`` and ``cdx_hy_5y``)
+    so the critical-feature audit passes — otherwise the v1.6.0 A11 fix
+    will reset the regime_score to neutral 50 regardless of the requested
+    target."""
     rows = []
-    # ``spreads`` component drives the regime score via OAS percentile of
-    # cdx_ig_5y. Seed a window where the latest value sits at the
-    # requested target percentile.
     base = _coerce_utc(asof)
     # 100 days of CDX history; the latest is the *target* percentile.
     for i in range(100):
         ts = base - pd.Timedelta(days=100 - i)
-        rows.append(
-            {
-                "date": ts,
-                "feature_name": "cdx_ig_5y",
-                "value": float(i),  # 0..99; pct rank of latest = 100%
-                "source_timestamp": ts,
-                "vintage_date": None,
-            }
-        )
-    # Override the last value to target the requested regime_score.
-    rows[-1]["value"] = float(regime_score - 1)  # roughly that percentile
+        for fname in ("cdx_ig_5y", "cdx_hy_5y"):
+            rows.append(
+                {
+                    "date": ts,
+                    "feature_name": fname,
+                    "value": float(i),  # 0..99; pct rank of latest = 100%
+                    "source_timestamp": ts,
+                    "vintage_date": None,
+                }
+            )
+    # Override the last values to target the requested regime_score.
+    for r in rows[-2:]:
+        r["value"] = float(regime_score - 1)  # roughly that percentile
     features = pd.DataFrame(rows)
     features.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
     return score_credit_regime(features, asof=base, release_gate=True, profile="test")
@@ -110,22 +111,27 @@ def _make_liquidity_output(
     liquidity_index: float,
     label: LiquidityLabel | None,
 ):
-    """Build a LiquidityStressOutput targeting the requested index."""
+    """Build a LiquidityStressOutput targeting the requested index.
+
+    Seeds BOTH critical liquidity features (``bid_ask_width`` and
+    ``quotes_received``) so the critical-feature audit passes — otherwise
+    the v1.6.0 A11 fix will reset the liquidity_index to neutral 50."""
     base = _coerce_utc(asof)
     rows = []
     for i in range(100):
         ts = base - pd.Timedelta(days=100 - i)
-        rows.append(
-            {
-                "date": ts,
-                "feature_name": "bid_ask_width",
-                "value": float(i),
-                "source_timestamp": ts,
-                "vintage_date": None,
-            }
-        )
-    # Push the latest bid_ask_width to land near the requested percentile.
-    rows[-1]["value"] = float(liquidity_index)
+        for fname in ("bid_ask_width", "quotes_received"):
+            rows.append(
+                {
+                    "date": ts,
+                    "feature_name": fname,
+                    "value": float(i),
+                    "source_timestamp": ts,
+                    "vintage_date": None,
+                }
+            )
+    for r in rows[-2:]:
+        r["value"] = float(liquidity_index)
     features = pd.DataFrame(rows)
     features.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
     out = score_liquidity_stress(
