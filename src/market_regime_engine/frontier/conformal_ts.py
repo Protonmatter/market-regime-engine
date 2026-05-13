@@ -275,14 +275,34 @@ class BlockConformalBinary:
 
 @dataclass
 class NexCPForecaster:
-    """Time-series-native split conformal (NexCP).
+    """Time-series-native split conformal with **online** ACI adaptation.
 
-    Maintains a *rolling* window of the most recent absolute residuals (here
-    ``s_t = 1 - p_hat(y_t)`` for the binary case) per bucket and uses the
-    empirical ``1 - alpha`` quantile of that window plus an adaptive
-    inflation factor that scales with the most recent realized coverage gap.
+    Maintains a *rolling* window of the most recent absolute residuals
+    (here ``s_t = 1 - p_hat(y_t)`` for the binary case) per bucket and a
+    per-bucket inflation term that is updated online via the
+    Stankevičiūtė-Alaa-van der Schaar 2021 (arXiv 2102.13066, §3) /
+    Gibbs-Candès 2021 ACI rule:
 
-    The calibration window length defaults to ``window=120`` months.
+        inflation_{t+1} = inflation_t + gamma * (err_t - alpha)
+
+    where ``err_t = 1[y_t not in C_t(x_t)]`` is the realised coverage
+    error at time ``t`` and ``gamma = inflation_eta`` is the step size.
+    Under-coverage (``err = 1``) widens the prediction set by raising
+    inflation; over-coverage (``err = 0``) shrinks it. The adaptive
+    inflation guarantees long-run coverage of ``1 - alpha`` for any
+    distribution shift, modulo the standard ACI step-size constraint.
+
+    v1.6.0 bug fix (REVIEW_DEEP_V1_5_2.md §1.7 / Finding #4): the prior
+    implementation computed inflation *once* at ``.fit(...)`` time and
+    froze it. The class name promised the time-series-native online
+    adaptive primitive of Stankevičiūtė et al. 2021; the implementation
+    delivered a one-shot variant that degraded to plain split conformal
+    at test time. This commit adds an explicit :meth:`step` method that
+    rolls the inflation forward at every observed test point. ``.fit()``
+    is preserved as the initial-calibration entry point but the online
+    contract is now :meth:`step`.
+
+    The calibration window length defaults to ``window=120``.
     """
 
     alpha: float = 0.10
@@ -293,6 +313,9 @@ class NexCPForecaster:
     bucket_counts: dict[str, int] = field(default_factory=dict)
     fallback_threshold: float = float("inf")
     inflation_per_bucket: dict[str, float] = field(default_factory=dict)
+    base_thresholds: dict[str, float] = field(default_factory=dict)
+    fallback_base_threshold: float = float("inf")
+    history: list[dict] = field(default_factory=list)
 
     def fit(self, calibration: pd.DataFrame) -> NexCPForecaster:
         frame = _prepare_calibration_frame(calibration, self.bucket_col)
@@ -302,6 +325,7 @@ class NexCPForecaster:
         if "date" in frame.columns:
             frame = frame.sort_values("date")
         self.thresholds = {}
+        self.base_thresholds = {}
         self.bucket_counts = {}
         self.inflation_per_bucket = {}
         all_scores: list[float] = []
@@ -309,18 +333,78 @@ class NexCPForecaster:
             scores = group["__score__"].to_numpy(dtype=float)
             window = scores[-int(self.window) :] if len(scores) > self.window else scores
             base = _quantile_inflated(window, self.alpha)
-            # Adaptive inflation: how miscovered is the *most recent* window?
+            # Initial inflation seeded from the calibration coverage gap so
+            # the first .step() does not start from zero (which would mirror
+            # plain split conformal). Subsequent .step() calls roll the
+            # inflation per the ACI rule.
             covered = float(np.mean(window <= base))
             err = max((1.0 - self.alpha) - covered, 0.0)
             inflation = float(self.inflation_eta * err)
-            self.thresholds[str(bucket)] = float(min(base + inflation, 1.0))
+            current = float(min(max(base + inflation, 0.0), 1.0))
+            self.thresholds[str(bucket)] = current
+            self.base_thresholds[str(bucket)] = float(base)
             self.bucket_counts[str(bucket)] = len(scores)
             self.inflation_per_bucket[str(bucket)] = inflation
             all_scores.extend(scores.tolist())
         if all_scores:
             arr = np.asarray(all_scores, dtype=float)
-            self.fallback_threshold = _quantile_inflated(arr[-int(self.window) :], self.alpha)
+            self.fallback_base_threshold = _quantile_inflated(arr[-int(self.window) :], self.alpha)
+            self.fallback_threshold = self.fallback_base_threshold
         return self
+
+    def step(self, pred: float, y: int | float, bucket: str) -> dict:
+        """Online ACI update per Stankevičiūtė-Alaa-van der Schaar 2021 §3.
+
+        Forms the binary prediction set ``C_t(x_t) = {label : score(pred, label)
+        <= threshold_t}`` using the current per-bucket threshold, observes
+        the realised binary outcome ``y``, computes the coverage error
+        ``err_t = 1[y not in C_t]``, and rolls the inflation:
+
+            inflation_{t+1} = inflation_t + inflation_eta * (err_t - alpha)
+
+        The new threshold ``base + inflation_{t+1}`` is clipped to
+        ``[0, 1]`` (binary scores are bounded) and persisted to
+        ``self.thresholds[bucket]`` so subsequent ``.transform`` /
+        ``.threshold_for`` calls see the updated value.
+
+        Returns ``{"prediction_set": set[int], "covered": bool,
+        "inflation": float, "threshold": float, "err": int}``.
+        """
+        bucket_str = str(bucket)
+        base = self.base_thresholds.get(bucket_str, self.fallback_base_threshold)
+        if not math.isfinite(base):
+            base = self.fallback_threshold
+        inflation = self.inflation_per_bucket.get(bucket_str, 0.0)
+        current_threshold = float(min(max(base + inflation, 0.0), 1.0))
+        pred_set = _prediction_set(float(pred), current_threshold)
+        y_int = int(y)
+        err = 0 if y_int in pred_set else 1
+        new_inflation = inflation + float(self.inflation_eta) * (err - float(self.alpha))
+        self.inflation_per_bucket[bucket_str] = float(new_inflation)
+        new_threshold = float(min(max(base + new_inflation, 0.0), 1.0))
+        self.thresholds[bucket_str] = new_threshold
+        if bucket_str not in self.base_thresholds and math.isfinite(self.fallback_base_threshold):
+            self.base_thresholds[bucket_str] = float(self.fallback_base_threshold)
+        if bucket_str not in self.bucket_counts:
+            self.bucket_counts[bucket_str] = 0
+        self.bucket_counts[bucket_str] += 1
+        record = {
+            "bucket": bucket_str,
+            "pred": float(pred),
+            "y": y_int,
+            "err": int(err),
+            "inflation": float(new_inflation),
+            "threshold": float(new_threshold),
+            "covered": bool(err == 0),
+        }
+        self.history.append(record)
+        return {
+            "prediction_set": pred_set,
+            "covered": bool(err == 0),
+            "inflation": float(new_inflation),
+            "threshold": float(new_threshold),
+            "err": int(err),
+        }
 
     def threshold_for(self, bucket: str, *, row: pd.Series | None = None) -> float:
         return self.thresholds.get(str(bucket), self.fallback_threshold)
