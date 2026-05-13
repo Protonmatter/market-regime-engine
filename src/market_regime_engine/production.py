@@ -78,6 +78,50 @@ def validate_production_settings(env: Mapping[str, str] | None = None) -> Produc
             "MRE_REDIS_URL", ""
         ).strip():
             errors.append("MRE_REDIS_URL is required when MRE_CACHE_BACKEND=redis in production")
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md §3.2 / Finding §3.14):
+        # production MUST require an HMAC key for the FI evidence
+        # pack path. ``sign_pack`` cannot fall back to "unsigned"
+        # in production without making the evidence layer non-
+        # tamper-evident. Either ``MRE_FI_HMAC_KEY_VERSIONS``
+        # (preferred) or the legacy ``MRE_FI_HMAC_KEY`` single-
+        # version env var satisfies the contract.
+        has_hmac_versions = bool(
+            values.get("MRE_FI_HMAC_KEY_VERSIONS", "").strip()
+        )
+        has_hmac_legacy = bool(
+            values.get("MRE_FI_HMAC_KEY", "").strip()
+        )
+        if not (has_hmac_versions or has_hmac_legacy):
+            errors.append(
+                "MRE_FI_HMAC_KEY_VERSIONS (or legacy MRE_FI_HMAC_KEY) "
+                "is required in production for FI evidence-pack signing"
+            )
+        # v1.6.0 (Finding §3.14): production must rate-limit the
+        # FI endpoint AND the slowapi backend must be importable.
+        # The FastAPI startup guard already raises when the env
+        # var is set but slowapi is missing; this check ensures
+        # the env var is actually set in the first place AND that
+        # slowapi imports cleanly so the rate-limit fail-closed
+        # contract holds end-to-end.
+        rate_limit_raw = (
+            values.get("MRE_FI_RATE_LIMIT_ENABLED", "").strip().lower()
+        )
+        if rate_limit_raw not in {"1", "true", "yes", "on"}:
+            errors.append(
+                "MRE_FI_RATE_LIMIT_ENABLED must be set (1/true/yes/on) in production"
+            )
+        else:
+            try:
+                import importlib
+
+                importlib.import_module("slowapi")
+            except ImportError:
+                errors.append(
+                    "slowapi must be importable when "
+                    "MRE_FI_RATE_LIMIT_ENABLED is truthy in production; "
+                    "install with `pip install "
+                    "market-regime-engine[security]`"
+                )
 
     return ProductionCheckResult(
         production=production,
