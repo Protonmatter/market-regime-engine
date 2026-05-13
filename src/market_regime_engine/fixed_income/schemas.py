@@ -59,19 +59,19 @@ class _ReadOnlyMetadata(dict):
     def __delitem__(self, key: Any) -> None:
         raise TypeError(self._frozen_msg)
 
-    def update(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+    def update(self, *args: Any, **kwargs: Any) -> None:
         raise TypeError(self._frozen_msg)
 
-    def pop(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+    def pop(self, *args: Any, **kwargs: Any) -> Any:
         raise TypeError(self._frozen_msg)
 
-    def popitem(self) -> Any:  # type: ignore[override]
+    def popitem(self) -> Any:
         raise TypeError(self._frozen_msg)
 
-    def clear(self) -> None:  # type: ignore[override]
+    def clear(self) -> None:
         raise TypeError(self._frozen_msg)
 
-    def setdefault(  # type: ignore[override]
+    def setdefault(
         self, key: Any, default: Any = None
     ) -> Any:
         raise TypeError(self._frozen_msg)
