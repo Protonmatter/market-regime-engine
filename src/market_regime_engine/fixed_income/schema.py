@@ -622,6 +622,17 @@ _FI_TABLES: tuple[TableSpec, ...] = (
         create_sql=_CREDIT_REGIME_SCORES_DUCKDB,
         sqlite_create_sql=_CREDIT_REGIME_SCORES_SQLITE,
         primary_key=("model_run_id", "timestamp"),
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md A12 / Finding §3.6):
+        # ``latest_credit_regime_score`` reads with leading
+        # ``ORDER BY timestamp DESC, model_run_id DESC``. The PK
+        # ``(model_run_id, timestamp)`` cannot satisfy that sort
+        # because its leading column is ``model_run_id`` — add a
+        # secondary index keyed on the read pattern's leading
+        # column so SQLite + DuckDB both honour an index scan.
+        index_sql=(
+            "CREATE INDEX IF NOT EXISTS idx_credit_regime_ts_run "
+            "ON credit_regime_scores(timestamp DESC, model_run_id DESC)",
+        ),
     ),
     TableSpec(
         name="liquidity_stress_scores",

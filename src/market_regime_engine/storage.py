@@ -2166,9 +2166,15 @@ class Warehouse:
 
         Implementation uses a parameterised ``SELECT ... WHERE
         timestamp <= ? ORDER BY timestamp DESC, model_run_id DESC LIMIT
-        1`` against the backend; SQLite + DuckDB both honour the
-        primary-key index on ``(model_run_id, timestamp)`` for the
-        sort.
+        1`` against the backend.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md A12 / Finding §3.6): SQLite +
+        DuckDB honour the dedicated ``idx_credit_regime_ts_run``
+        secondary index defined in :mod:`fixed_income.schema`
+        whose leading column matches the ORDER BY — the v1.5.x
+        docstring incorrectly claimed the PK index served the
+        sort, but the PK on ``(model_run_id, timestamp)`` cannot
+        satisfy a leading ``timestamp DESC`` sort.
         """
         asof_iso = _normalise_asof_for_sql(asof)
         if asof_iso is None:
