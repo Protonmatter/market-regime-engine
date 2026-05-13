@@ -70,12 +70,22 @@ def apply_hysteresis(
     -----
     The "stay" predicate is::
 
-        (enter is None or score >= enter) and (exit is None or score < exit)
+        (enter is None or score >= enter) and (exit is None or score <= exit)
 
-    Both bounds are evaluated as half-open ``[enter, exit)`` so the
-    boundary scores (e.g. score=45 when MILD_STRESS exit is 45.0)
-    fall *out* of the band — they trigger a re-classification rather
-    than ambiguously sticking to the source label.
+    Both bounds are evaluated as the **closed** band ``[enter,
+    exit]`` so a score sitting exactly on a band boundary STAYS on
+    the source label rather than flipping. This is the canonical
+    Schmitt-trigger contract: once we have entered a band we stay
+    there until the score moves *strictly* past the boundary.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F3 / Finding §3.9): the v1.5.x
+    half-open ``[enter, exit)`` convention caused exact-boundary
+    scores to fall through to the sharp bucket (a different label
+    by design), producing label flips on every tick at the
+    boundary. The closed convention eliminates that oscillation
+    while keeping the multi-tier collapse semantics (a score that
+    moves strictly past the band still re-classifies via the
+    sharp fallback).
     """
     if prev_label is None:
         return sharp_fallback(float(score))
@@ -87,7 +97,7 @@ def apply_hysteresis(
     enter, exit_ = band
     s = float(score)
     in_lower = enter is None or s >= float(enter)
-    in_upper = exit_ is None or s < float(exit_)
+    in_upper = exit_ is None or s <= float(exit_)
     if in_lower and in_upper:
         return prev_label
     return sharp_fallback(s)

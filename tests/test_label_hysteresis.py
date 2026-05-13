@@ -101,19 +101,53 @@ def test_hysteresis_stays_in_label_until_exit_threshold() -> None:
 
 
 def test_hysteresis_transitions_when_score_clears_exit() -> None:
-    """Outside the band the helper re-classifies by sharp buckets."""
-    # NORMAL → MILD_STRESS only after the score clears the NORMAL exit
-    # threshold of 25 (not the sharp bucket boundary of 20).
-    assert classify_liquidity_with_hysteresis(24.99, LiquidityLabel.NORMAL) is LiquidityLabel.NORMAL
-    assert classify_liquidity_with_hysteresis(25.0, LiquidityLabel.NORMAL) is LiquidityLabel.MILD_STRESS
-    # MILD_STRESS → ELEVATED_STRESS at 45+ (the band's exit threshold).
-    assert classify_liquidity_with_hysteresis(45.0, LiquidityLabel.MILD_STRESS) is LiquidityLabel.ELEVATED_STRESS
-    # Downward transition: ELEVATED_STRESS → NORMAL when the score drops
-    # below ELEVATED's enter threshold (40). The intermediate MILD_STRESS
-    # is skipped because the sharp-bucket re-classify maps 18 → NORMAL.
-    assert classify_liquidity_with_hysteresis(18.0, LiquidityLabel.ELEVATED_STRESS) is LiquidityLabel.NORMAL
+    """Outside the band the helper re-classifies by sharp buckets.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F3 / Finding §3.9): the band is
+    now **closed** ``[enter, exit]`` (was half-open
+    ``[enter, exit)``). A score sitting exactly on a band boundary
+    STAYS on the source label (Schmitt-trigger sticky); a score
+    strictly past the boundary re-classifies via the sharp bucket
+    fallback.
+    """
+    # NORMAL band exit is 25.0 — score = 25 is at the edge, stays
+    # NORMAL. 25.01 is strictly past — sharp bucket maps to
+    # MILD_STRESS.
+    assert (
+        classify_liquidity_with_hysteresis(24.99, LiquidityLabel.NORMAL)
+        is LiquidityLabel.NORMAL
+    )
+    assert (
+        classify_liquidity_with_hysteresis(25.0, LiquidityLabel.NORMAL)
+        is LiquidityLabel.NORMAL
+    )
+    assert (
+        classify_liquidity_with_hysteresis(25.01, LiquidityLabel.NORMAL)
+        is LiquidityLabel.MILD_STRESS
+    )
+    # MILD_STRESS band (20, 45) — score = 45 is at the edge, stays.
+    # 45.01 falls through to sharp ELEVATED_STRESS.
+    assert (
+        classify_liquidity_with_hysteresis(45.0, LiquidityLabel.MILD_STRESS)
+        is LiquidityLabel.MILD_STRESS
+    )
+    assert (
+        classify_liquidity_with_hysteresis(45.01, LiquidityLabel.MILD_STRESS)
+        is LiquidityLabel.ELEVATED_STRESS
+    )
+    # Downward transition: ELEVATED_STRESS → NORMAL when the score
+    # drops strictly below ELEVATED's enter threshold (40). The
+    # intermediate MILD_STRESS is skipped because the sharp-bucket
+    # re-classify maps 18 → NORMAL.
+    assert (
+        classify_liquidity_with_hysteresis(18.0, LiquidityLabel.ELEVATED_STRESS)
+        is LiquidityLabel.NORMAL
+    )
     # CRISIS_LIQUIDITY → SEVERE_STRESS when score drops below 80.
-    assert classify_liquidity_with_hysteresis(75.0, LiquidityLabel.CRISIS_LIQUIDITY) is LiquidityLabel.SEVERE_STRESS
+    assert (
+        classify_liquidity_with_hysteresis(75.0, LiquidityLabel.CRISIS_LIQUIDITY)
+        is LiquidityLabel.SEVERE_STRESS
+    )
 
 
 def test_hysteresis_applied_to_credit_regime_too() -> None:
@@ -121,10 +155,22 @@ def test_hysteresis_applied_to_credit_regime_too() -> None:
     # RISK_ON_COMPRESSION band is (None, 25); sticky up to 25.
     assert classify_credit_with_hysteresis(22.0, RegimeLabel.RISK_ON_COMPRESSION) is RegimeLabel.RISK_ON_COMPRESSION
     # WATCH_TRANSITION band is (40, 65); a previous WATCH stays WATCH
-    # at a sharp-bucket NORMAL_LIQUIDITY-ish 44.
-    assert classify_credit_with_hysteresis(44.0, RegimeLabel.WATCH_TRANSITION) is RegimeLabel.WATCH_TRANSITION
+    # at a sharp-bucket NORMAL_LIQUIDITY-ish 44 AND at the 65 edge.
     assert (
-        classify_credit_with_hysteresis(65.0, RegimeLabel.WATCH_TRANSITION) is RegimeLabel.RISK_OFF_HIGH_RISK_AVERSION
+        classify_credit_with_hysteresis(44.0, RegimeLabel.WATCH_TRANSITION)
+        is RegimeLabel.WATCH_TRANSITION
+    )
+    # v1.6.0 F3: closed [enter, exit] convention — score = 65 is the
+    # edge, stays WATCH (was: flipped under the old half-open).
+    assert (
+        classify_credit_with_hysteresis(65.0, RegimeLabel.WATCH_TRANSITION)
+        is RegimeLabel.WATCH_TRANSITION
+    )
+    # 65.01 is strictly past the exit → sharp bucket maps to
+    # RISK_OFF_HIGH_RISK_AVERSION.
+    assert (
+        classify_credit_with_hysteresis(65.01, RegimeLabel.WATCH_TRANSITION)
+        is RegimeLabel.RISK_OFF_HIGH_RISK_AVERSION
     )
     # CRISIS_SEVERE_DISLOCATION → drop below 80 transitions out.
     assert (
@@ -165,3 +211,32 @@ def test_hysteresis_bands_credit_cover_all_labels() -> None:
 def test_hysteresis_bands_liquidity_cover_all_labels() -> None:
     """Defence-in-depth: every liquidity label has an entry in the band table."""
     assert set(HYSTERESIS_BANDS_LIQUIDITY) == set(LiquidityLabel)
+
+def test_hysteresis_no_oscillation_at_exact_boundary() -> None:
+    """v1.6.0 regression test (REVIEW_DEEP_V1_5_2.md F3 /
+    Finding §3.9): repeated calls with the same exact-boundary
+    score must not oscillate the label across ticks.
+
+    Property: for any band ``(enter, exit)`` and any boundary score
+    ``s in {enter, exit}`` (when not None), starting in the band
+    and feeding the boundary score N times must return the same
+    label on every iteration.
+    """
+    # NORMAL band (None, 25) — upper-edge oscillation at score = 25.
+    label: LiquidityLabel = LiquidityLabel.NORMAL
+    for _ in range(20):
+        new = classify_liquidity_with_hysteresis(25.0, label)
+        assert new is label, f"NORMAL oscillated at score=25 -> {new}"
+        label = new
+    # MILD_STRESS band (20, 45) — both upper and lower edges.
+    label = LiquidityLabel.MILD_STRESS
+    for _ in range(20):
+        new = classify_liquidity_with_hysteresis(45.0, label)
+        assert new is label, f"MILD_STRESS oscillated at score=45 -> {new}"
+        label = new
+    label = LiquidityLabel.MILD_STRESS
+    for _ in range(20):
+        new = classify_liquidity_with_hysteresis(20.0, label)
+        assert new is label, f"MILD_STRESS oscillated at score=20 -> {new}"
+        label = new
+
