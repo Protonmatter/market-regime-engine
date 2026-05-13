@@ -863,16 +863,28 @@ def build_execution_features(
         log.debug("bond_reference_asof lookup failed: %s", exc)
 
     # dealer_response_stats summary over the lookback window.
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md A7 / Finding §3.2): pushes the
+    # time-range filter into the SQL layer via the new
+    # ``Warehouse.read_dealer_response_stats(window_start, window_end)``
+    # method. The prior path reached through ``warehouse._backend``
+    # (private attribute) to issue ``SELECT *``, then filtered the
+    # whole table in pandas — O(N) in deployment age. The indexed
+    # read now scales with the requested lookback window only.
+    window_start_ts = decision_ts - pd.Timedelta(days=int(lookback_days))
     try:
-        dealer_stats = warehouse._backend.read_sql("SELECT * FROM dealer_response_stats")
+        dealer_stats = warehouse.read_dealer_response_stats(
+            window_start=window_start_ts, window_end=decision_ts
+        )
     except Exception:
         dealer_stats = None
     if dealer_stats is not None and not dealer_stats.empty:
-        window_start = decision_ts - pd.Timedelta(days=int(lookback_days))
         dealer_stats = dealer_stats.copy()
-        dealer_stats["window_end_ts"] = pd.to_datetime(dealer_stats["window_end"], utc=True, errors="coerce")
+        dealer_stats["window_end_ts"] = pd.to_datetime(
+            dealer_stats["window_end"], utc=True, errors="coerce"
+        )
         recent = dealer_stats.loc[
-            (dealer_stats["window_end_ts"] >= window_start) & (dealer_stats["window_end_ts"] <= decision_ts)
+            (dealer_stats["window_end_ts"] >= window_start_ts)
+            & (dealer_stats["window_end_ts"] <= decision_ts)
         ]
         if not recent.empty:
             requests_total = float(recent["requests"].fillna(0).sum())

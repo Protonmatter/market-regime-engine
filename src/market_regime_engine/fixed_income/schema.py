@@ -594,6 +594,16 @@ _FI_TABLES: tuple[TableSpec, ...] = (
         create_sql=_DEALER_RESPONSE_STATS_DUCKDB,
         sqlite_create_sql=_DEALER_RESPONSE_STATS_SQLITE,
         primary_key=("dealer_id", "window_start", "window_end"),
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md A7 / Finding §3.2): the
+        # ``read_dealer_response_stats(window_start, window_end)``
+        # method filters by ``window_end`` — leading column of the
+        # PK is ``dealer_id`` so the PK index cannot satisfy the
+        # WHERE clause. Add a secondary index keyed on the read
+        # pattern's leading column.
+        index_sql=(
+            "CREATE INDEX IF NOT EXISTS idx_dealer_response_stats_window_end "
+            "ON dealer_response_stats(window_end, dealer_id)",
+        ),
     ),
     TableSpec(
         name="curve_snapshots",
