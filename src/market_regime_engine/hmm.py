@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import overload
 
 import numpy as np
 import pandas as pd
@@ -143,7 +144,24 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return v / s
 
 
-def _logsumexp(a: np.ndarray, axis: int | None = None) -> np.ndarray:
+@overload
+def _logsumexp(a: np.ndarray, axis: None = None) -> float: ...
+
+
+@overload
+def _logsumexp(a: np.ndarray, axis: int) -> np.ndarray: ...
+
+
+def _logsumexp(a: np.ndarray, axis: int | None = None) -> float | np.ndarray:
+    """Numerically stable ``log(sum(exp(a)))``.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md §4.2): typed as overloaded so callers
+    that pass ``axis=None`` (the scalar branch) receive ``float`` and
+    callers that pass ``axis=int`` (the array branch) receive
+    ``np.ndarray``. Without the overloads the union return type leaks
+    into every consumer (Hamilton filter, Kim smoother) and triggers
+    cascading mypy ``return-value`` errors.
+    """
     if axis is None:
         a = np.asarray(a, dtype=float).ravel()
         m = float(np.max(a)) if a.size else float("-inf")

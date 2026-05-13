@@ -276,6 +276,22 @@ class _RedisTTLCache:
             return None
         if raw is None:
             return None
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md §4.2): redis-py's stubs declare
+        # ``Redis.get`` as returning ``Awaitable[Any] | Any`` because the
+        # same client class supports both sync and async modes. We
+        # constructed a sync client (``Redis.from_url`` without an
+        # async pool) so ``raw`` is always ``bytes`` at runtime, but
+        # narrow with an explicit ``isinstance`` so the type-checker
+        # can prove it and so a future regression to an async client
+        # surfaces here as a returned ``None`` rather than an obscure
+        # downstream ``TypeError`` inside ``_deserialize_cache_value``.
+        if not isinstance(raw, bytes):
+            log.warning(
+                "redis cache get returned non-bytes payload (type=%s); "
+                "ignoring entry. Did the client switch to async mode?",
+                type(raw).__name__,
+            )
+            return None
         try:
             return _deserialize_cache_value(raw)
         except Exception:  # pragma: no cover - corrupt entry

@@ -150,7 +150,12 @@ def replay_scenario(
     panel = monthly_panel(observations, forward_fill_limit=0)
     if panel.empty:
         return ScenarioResult(scenario=scenario, rows=0)
-    panel = panel.loc[scenario.start : scenario.end]
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md §4.2): pandas-stubs declares the
+    # slice positional arguments of ``DataFrame.loc[]`` as
+    # ``SupportsIndex``; raw ``str`` slices type-check as ``misc``.
+    # Coerce to ``pd.Timestamp`` (which IS hashable / SupportsIndex)
+    # without changing runtime semantics.
+    panel = panel.loc[pd.Timestamp(scenario.start) : pd.Timestamp(scenario.end)]
     if panel.empty:
         return ScenarioResult(scenario=scenario, rows=0)
     features = build_features(panel, catalog)

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import overload
 
 import numpy as np
 import pandas as pd
@@ -40,7 +41,22 @@ def _normalize(v: np.ndarray) -> np.ndarray:
     return v / s
 
 
-def _logsumexp(a: np.ndarray, axis: int | None = None) -> np.ndarray:
+@overload
+def _logsumexp(a: np.ndarray, axis: None = None) -> float: ...
+
+
+@overload
+def _logsumexp(a: np.ndarray, axis: int) -> np.ndarray: ...
+
+
+def _logsumexp(a: np.ndarray, axis: int | None = None) -> float | np.ndarray:
+    """Numerically stable ``log(sum(exp(a)))``.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md §4.2): overloaded return type mirrors
+    :func:`market_regime_engine.hmm._logsumexp` so the Hamilton filter
+    receives ``float`` for the scalar reduction and ``np.ndarray`` for
+    axis-wise reductions without leaking a union into the caller.
+    """
     m = np.max(a, axis=axis, keepdims=True) if axis is not None else np.max(a)
     safe_m = np.where(np.isfinite(m), m, 0.0)
     out = safe_m + np.log(np.sum(np.exp(a - safe_m), axis=axis, keepdims=True))
