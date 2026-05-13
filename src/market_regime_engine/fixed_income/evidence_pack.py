@@ -337,8 +337,24 @@ def latest_hmac_version() -> str | None:
 
 
 def require_production_hmac() -> bool:
-    """Returns True if ``MRE_ENV=production`` or ``MRE_FI_REQUIRE_HMAC=1``."""
-    if os.environ.get(_REQUIRE_HMAC_ENV) == "1":
+    """Returns True iff production-mode HMAC enforcement is on.
+
+    Production mode is signalled by EITHER
+
+    1. ``MRE_ENV=production`` (case-insensitive), OR
+    2. ``MRE_FI_REQUIRE_HMAC`` set to any truthy string.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F5 / Finding §3.11): the v1.5.x
+    check used exact ``=='1'`` matching for ``MRE_FI_REQUIRE_HMAC``
+    which was inconsistent with the rest of the codebase’s
+    ``rate_limit_enabled()`` style — an operator who set
+    ``MRE_FI_REQUIRE_HMAC=true`` (natural-language truthy) would
+    silently disable HMAC enforcement. The matcher now accepts
+    the same ``{"1", "true", "yes", "on"}`` truthy set
+    (case-insensitive, whitespace-stripped) as ``rate_limit_enabled``.
+    """
+    raw = os.environ.get(_REQUIRE_HMAC_ENV, "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
         return True
     return os.environ.get(_ENV_NAME_ENV, "").lower() == "production"
 
