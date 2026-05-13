@@ -16,11 +16,89 @@ strings used in the report writer and Streamlit dashboard.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
 import pandas as pd
+
+
+class _ReadOnlyMetadata(dict):
+    """``dict`` subclass that raises on mutation.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F2 / Finding §3.15): the
+    dataclasses below carry ``metadata: dict[str, Any]`` and are
+    declared ``frozen=True``. ``frozen=True`` only prevents field
+    *reassignment*; ``output.metadata['x'] = 1`` still mutated the
+    underlying dict and could corrupt the audit trail of a
+    canonical evidence pack (the metadata
+    dict is part of the hashed canonical JSON).
+
+    This subclass overrides every mutating method to raise
+    :class:`TypeError`, while inheriting from :class:`dict` so
+    :func:`dataclasses.asdict`, :func:`json.dumps`,
+    :func:`copy.deepcopy`, and the rest of the standard-library
+    tooling all keep working unchanged. The deep-review spec
+    suggested :class:`types.MappingProxyType` — a dict-subclass
+    is functionally equivalent for the immutability contract,
+    composes cleanly with :func:`dataclasses.asdict` (which
+    short-circuits on non-dict mappings), and avoids an extra
+    coercion step in every ``output_to_dict`` call site.
+    """
+
+    _frozen_msg = (
+        "metadata is read-only after construction "
+        "(REVIEW_DEEP_V1_5_2.md F2). Build a new dataclass "
+        "with the desired metadata instead."
+    )
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        raise TypeError(self._frozen_msg)
+
+    def __delitem__(self, key: Any) -> None:
+        raise TypeError(self._frozen_msg)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+        raise TypeError(self._frozen_msg)
+
+    def pop(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        raise TypeError(self._frozen_msg)
+
+    def popitem(self) -> Any:  # type: ignore[override]
+        raise TypeError(self._frozen_msg)
+
+    def clear(self) -> None:  # type: ignore[override]
+        raise TypeError(self._frozen_msg)
+
+    def setdefault(  # type: ignore[override]
+        self, key: Any, default: Any = None
+    ) -> Any:
+        raise TypeError(self._frozen_msg)
+
+    def __copy__(self) -> dict[Any, Any]:
+        # Plain shallow-copy returns a regular mutable dict so the
+        # API layer's ``out['metadata'].setdefault(...)`` and
+        # similar post-``dataclasses.asdict`` operations stay
+        # ergonomic. The immutability contract applies to the
+        # dataclass instance only.
+        return dict(self)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> dict[Any, Any]:
+        import copy as _copy
+
+        return {k: _copy.deepcopy(v, memo) for k, v in self.items()}
+
+
+def _freeze_metadata(obj: object) -> None:
+    """Wrap ``obj.metadata`` in :class:`_ReadOnlyMetadata`."""
+    raw = getattr(obj, "metadata", None)
+    if raw is None:
+        object.__setattr__(obj, "metadata", _ReadOnlyMetadata())
+        return
+    if isinstance(raw, _ReadOnlyMetadata):
+        return
+    object.__setattr__(obj, "metadata", _ReadOnlyMetadata(raw))
 
 # ---------------------------------------------------------------------------
 # Label enums
@@ -207,7 +285,14 @@ class CreditRegimeOutput:
     model_run_id: str
     release_gate: bool
     artifact_hash: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md F2 / Finding §3.15):
+        # wrap caller-supplied metadata in a read-only view so
+        # the frozen-dataclass immutability contract extends
+        # to the dict's contents, not just the field binding.
+        _freeze_metadata(self)
 
 
 @dataclass(frozen=True)
@@ -224,7 +309,14 @@ class LiquidityStressOutput:
     model_run_id: str
     release_gate: bool
     artifact_hash: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md F2 / Finding §3.15):
+        # wrap caller-supplied metadata in a read-only view so
+        # the frozen-dataclass immutability contract extends
+        # to the dict's contents, not just the field binding.
+        _freeze_metadata(self)
 
 
 @dataclass(frozen=True)
@@ -248,7 +340,14 @@ class ExecutionConfidenceRequest:
     rating: str | None = None
     maturity_bucket: str | None = None
     client_request_id: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md F2 / Finding §3.15):
+        # wrap caller-supplied metadata in a read-only view so
+        # the frozen-dataclass immutability contract extends
+        # to the dict's contents, not just the field binding.
+        _freeze_metadata(self)
 
 
 @dataclass(frozen=True)
@@ -269,7 +368,14 @@ class ExecutionConfidenceResponse:
     model_run_id: str
     release_gate: bool
     artifact_hash: str
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md F2 / Finding §3.15):
+        # wrap caller-supplied metadata in a read-only view so
+        # the frozen-dataclass immutability contract extends
+        # to the dict's contents, not just the field binding.
+        _freeze_metadata(self)
 
 
 @dataclass(frozen=True)
@@ -394,7 +500,14 @@ class FixedIncomeEvidencePack:
     python_version: str
     lockfile_hash: str | None
     hmac_signature: str | None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md F2 / Finding §3.15):
+        # wrap caller-supplied metadata in a read-only view so
+        # the frozen-dataclass immutability contract extends
+        # to the dict's contents, not just the field binding.
+        _freeze_metadata(self)
     request_id: str | None = None
 
 
