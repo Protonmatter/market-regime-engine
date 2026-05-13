@@ -18,6 +18,7 @@ Public API mirrors :class:`market_regime_engine.bocpd_muse.BOCPDMuse`:
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ import numpy as np
 import pandas as pd
 
 from market_regime_engine.frontier.data_cleaning import NanPolicy, clean_with_policy
+
+_gp_log = logging.getLogger(__name__)
 
 
 def _logsumexp(arr: np.ndarray) -> float:
@@ -185,6 +188,23 @@ class GPBOCPD:
     on the panel before applying it. This keeps the
     operator one-liner ``GPBOCPD(auto_train_deep_kernel=True).score(panel)``
     working without manually constructing the kernel.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md A16 / Finding #18) hardening:
+
+    - ``reset_kernel_per_panel`` (default ``True``): when an
+      auto-trained deep kernel was fit on panel A and ``.score`` is
+      then invoked on panel B, reset the kernel before fitting on B.
+      Eliminates the silent reuse bug where panel A's embedding was
+      applied to panel B (heterogeneous panels).
+    - Auto-train deep-kernel mode is documented as
+      **retrospective-only** because the embedding is fit on the
+      ENTIRE panel before the BOCPD walk-forward — every detected
+      change-point benefits from kernel weights that saw observations
+      after it. A causal=True per-step refit is the principled fix
+      and is marked as a v1.7.0 TODO.
+    - The deep-kernel transform no longer silently swallows
+      exceptions via ``contextlib.suppress``; failures log a warning
+      and re-raise, so the operator sees that the kernel never fired.
     """
 
     hazard: float = 1.0 / 48.0
@@ -194,6 +214,8 @@ class GPBOCPD:
     auto_train_deep_kernel: bool = False
     deep_kernel_hidden_dims: tuple[int, ...] = (64, 32)
     deep_kernel_epochs: int = 50
+    reset_kernel_per_panel: bool = True
+    causal: bool = False  # TODO(v1.7.0): per-step kernel refit for causal mode.
 
     def score(
         self,
@@ -218,8 +240,24 @@ class GPBOCPD:
                     "predictive_log_likelihood",
                 ]
             )
-        frame = clean_with_policy(x, default_policy=nan_policy, column_policies=column_policies).astype(float)
+        frame = clean_with_policy(
+            x, default_policy=nan_policy, column_policies=column_policies
+        ).astype(float)
         arr = frame.to_numpy(float)
+        if self.causal:  # pragma: no cover - v1.7.0 TODO
+            raise NotImplementedError(
+                "causal=True per-step kernel refit not yet implemented "
+                "(REVIEW_DEEP_V1_5_2.md A16 / v1.7.0 TODO). Set causal=False "
+                "and document downstream uses as retrospective-only."
+            )
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md A16 / Finding #18): when
+        # ``reset_kernel_per_panel`` is True and the kernel was previously
+        # auto-trained, drop it so the next .score call refits on the new
+        # panel. Without this reset, a kernel trained on panel A is
+        # silently reused on panel B (heterogeneous panels) and downstream
+        # consumers cannot tell.
+        if self.reset_kernel_per_panel and self.auto_train_deep_kernel:
+            self.deep_kernel = None
         # v1.4: lazily build the deep-kernel adapter when auto-training
         # is requested. We construct on first ``score`` so the fit sees
         # the operator's actual panel rather than a synthetic seed.
@@ -227,6 +265,14 @@ class GPBOCPD:
             try:
                 from market_regime_engine.frontier.deep_kernel import make_auto_train_kernel
 
+                # Auto-train uses the entire panel; flag the look-ahead
+                # explicitly so downstream operators do not silently
+                # mistake this for a causal nowcasting setup.
+                _gp_log.warning(
+                    "GPBOCPD auto-trained deep kernel uses the ENTIRE panel "
+                    "before the BOCPD walk; treat outputs as RETROSPECTIVE "
+                    "only. Set causal=True (v1.7.0 TODO) for online use."
+                )
                 self.deep_kernel = make_auto_train_kernel(
                     frame,
                     hidden_dims=self.deep_kernel_hidden_dims,
@@ -237,13 +283,27 @@ class GPBOCPD:
                 # opted into a deep kernel but torch is not available.
                 self.deep_kernel = None
         if self.deep_kernel is not None:
-            import contextlib
-
-            with contextlib.suppress(Exception):
+            # v1.6.0 (REVIEW_DEEP_V1_5_2.md A16 / Finding #18): no longer
+            # silently suppress failures; surface to the operator so the
+            # kernel-fired vs RBF-fallback path is auditable.
+            try:
                 arr = np.asarray(self.deep_kernel(arr), dtype=float)
+            except Exception as exc:
+                _gp_log.warning(
+                    "GPBOCPD deep_kernel transform failed (%s); "
+                    "falling back to raw features. This used to silently "
+                    "no-op via contextlib.suppress; now logged.",
+                    exc,
+                )
+                # Re-raise so the failure is visible; callers that want
+                # the previous silent-fallback behaviour must wrap the
+                # call in their own try/except.
+                raise
         ls = _median_heuristic_lengthscale(arr)
         d = int(arr.shape[1]) if arr.ndim > 1 else 1
-        runs: list[_GPRun] = [_GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)]
+        runs: list[_GPRun] = [
+            _GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)
+        ]
         log_joint = np.array([0.0], dtype=float)
         h = float(self.hazard)
         log_h = math.log(max(h, self.min_prob))
@@ -267,9 +327,9 @@ class GPBOCPD:
             mean_run = float(np.sum(run_lengths * probs))
             map_run = int(np.argmax(probs))
             ll = float(_logsumexp(log_joint + pred_logs))
-            new_runs = [_GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)] + [
-                r.update(xt) for r in runs[: self.max_run]
-            ]
+            new_runs = [
+                _GPRun(max_run=self.max_run, d=d, length_scale=ls, noise_var=0.1, signal_var=1.0)
+            ] + [r.update(xt) for r in runs[: self.max_run]]
             new_runs = new_runs[: len(probs)]
             log_joint = np.log(np.maximum(probs, self.min_prob))
             runs = new_runs
