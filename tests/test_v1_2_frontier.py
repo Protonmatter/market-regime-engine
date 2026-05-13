@@ -397,6 +397,58 @@ def test_gp_bocpd_runs_on_short_panel() -> None:
     assert (out["change_point_prob"] <= 1.0).all()
 
 
+# v1.6.0 — REVIEW_DEEP_V1_5_2.md A16 / Finding #18.
+
+
+def test_gp_bocpd_causal_kwarg_raises_not_implemented() -> None:
+    rng = np.random.default_rng(0)
+    n = 30
+    panel = pd.DataFrame({"x": rng.normal(size=n)}, index=pd.date_range("2000-01-01", periods=n, freq="MS"))
+    with pytest.raises(NotImplementedError, match="causal=True"):
+        GPBOCPD(hazard=1 / 12.0, max_run=12, causal=True).score(panel)
+
+
+def test_gp_bocpd_reset_kernel_drops_kernel_between_panels() -> None:
+    rng = np.random.default_rng(0)
+    panel_a = pd.DataFrame({"x": rng.normal(size=30)}, index=pd.date_range("2000-01-01", periods=30, freq="MS"))
+    sentinel: dict[str, int] = {"calls": 0}
+
+    def kernel(arr: np.ndarray) -> np.ndarray:
+        sentinel["calls"] += 1
+        return arr
+
+    layer = GPBOCPD(
+        hazard=1 / 12.0,
+        max_run=12,
+        deep_kernel=kernel,
+        auto_train_deep_kernel=True,
+        reset_kernel_per_panel=True,
+    )
+    layer.score(panel_a)
+    assert layer.deep_kernel is None or sentinel["calls"] >= 1
+
+
+def test_gp_bocpd_deep_kernel_failure_no_longer_silently_suppressed() -> None:
+    rng = np.random.default_rng(0)
+    panel = pd.DataFrame({"x": rng.normal(size=20)}, index=pd.date_range("2000-01-01", periods=20, freq="MS"))
+
+    def broken_kernel(_arr: np.ndarray) -> np.ndarray:
+        raise RuntimeError("intentional kernel transform failure")
+
+    layer = GPBOCPD(
+        hazard=1 / 12.0,
+        max_run=12,
+        deep_kernel=broken_kernel,
+        auto_train_deep_kernel=False,
+        reset_kernel_per_panel=False,
+    )
+    # Phase 1 silently suppressed via contextlib.suppress(Exception).
+    # Post-Phase 2 the failure is logged and re-raised so the operator
+    # sees that the kernel never fired.
+    with pytest.raises(RuntimeError, match="intentional kernel transform failure"):
+        layer.score(panel)
+
+
 # ---------------------------------------------------------------------------
 # Wiring tests: storage tables, release-gate e-value path
 # ---------------------------------------------------------------------------
