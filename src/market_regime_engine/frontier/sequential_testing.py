@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+
 """Sequential / anytime-valid testing primitives.
 
 Two anytime-valid e-value primitives ship here, both selected for the v1.2
@@ -133,10 +134,24 @@ class SafeTestPromotion:
         alpha: float = 0.05,
         eta: float | None = None,
     ) -> dict:
-        """Convenience: run the gate over two batches of losses and return the final status."""
+        """Convenience: run the gate over two batches of losses and return the final status.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md F13 / Finding §1.14): the prior
+        ``zip(..., strict=False)`` silently truncated to the shorter
+        series and never surfaced misalignment. The new ``strict=True``
+        raises :class:`ValueError` so length mismatches are visible to
+        the operator. Callers that need the previous "stop at the
+        shorter series" semantics must pre-truncate both series to the
+        same length.
+        """
+        if len(challenger_losses) != len(champion_losses):
+            raise ValueError(
+                f"challenger_losses and champion_losses must have equal length; "
+                f"got {len(challenger_losses)} vs {len(champion_losses)}."
+            )
         gate = cls(alpha=alpha, eta=eta)
         last: dict[str, object] = {}
-        for la, lb in zip(challenger_losses, champion_losses, strict=False):
+        for la, lb in zip(challenger_losses, champion_losses, strict=True):
             last = gate.update(float(la), float(lb))
         last.setdefault("e_value", float(gate.e_value))
         last.setdefault("fired", bool(gate.fired))

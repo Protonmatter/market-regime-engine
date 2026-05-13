@@ -433,6 +433,18 @@ def test_safe_test_promotion_fires_monotonically() -> None:
     assert out["fired_at_n"] is not None and out["fired_at_n"] > 0
 
 
+def test_safe_test_promotion_run_raises_on_length_mismatch() -> None:
+    """REVIEW_DEEP_V1_5_2.md F13 / §1.14: the prior ``strict=False`` zip
+    silently truncated to the shorter sequence. The v1.6.0 contract is
+    ``strict=True``: length mismatches must surface as ValueError so the
+    operator can see (and fix) them.
+    """
+    chal = [0.2, 0.3, 0.4]
+    champ = [0.5, 0.6]
+    with pytest.raises(ValueError, match="must have equal length"):
+        SafeTestPromotion.run(chal, champ, alpha=0.05)
+
+
 # ---------------------------------------------------------------------------
 # §F CRPS-DM (Diks-Panchenko-van Dijk 2011)
 # ---------------------------------------------------------------------------
