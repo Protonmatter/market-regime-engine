@@ -229,6 +229,55 @@ class ExecutionConfidenceRequestModel(BaseModel):
             raise ValueError(f"cusip must be alphanumeric: {v!r}")
         return v.upper()
 
+    @field_validator("metadata")
+    @classmethod
+    def _metadata_size_and_depth(
+        cls, v: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Cap metadata payload at 8 KiB canonical-JSON / depth 5.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md F9 / Finding §3.13): the
+        v1.5.x contract was unbounded. Production metadata stays
+        well below 1 KB so the 8192-byte canonical-JSON cap and
+        depth-5 nesting cap reject pathological payloads (deeply
+        nested dicts, MBs of free-form blobs) that would otherwise
+        inflate every downstream canonical-JSON / artifact-hash
+        computation. The body-size middleware already caps the
+        full request body at 32 KB; this validator narrows the
+        contract to metadata specifically.
+        """
+        if v is None:
+            return v
+        import json as _json
+
+        try:
+            encoded = _json.dumps(v, sort_keys=True, default=str)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"metadata must be JSON-serialisable: {exc}"
+            ) from exc
+        if len(encoded) > 8192:
+            raise ValueError(
+                f"metadata too large: {len(encoded)} bytes > 8192 byte cap"
+            )
+
+        def _depth(obj: Any, current: int = 0) -> int:
+            if current > 5:
+                return current
+            if isinstance(obj, dict):
+                if not obj:
+                    return current + 1
+                return max(_depth(val, current + 1) for val in obj.values())
+            if isinstance(obj, list):
+                if not obj:
+                    return current + 1
+                return max(_depth(val, current + 1) for val in obj)
+            return current + 1
+
+        if _depth(v) > 5:
+            raise ValueError("metadata nesting depth exceeds 5 levels")
+        return v
+
     def to_dataclass(self) -> ExecutionConfidenceRequest:
         """Project the Pydantic model onto the internal dataclass."""
         return ExecutionConfidenceRequest(

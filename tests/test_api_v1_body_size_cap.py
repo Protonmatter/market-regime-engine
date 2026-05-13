@@ -100,7 +100,10 @@ def test_endpoint_rejects_oversized_body_with_413(client) -> None:
 
 
 def test_endpoint_accepts_body_just_under_cap(client) -> None:
-    # 20 KB metadata is well under the cap and must succeed.
+    """v1.6.0 (REVIEW_DEEP_V1_5_2.md F9 / Finding §3.13):
+    metadata is now capped at 8192 bytes (canonical-JSON-encoded).
+    Send 4 KB metadata which is well under both the metadata cap
+    (8 KB) and the body cap (32 KB)."""
     payload = {
         "timestamp": "2026-05-01T16:00:30Z",
         "cusip": "00206RGB6",
@@ -109,7 +112,49 @@ def test_endpoint_accepts_body_just_under_cap(client) -> None:
         "protocol": "Auto-X",
         "urgency": "normal",
         "request_id": "req-under-cap",
-        "metadata": {"blob": "y" * (20 * 1024)},
+        "metadata": {"blob": "y" * 4096},
     }
     resp = client.post("/v1/execution_confidence", json=payload)
     assert resp.status_code == 200, resp.text
+
+
+def test_endpoint_rejects_metadata_above_8kb(client) -> None:
+    """v1.6.0 (REVIEW_DEEP_V1_5_2.md F9 / Finding §3.13):
+    metadata must pass the 8192-byte cap. The full body is still
+    under the 32 KB body cap, so the rejection must come from the
+    Pydantic metadata validator (422) rather than the body-size
+    middleware (413)."""
+    payload = {
+        "timestamp": "2026-05-01T16:00:30Z",
+        "cusip": "00206RGB6",
+        "side": "buy",
+        "notional": 1_000_000,
+        "protocol": "Auto-X",
+        "urgency": "normal",
+        "request_id": "req-large-metadata",
+        "metadata": {"blob": "y" * (10 * 1024)},
+    }
+    resp = client.post("/v1/execution_confidence", json=payload)
+    assert resp.status_code == 422, resp.text
+    assert "metadata too large" in resp.text
+
+
+def test_endpoint_rejects_deeply_nested_metadata(client) -> None:
+    """v1.6.0 F9: nesting depth > 5 must be rejected by the
+    validator."""
+    nested: dict = {"v": 1}
+    for _ in range(7):
+        nested = {"k": nested}
+    payload = {
+        "timestamp": "2026-05-01T16:00:30Z",
+        "cusip": "00206RGB6",
+        "side": "buy",
+        "notional": 1_000_000,
+        "protocol": "Auto-X",
+        "urgency": "normal",
+        "request_id": "req-deep-metadata",
+        "metadata": nested,
+    }
+    resp = client.post("/v1/execution_confidence", json=payload)
+    assert resp.status_code == 422, resp.text
+    assert "depth" in resp.text.lower()
