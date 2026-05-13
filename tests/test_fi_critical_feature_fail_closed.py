@@ -114,7 +114,10 @@ def test_credit_fail_closed_when_bond_spread_missing(policy: NanPolicy) -> None:
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.regime_label == "UNCERTAIN"
-    assert CriticalFeature.CREDIT_BOND_SPREAD.value in out.metadata["critical_features_missing"]
+    assert (
+        CriticalFeature.CREDIT_BOND_SPREAD.value
+        in out.metadata["critical_features_missing"]
+    )
     assert out.metadata["critical_features_fail_closed"] is True
 
 
@@ -135,7 +138,10 @@ def test_credit_fail_closed_when_cds_basis_missing(policy: NanPolicy) -> None:
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.regime_label == "UNCERTAIN"
-    assert CriticalFeature.CREDIT_CDS_BASIS.value in out.metadata["critical_features_missing"]
+    assert (
+        CriticalFeature.CREDIT_CDS_BASIS.value
+        in out.metadata["critical_features_missing"]
+    )
 
 
 def test_credit_optional_feature_missing_does_not_trigger_critical_gate() -> None:
@@ -225,7 +231,10 @@ def test_liquidity_fail_closed_when_bidask_missing(policy: NanPolicy) -> None:
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.liquidity_label == "NO_DECISION"
-    assert CriticalFeature.LIQUIDITY_BIDASK.value in out.metadata["critical_features_missing"]
+    assert (
+        CriticalFeature.LIQUIDITY_BIDASK.value
+        in out.metadata["critical_features_missing"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -245,7 +254,10 @@ def test_liquidity_fail_closed_when_rfq_response_missing(policy: NanPolicy) -> N
     assert out.release_gate is False
     assert out.confidence <= 0.5
     assert out.liquidity_label == "NO_DECISION"
-    assert CriticalFeature.LIQUIDITY_RFQ_RESPONSE.value in out.metadata["critical_features_missing"]
+    assert (
+        CriticalFeature.LIQUIDITY_RFQ_RESPONSE.value
+        in out.metadata["critical_features_missing"]
+    )
 
 
 def test_liquidity_full_input_passes_critical_audit() -> None:
@@ -298,3 +310,69 @@ def test_audit_helper_handles_all_nan_column() -> None:
     audit = evaluate_critical_features(frame, contract=CREDIT_CRITICAL_COLUMNS)
     assert CriticalFeature.CREDIT_BOND_SPREAD in audit.missing
     assert CriticalFeature.CREDIT_CDS_BASIS not in audit.missing
+
+
+# ---------------------------------------------------------------------------
+# v1.6.0 regime_score / liquidity_index reset on fail-closed override
+# (REVIEW_DEEP_V1_5_2.md A11 / Finding #11)
+# ---------------------------------------------------------------------------
+
+
+def test_credit_fail_closed_resets_regime_score_to_neutral() -> None:
+    """REVIEW_DEEP_V1_5_2.md A11: when ``critical_audit.fail_closed`` flips
+    the gate and label, the numeric ``regime_score`` must also be reset to
+    50.0 (neutral midpoint). Otherwise downstream consumers see an
+    inconsistent state of e.g. score=85 paired with label='UNCERTAIN'."""
+    asof = pd.Timestamp("2026-01-02 18:00", tz="UTC")
+    # Construct a credit panel where the bond-spread proxy is missing
+    # (forcing fail-closed) but the OTHER components would compose to a
+    # high score (so the un-fixed code would emit score >> 50 with the
+    # UNCERTAIN label).
+    rows = []
+    feature_names_keep = ("ust_slope", "ust_curvature", "cdx_hy_5y", "move", "vix")
+    for fname in feature_names_keep:
+        for offset in range(5):
+            rows.append(
+                _credit_feature_row(
+                    feature_name=fname,
+                    value=100.0 + offset,
+                    date=asof - pd.Timedelta(days=offset),
+                )
+            )
+    features = pd.DataFrame(rows)
+    features.attrs["nan_policy"] = NanPolicy.NAN_TO_LAST_VALID.value
+    out = score_credit_regime(features, asof=asof)
+    assert out.regime_label == "UNCERTAIN"
+    assert out.release_gate is False
+    # Critical fix: score must equal the neutral midpoint, not the
+    # composite of partially-imputed components.
+    assert out.regime_score == 50.0, (
+        f"regime_score={out.regime_score} should be reset to neutral 50.0 on fail_closed"
+    )
+
+
+def test_liquidity_fail_closed_resets_index_to_neutral() -> None:
+    """REVIEW_DEEP_V1_5_2.md A11: same reset must apply to the liquidity
+    scorer's ``liquidity_index``."""
+    asof = pd.Timestamp("2026-01-02 18:00", tz="UTC")
+    rows = []
+    feature_names_keep = ("trade_count_velocity", "volume_over_adv", "dealer_response_count")
+    for fname in feature_names_keep:
+        for offset in range(5):
+            rows.append(
+                _liquidity_feature_row(
+                    feature_name=fname,
+                    value=0.95,
+                    date=asof - pd.Timedelta(days=offset),
+                )
+            )
+    features = pd.DataFrame(rows)
+    features.attrs["nan_policy"] = NanPolicy.NAN_TO_LAST_VALID.value
+    out = score_liquidity_stress(
+        features, scope_type="cusip", scope_id="037833100", asof=asof
+    )
+    assert out.liquidity_label == "NO_DECISION"
+    assert out.release_gate is False
+    assert out.liquidity_index == 50.0, (
+        f"liquidity_index={out.liquidity_index} should be reset to neutral 50.0 on fail_closed"
+    )

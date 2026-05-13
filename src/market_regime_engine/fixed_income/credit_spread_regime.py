@@ -520,10 +520,20 @@ def score_credit_regime(
         gate = False
         confidence = min(confidence, 0.5)
         regime_label = CRITICAL_LABEL_CREDIT
+        # v1.6.0 fail-closed consistency fix (REVIEW_DEEP_V1_5_2.md A11 /
+        # Finding #11): also reset the numeric ``regime_score`` to the
+        # neutral midpoint so downstream consumers (TCA segmentation soft
+        # weights, dashboards, audit reports) cannot present an
+        # internally inconsistent state of e.g. score=85 paired with
+        # label="UNCERTAIN". The numeric score and the categorical label
+        # must agree on the "we don't know" verdict.
+        regime_score = float(_NEUTRAL_SCORE)
         log.warning(
-            "credit regime critical-feature contract violated: missing=%r; flipping release_gate=False, label=%r",
+            "credit regime critical-feature contract violated: missing=%r; "
+            "flipping release_gate=False, label=%r, regime_score=%.1f (neutral)",
             [feature.value for feature in critical_audit.missing],
             CRITICAL_LABEL_CREDIT,
+            regime_score,
         )
 
     metadata: dict[str, Any] = {

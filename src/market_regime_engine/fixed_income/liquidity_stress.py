@@ -611,10 +611,18 @@ def score_liquidity_stress(
         gate = False
         confidence = min(confidence, 0.5)
         liquidity_label = CRITICAL_LABEL_LIQUIDITY
+        # v1.6.0 fail-closed consistency fix (REVIEW_DEEP_V1_5_2.md A11 /
+        # Finding #11): also reset the numeric ``liquidity_index`` to the
+        # neutral midpoint so downstream consumers cannot present an
+        # internally inconsistent state of e.g. index=85 paired with
+        # label="UNCERTAIN".
+        liquidity_index = float(_NEUTRAL_SCORE)
         log.warning(
-            "liquidity stress critical-feature contract violated: missing=%r; flipping release_gate=False, label=%r",
+            "liquidity stress critical-feature contract violated: missing=%r; "
+            "flipping release_gate=False, label=%r, liquidity_index=%.1f (neutral)",
             [feature.value for feature in critical_audit.missing],
             CRITICAL_LABEL_LIQUIDITY,
+            liquidity_index,
         )
 
     metadata: dict[str, Any] = {
