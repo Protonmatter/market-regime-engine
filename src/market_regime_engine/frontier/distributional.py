@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Distributional regression heads.
 
+
 Three production-ready distributional heads ship here:
 
 1. :class:`NGBoostHead` — Duan, Avati, Wang, Saxena, Schuler, Ng 2020
@@ -9,18 +10,22 @@ Three production-ready distributional heads ship here:
    is installed; soft-degrades to a per-row Gaussian fit when ngboost is
    missing.
 
-2. :class:`IsotonicDistributionalHead` — Henzi, Ziegel, Gneiting 2021
-   "Isotonic Distributional Regression" (JRSS-B 83:963-993). Pure numpy /
-   scikit-learn; treats the distributional regression as a stack of binary
-   isotonic regressions over thresholds and reads the calibrated CDF off
-   them. This is the *non-parametric* gold standard and beats most
-   parametric heads on calibration.
+2. :class:`IsotonicMarginalRegressor` — marginal isotonic regression on a
+   linear (1-D PCA) projection of the input features. NOT a faithful
+   multivariate IDR per Henzi-Ziegel-Gneiting 2021 (the PC projection
+   collapses the partial-order guarantee that IDR Theorem 2.4 requires);
+   renamed in v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.10 / Finding #7) to honestly
+   describe the implementation. ``IsotonicDistributionalHead`` remains as a
+   v1.5.x-compat alias; v1.7.0 will implement the true multivariate IDR.
 
-3. :class:`DeepStateSpaceHead` — Karl, Soelch, Bayer, van der Smagt 2017
-   "Deep Variational Bayes Filters" (ICLR 2017). When ``torch`` is
-   installed, fits a small latent state-space (default ``latent_dim=32``)
-   with neural transition + emission, trained by ELBO. Otherwise degrades to
-   :class:`NGBoostHead`.
+3. :class:`VariationalEncoderHead` — small encoder-decoder VAE with no
+   temporal latent recurrence. NOT a state-space head despite the v1.5.x
+   name (the latent ``z_t`` is drawn fresh at every forward pass; the
+   canonical Karl-Soelch DVBF maintains ``z_t`` across time with a
+   learned transition). Renamed in v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.10 /
+   Finding #7) for honesty; ``DeepStateSpaceHead`` remains as a
+   v1.5.x-compat alias; v1.7.0 will implement DVBF per Karl-Soelch et al.
+   2017 with proper latent recurrence.
 
 All three heads expose a ``fit / predict / predict_distribution`` contract
 that plugs straight into :class:`market_regime_engine.bma.OnlineBMA`'s
@@ -163,18 +168,30 @@ class NGBoostHead:
 
 
 @dataclass
-class IsotonicDistributionalHead:
-    """Henzi-Ziegel-Gneiting (2021) IDR.
+class IsotonicMarginalRegressor:
+    """Marginal isotonic regression on a 1-D PCA projection.
 
-    Trains a 1-D isotonic regression of ``P(Y <= y_k | X)`` against a single
-    scalar feature (the "rank" of ``X`` per the paper); for multivariate
-    ``X`` we project on the *first principal component* of the calibration
-    features to keep the head pure-numpy. The CDF at any threshold is then
-    read off the isotonic curve.
+    NOT faithful Henzi-Ziegel-Gneiting 2021 multivariate IDR: that
+    estimator's partial-order guarantee (Theorem 2.4) requires the
+    isotonic regression to operate on the multivariate ``X`` directly,
+    not on a 1-D linear projection. The PC-projection collapse here
+    destroys the multivariate ordering. Renamed in v1.6.0 from
+    ``IsotonicDistributionalHead`` per REVIEW_DEEP_V1_5_2.md §1.10 /
+    Finding #7. Backwards-compat alias preserved below.
 
-    For each test row we report the empirical CDF at a configurable grid of
-    quantile levels ``cdf_grid``. The default is ``np.linspace(0.05, 0.95,
-    19)`` which matches the typical 5%-95% interval reporting.
+    Trains a 1-D isotonic regression of ``P(Y <= y_k | X)`` against a
+    single scalar feature (the "rank" of ``X`` per the paper); for
+    multivariate ``X`` we project on the *first principal component* of
+    the calibration features to keep the head pure-numpy. The CDF at any
+    threshold is then read off the isotonic curve.
+
+    For each test row we report the empirical CDF at a configurable grid
+    of quantile levels ``cdf_grid``. The default is ``np.linspace(0.05,
+    0.95, 19)`` which matches the typical 5%-95% interval reporting.
+
+    TODO(v1.7.0): implement true multivariate IDR per
+    Henzi-Ziegel-Gneiting 2021 Theorem 2.4 (likely via partial-order
+    enumeration on the calibration set).
     """
 
     cdf_grid: np.ndarray = field(default_factory=lambda: np.linspace(0.05, 0.95, 19))
@@ -188,7 +205,7 @@ class IsotonicDistributionalHead:
             return X.mean(axis=1) if X.ndim == 2 else X.astype(float)
         return X @ self._projection
 
-    def fit(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.Series) -> IsotonicDistributionalHead:
+    def fit(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.Series) -> IsotonicMarginalRegressor:
         Xa = np.asarray(X, dtype=float) if not isinstance(X, pd.DataFrame) else X.to_numpy(float)
         ya = np.asarray(y, dtype=float)
         if Xa.ndim == 1:
@@ -265,13 +282,24 @@ class IsotonicDistributionalHead:
 
 
 @dataclass
-class DeepStateSpaceHead:
-    """Tiny deep state-space head with torch backend + soft-degrade.
+class VariationalEncoderHead:
+    """Tiny encoder-decoder VAE with no temporal latent recurrence.
 
-    The default torch backend is a 32-dim latent ``z_t`` with neural
-    transition (single linear layer + tanh) and emission (linear), trained
-    end-to-end by ELBO. When torch isn't available we transparently fall
-    back to :class:`NGBoostHead` so callers never need to branch.
+    NOT a state-space head: the latent ``z_t`` is drawn fresh at every
+    forward pass; the canonical Karl-Soelch DVBF (Karl-Soelch-Bayer-van
+    der Smagt 2017, ICLR 2017) maintains ``z_t`` across time with a
+    learned transition. Renamed in v1.6.0 from ``DeepStateSpaceHead``
+    per REVIEW_DEEP_V1_5_2.md §1.10 / Finding #7. Backwards-compat alias
+    preserved below.
+
+    The default torch backend is a 32-dim latent ``z`` with neural
+    transition (single linear layer + tanh) and emission (linear),
+    trained end-to-end by ELBO. When torch isn't available we
+    transparently fall back to :class:`NGBoostHead` so callers never
+    need to branch.
+
+    TODO(v1.7.0): implement DVBF per Karl-Soelch et al. 2017 with
+    explicit latent recurrence ``z_t = transition(z_{t-1}, u_t)``.
     """
 
     latent_dim: int = 32
@@ -290,7 +318,7 @@ class DeepStateSpaceHead:
             return None
         nn = torch.nn
 
-        class TinyDeepSSM(nn.Module):  # type: ignore[name-defined]
+        class TinyVAE(nn.Module):  # type: ignore[name-defined]
             def __init__(self, n_features: int, latent_dim: int) -> None:
                 super().__init__()
                 self.encoder = nn.Sequential(
@@ -315,9 +343,9 @@ class DeepStateSpaceHead:
                 y_mean = self.decoder_mean(z).squeeze(-1)
                 return y_mean, mu, logvar
 
-        return TinyDeepSSM(n_features, self.latent_dim)
+        return TinyVAE(n_features, self.latent_dim)
 
-    def fit(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.Series) -> DeepStateSpaceHead:
+    def fit(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.Series) -> VariationalEncoderHead:
         installed, torch = _torch_available()
         Xa = np.asarray(X, dtype=float) if not isinstance(X, pd.DataFrame) else X.to_numpy(float)
         ya = np.asarray(y, dtype=float)
@@ -394,4 +422,16 @@ class DeepStateSpaceHead:
         return []
 
 
-__all__ = ["DeepStateSpaceHead", "IsotonicDistributionalHead", "NGBoostHead"]
+# v1.5.x backwards-compat aliases. Tagged for removal in v1.7.0
+# alongside the proper IDR / DVBF implementations.
+IsotonicDistributionalHead = IsotonicMarginalRegressor
+DeepStateSpaceHead = VariationalEncoderHead
+
+
+__all__ = [
+    "DeepStateSpaceHead",
+    "IsotonicDistributionalHead",
+    "IsotonicMarginalRegressor",
+    "NGBoostHead",
+    "VariationalEncoderHead",
+]
