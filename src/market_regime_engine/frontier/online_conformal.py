@@ -1,5 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Online conformal calibration primitives for nonstationary time series."""
+
+"""Online conformal calibration primitives for nonstationary time series.
+
+v1.6.0 honest-naming refactor (REVIEW_DEEP_V1_5_2.md §1.9 / Findings #5,
+#23 — both classes had misleading names that overclaim the cited
+algorithm fidelity):
+
+- ``EnbPIInterval`` (v1.5.x) → :class:`EnsembleMeanSplitConformal`. The
+  shipped implementation is plain split conformal on the ensemble mean;
+  Xu-Xie 2021 EnbPI uses leave-one-out residuals from a bootstrap
+  ensemble (asymptotic conditional coverage under serial dependence).
+  The v1.5.x name is preserved as an alias.
+- ``StronglyAdaptiveACI`` (v1.5.x) → :class:`MultiplicativeWeightsACI`.
+  The shipped implementation uses a quadratic-loss surrogate, not the
+  log-loss multiplicative-weights expert update of Bhatt-Foster-Bobu-
+  Russell 2023 *Strongly adaptive online learning*. Functional but not
+  faithful; alias preserved.
+- ``AgACI`` (v1.5.x) — wraps :class:`MultiplicativeWeightsACI` with no
+  cross-stream aggregation, so it is not faithful Zaffran et al. 2022
+  AgACI either. Removed as a separate class; the alias points at the
+  underlying multiplicative-weights controller for v1.5.x compat.
+
+Faithful reimplementations of all three primitives are tracked as
+v1.7.0 TODOs.
+"""
 
 from __future__ import annotations
 
@@ -22,19 +46,28 @@ def _inflated_quantile(values: Sequence[float], alpha: float) -> float:
 
 
 @dataclass
-class EnbPIInterval:
-    """Ensemble batch prediction intervals via residual quantiles.
+class EnsembleMeanSplitConformal:
+    """Plain split conformal on the ensemble mean.
 
-    This is a lightweight EnbPI-style conformal wrapper. It expects one or more
-    base-model predictions and calibrates absolute residuals against realized
-    observations, then applies the residual quantile to future ensemble means.
+    NOT faithful Xu-Xie 2021 EnbPI: that estimator uses leave-one-out
+    residuals from a bootstrap ensemble and provides asymptotic
+    conditional coverage under serial dependence. This class instead
+    averages the ensemble columns into a single point prediction and
+    runs split conformal on the resulting residuals — marginal coverage
+    only, no serial-dependence guarantee.
+
+    Renamed in v1.6.0 from ``EnbPIInterval`` per
+    REVIEW_DEEP_V1_5_2.md §1.9 / Finding #5. The v1.5.x name is
+    preserved as a backwards-compat alias.
+
+    TODO(v1.7.0): implement true EnbPI per Xu-Xie 2021 (ICML).
     """
 
     alpha: float = 0.10
     residual_quantile: float = 0.0
     fitted_n: int = 0
 
-    def fit(self, predictions: pd.DataFrame, y: Sequence[float]) -> EnbPIInterval:
+    def fit(self, predictions: pd.DataFrame, y: Sequence[float]) -> EnsembleMeanSplitConformal:
         if predictions is None or predictions.empty:
             self.residual_quantile = float("inf")
             self.fitted_n = 0
@@ -64,8 +97,21 @@ class EnbPIInterval:
 
 
 @dataclass
-class StronglyAdaptiveACI:
-    """Strongly adaptive online conformal controller using expert gammas."""
+class MultiplicativeWeightsACI:
+    """Multiplicative-weights ACI controller with quadratic-loss surrogate.
+
+    NOT faithful Bhatt-Foster-Bobu-Russell 2023 *Strongly adaptive
+    online learning*: that estimator uses log-loss for the expert
+    update, not the absolute-error / quadratic surrogate used here. The
+    shipped implementation will converge slower (and to slightly
+    different alphas) than canonical SAOL.
+
+    Renamed in v1.6.0 from ``StronglyAdaptiveACI`` per
+    REVIEW_DEEP_V1_5_2.md §1.9 / Finding #23. The v1.5.x name is
+    preserved as a backwards-compat alias.
+
+    TODO(v1.7.0): switch the expert update to log-loss to match SAOL.
+    """
 
     alpha_target: float = 0.10
     gammas: tuple[float, ...] = (0.001, 0.005, 0.01, 0.05)
@@ -103,16 +149,22 @@ class StronglyAdaptiveACI:
         return pd.DataFrame(rows)
 
 
-@dataclass
-class AgACI:
-    """AgACI-style aggregation over several ACI controllers."""
+# v1.5.x backwards-compat aliases. Tagged for removal in v1.7.0
+# alongside faithful reimplementations.
+EnbPIInterval = EnsembleMeanSplitConformal
+StronglyAdaptiveACI = MultiplicativeWeightsACI
+# AgACI is NOT a separate class in v1.6.0 — it was a no-op wrapper that
+# delegated everything to StronglyAdaptiveACI without aggregating across
+# multiple controllers (which is what canonical AgACI does, per Zaffran
+# et al. 2022). Aliased to the underlying controller so existing imports
+# continue to work; flagged for v1.7.0 reimplementation.
+AgACI = MultiplicativeWeightsACI
 
-    alpha_target: float = 0.10
-    gammas: tuple[float, ...] = (0.001, 0.005, 0.01, 0.05)
 
-    def run(self, covered: Iterable[bool]) -> pd.DataFrame:
-        controller = StronglyAdaptiveACI(alpha_target=self.alpha_target, gammas=self.gammas)
-        return controller.run(covered)
-
-
-__all__ = ["AgACI", "EnbPIInterval", "StronglyAdaptiveACI"]
+__all__ = [
+    "AgACI",
+    "EnbPIInterval",
+    "EnsembleMeanSplitConformal",
+    "MultiplicativeWeightsACI",
+    "StronglyAdaptiveACI",
+]
