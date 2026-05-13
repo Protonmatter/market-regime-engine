@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+
 """Bayesian Markov-Switching VAR with NumPyro NUTS / SVI inference.
 
 The maximum-likelihood EM in :mod:`market_regime_engine.msvar` recovers
@@ -99,9 +100,9 @@ def _coerce_panel(
     for d in domains:
         if d not in frame:
             frame[d] = 0.0
-    return clean_with_policy(frame[domains], default_policy=nan_policy, column_policies=column_policies).to_numpy(
-        dtype=float
-    )
+    return clean_with_policy(
+        frame[domains], default_policy=nan_policy, column_policies=column_policies
+    ).to_numpy(dtype=float)
 
 
 def _logsumexp(arr: np.ndarray, axis: int | None = None) -> np.ndarray:
@@ -284,6 +285,11 @@ class BayesianMSVAR:
 
         Y_arr = _coerce_panel(panel, self.domains)
         if Y_arr.shape[0] < self.p + len(self.states) * 4:
+            # v1.6.0 (REVIEW_DEEP_V1_5_2.md F14 / Finding #19): explicitly
+            # mark the model as not-fitted before returning so a previously-
+            # fit instance refit on insufficient data cannot silently keep
+            # a stale posterior.
+            self.fitted = False
             return self
         Y = jnp.asarray(Y_arr)
 
@@ -478,14 +484,29 @@ class BayesianMSVAR:
         if use_samples:
             samples = self._posterior_state_probs  # (S, n, K)
             filtered = samples.mean(axis=0)
-            mod_idx = filtered.argmax(axis=1)
-            sample_modal = samples[:, np.arange(n), mod_idx]
+            # v1.6.0 credible-band fix (REVIEW_DEEP_V1_5_2.md §1.6 /
+            # Finding #13): the prior construction conflated two
+            # distributions. We took the posterior-mean modal index
+            # ``mod_idx_at_posterior_mean = filtered.argmax(axis=1)``
+            # then sampled ``P(state = mod_idx | t)`` across samples and
+            # quantiled THAT — which is NOT the credible band of the
+            # modal regime probability. For a bimodal posterior the
+            # 5%/95% straddle the bimodality and are uninterpretable.
+            #
+            # Correct construction: per-sample modal probability
+            # ``samples.max(axis=2)`` is the posterior-modal
+            # probability at each sample; its 5%/95% quantile is the
+            # credible band of "the modal regime's posterior probability".
+            sample_modal = samples.max(axis=2)  # (S, n)
             lo = np.quantile(sample_modal, 0.05, axis=0)
             hi = np.quantile(sample_modal, 0.95, axis=0)
         else:
             filtered = self._filtered_state_probs(Y)
             modal = filtered.max(axis=1)
             sd = float(np.std(filtered, axis=1).mean()) if filtered.size else 0.0
+            # SVI fallback: 1.5-sigma "ranged proxy" — explicitly NOT a
+            # credible interval. Documented as a heuristic so downstream
+            # consumers do not over-interpret the band.
             lo = np.clip(modal - 1.5 * sd, 0.0, 1.0)
             hi = np.clip(modal + 1.5 * sd, 0.0, 1.0)
         diverg = int(self.last_diagnostics.get("num_divergences", 0))

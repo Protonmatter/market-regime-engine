@@ -196,6 +196,57 @@ def test_bayesian_msvar_soft_degrade_without_numpyro(monkeypatch) -> None:
         model.fit(panel, method="nuts", num_warmup=10, num_samples=10, num_chains=1)
 
 
+def test_bayesian_msvar_short_panel_resets_fitted_state() -> None:
+    """REVIEW_DEEP_V1_5_2.md F14 / Finding #19: a previously-fit instance
+    refit on insufficient data must NOT silently keep the stale posterior.
+    """
+    _require_numpyro()
+    _set_jax_cpu()
+    from market_regime_engine.frontier.bayesian_msvar import BayesianMSVAR
+
+    panel, _ = _synthetic_two_state_panel(T=80, seed=99)
+    model = BayesianMSVAR(states=["s_a", "s_b"], domains=["x1", "x2"], seed=99)
+    model.fit(panel, method="svi", svi_steps=80, num_samples=16)
+    assert model.fitted is True
+    # Now refit on a panel too short for the fit branch (need
+    # >= p + len(states)*4 = 1 + 2*4 = 9 rows). Use 5 rows.
+    short = panel.head(5)
+    model.fit(short, method="svi", svi_steps=10, num_samples=4)
+    assert model.fitted is False, "short-panel branch must clear stale fitted state"
+
+
+def test_bayesian_msvar_credible_band_uses_per_sample_modal() -> None:
+    """REVIEW_DEEP_V1_5_2.md §1.6 / Finding #13: credible bands are the
+    5%/95% quantile of the per-sample modal probability
+    ``samples.max(axis=2)``, not the conflated
+    ``samples[:, np.arange(n), filtered.argmax(axis=1)]``.
+
+    Construct a synthetic posterior whose 5%/95% modal-probability
+    quantiles are known, run the score-time band construction, and
+    pin the values. This test does NOT require numpyro because we
+    skip the fit path and inject a synthetic posterior directly.
+    """
+    from market_regime_engine.frontier.bayesian_msvar import BayesianMSVAR
+
+    panel, _ = _synthetic_two_state_panel(T=40, seed=13)
+    model = BayesianMSVAR(states=["s_a", "s_b"], domains=["x1", "x2"], seed=13)
+    # Synthesize a deterministic posterior-state-probs tensor:
+    # samples.max(axis=2) at every t is uniform in [0.6, 1.0].
+    S, n, K = 400, len(panel), 2
+    rng = np.random.default_rng(0)
+    p_modal = rng.uniform(0.6, 1.0, size=(S, n))
+    samples = np.stack([p_modal, 1.0 - p_modal], axis=2)
+    model._posterior_state_probs = samples
+    model.fitted = True
+    out = model.score(panel)
+    expected_lo = float(np.quantile(samples.max(axis=2)[:, 0], 0.05))
+    expected_hi = float(np.quantile(samples.max(axis=2)[:, 0], 0.95))
+    assert abs(float(out["bayesian_credible_lo"].iloc[0]) - expected_lo) < 1e-9
+    assert abs(float(out["bayesian_credible_hi"].iloc[0]) - expected_hi) < 1e-9
+    # Sanity check shape and ordering.
+    assert (out["bayesian_credible_lo"] <= out["bayesian_credible_hi"] + 1e-9).all()
+
+
 def test_bayesian_msvar_latest_state_probs_plugs_into_bma() -> None:
     """``latest_state_probs`` returns the bma-compatible dict surface."""
     _require_numpyro()
