@@ -414,3 +414,67 @@ def test_build_execution_features_passes_when_signals_are_pit_safe(wh: Warehouse
     assert "liquidity_index" in row.index
     assert row["signal_age_seconds_credit_regime"] >= 0.0
     assert row["signal_age_seconds_liquidity"] >= 0.0
+
+# ---------------------------------------------------------------------------
+# v1.6.0 A5 — limit_distance_bps Decimal arithmetic parity
+# (REVIEW_DEEP_V1_5_2.md A5 / Finding §3.1)
+# ---------------------------------------------------------------------------
+
+
+def test_limit_distance_bps_decimal_arithmetic_matches_golden_fixture(
+    wh: Warehouse,
+) -> None:
+    """Golden-fixture parity test: limit_distance_bps must be computed via
+    bps_precision.to_bps / decimal_to_float_for_report instead of raw
+    float multiplication.
+
+    The pinned input ``mid=99.875, limit=100.125`` has an exact bps
+    answer (25.0312890... bps) that the prior raw-float math could
+    drift on at the 1e-13 level — Decimal arithmetic eliminates that
+    drift. We assert the value matches the Decimal-computed reference
+    exactly (no ULP slop) so any future regression to raw floats
+    would fail this test.
+    """
+    from decimal import Decimal
+
+    from market_regime_engine.fixed_income.bps_precision import (
+        decimal_to_float_for_report,
+        to_bps,
+        to_decimal,
+    )
+
+    mid_price = Decimal("99.875")
+    limit_price = Decimal("100.125")
+    asof = pd.Timestamp("2026-05-01T16:00:00Z")
+    _seed_signals(wh, asof=asof, regime_score=20.0, liquidity_index=15.0)
+    request = _request(
+        timestamp=asof + pd.Timedelta(seconds=30),
+        limit_price=float(limit_price),
+        metadata={"mid_price": float(mid_price)},
+    )
+    out = score_execution_confidence(request, warehouse=wh, release_gate=True)
+
+    expected_bps = decimal_to_float_for_report(
+        to_bps(to_decimal(limit_price) - to_decimal(mid_price), to_decimal(mid_price))
+    )
+    actual_bps = out.metadata["limit_distance_bps"]
+    assert actual_bps is not None
+    assert actual_bps == expected_bps, (
+        f"limit_distance_bps drifted: actual={actual_bps!r} vs expected={expected_bps!r}"
+    )
+
+
+def test_limit_distance_bps_returns_none_on_zero_mid(wh: Warehouse) -> None:
+    """Defensive rail: a zero mid_price triggers ZeroDivisionError inside
+    to_bps; the v1.6.0 contract catches it and returns ``None`` rather
+    than propagating."""
+    asof = pd.Timestamp("2026-05-01T16:00:00Z")
+    _seed_signals(wh, asof=asof, regime_score=20.0, liquidity_index=15.0)
+    request = _request(
+        timestamp=asof + pd.Timedelta(seconds=30),
+        limit_price=100.0,
+        metadata={"mid_price": 0.0},
+    )
+    out = score_execution_confidence(request, warehouse=wh, release_gate=True)
+    assert out.metadata["limit_distance_bps"] is None
+
