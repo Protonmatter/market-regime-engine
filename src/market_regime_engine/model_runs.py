@@ -64,6 +64,19 @@ _BUILD_SHA_ENV = "MRE_BUILD_SHA"
 _BUILD_DIRTY_ENV = "MRE_BUILD_DIRTY"
 _TRUTHY = frozenset({"1", "true", "yes", "y", "on", "True", "TRUE", "Yes", "YES"})
 
+# v1.6.0 (REVIEW_DEEP_V1_5_2.md section 3.7): runtime environment
+# variables whose value can change the trajectory of a model run
+# (stale-signal soft-fail thresholds, timezone handling, profile
+# selection). Captured into the envelope so a verify-run replay can
+# detect a quiet env-var drift after the fact. The list is
+# deliberately small -- every key here MUST be auditable by a
+# reviewer who is paged for a numerical-drift incident.
+_RUNTIME_ENV_KEYS: tuple[str, ...] = (
+    "MRE_FI_MAX_SIGNAL_STALENESS_SEC",
+    "MRE_ENV",
+    "TZ",
+)
+
 
 @dataclass(frozen=True)
 class ModelRun:
@@ -133,6 +146,10 @@ class ReproEnvelope:
     rng_seeds: dict[str, int] = field(default_factory=dict)
     extra: dict[str, object] = field(default_factory=dict)
     lockfile_hashes: dict[str, str | None] = field(default_factory=dict)
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 3.7) -- new envelope gaps:
+    numpy_blas: str = ""
+    python_hash_seed: str = ""
+    runtime_env_snapshot: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +394,8 @@ def build_repro_envelope(
     new runs should always use the default v1.3 stable hash.
     """
     hasher = _hash_frame_legacy if legacy_hash else _hash_frame
+    from market_regime_engine.evidence_common import _detect_numpy_blas
+
     return ReproEnvelope(
         code_version=_git_revision(short=True),
         code_sha=_git_revision(short=False),
@@ -390,6 +409,12 @@ def build_repro_envelope(
         rng_seeds=dict(rng_seeds or {}),
         extra=dict(extra or {}),
         lockfile_hashes=_lockfile_hashes_dict(),
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 3.7) -- new fields:
+        numpy_blas=_detect_numpy_blas(),
+        python_hash_seed=os.environ.get("PYTHONHASHSEED", ""),
+        runtime_env_snapshot={
+            key: os.environ.get(key, "") for key in _RUNTIME_ENV_KEYS
+        },
     )
 
 
@@ -624,6 +649,20 @@ def verify_run(
                         "stored": stored_sub,
                         "current": current_sub,
                     }
+            continue
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 3.7): the new
+        # envelope keys (numpy_blas, python_hash_seed,
+        # runtime_env_snapshot) are advisory -- a drift here is
+        # almost always a deployment / env-var change rather than
+        # a code bug. They surface as warnings so verify-run still
+        # approves the run but the operator sees the divergence in
+        # the audit trail. Hard ``differences`` would block every
+        # multi-environment replay (dev vs prod box) which is not
+        # the right ergonomics for these signals.
+        if key in {"numpy_blas", "python_hash_seed", "runtime_env_snapshot"}:
+            current_value = getattr(current_envelope, key, None)
+            if _canonicalise(stored_value) != _canonicalise(current_value):
+                warnings_list.append(f"{key}_drift")
             continue
         current_value = getattr(current_envelope, key, None)
         if isinstance(current_value, bool) and not isinstance(stored_value, bool):
