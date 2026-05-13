@@ -144,6 +144,16 @@ _CORE_TABLES: tuple[TableSpec, ...] = (
     )
     """,
         primary_key=("series_id", "date", "vintage_date"),
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md A13 / Finding §3.7): the
+        # PK leads with ``series_id`` but ``read_observations``
+        # issues ``ORDER BY date, series_id``. Add a secondary
+        # index whose leading column matches the read pattern so
+        # the planner can serve the sort from an index scan
+        # instead of a full table sort.
+        index_sql=(
+            "CREATE INDEX IF NOT EXISTS idx_observations_date_series "
+            "ON observations(date, series_id)",
+        ),
     ),
     TableSpec(
         name="features",
@@ -158,6 +168,13 @@ _CORE_TABLES: tuple[TableSpec, ...] = (
     )
     """,
         primary_key=("feature_name", "date"),
+        # v1.6.0 (A13): leading column on the hot read path is
+        # ``date`` not ``feature_name``. Add a secondary index
+        # to match.
+        index_sql=(
+            "CREATE INDEX IF NOT EXISTS idx_features_date_name "
+            "ON features(date, feature_name)",
+        ),
     ),
     TableSpec(
         name="regimes",
@@ -187,6 +204,13 @@ _CORE_TABLES: tuple[TableSpec, ...] = (
     )
     """,
         primary_key=("model_name", "date", "horizon", "target"),
+        # v1.6.0 (A13): the PK leads with ``model_name`` but the
+        # read path orders by ``date`` only. Add a secondary index
+        # so the planner can index-scan the date column.
+        index_sql=(
+            "CREATE INDEX IF NOT EXISTS idx_model_outputs_date "
+            "ON model_outputs(date)",
+        ),
     ),
     TableSpec(
         name="recession_labels",
