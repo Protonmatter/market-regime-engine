@@ -791,6 +791,15 @@ def build_execution_features(
 
     regime = latest_credit_regime_score(warehouse)
     if regime is not None:
+        # v1.6.0 PIT rail (REVIEW_DEEP_V1_5_2.md A6 / Finding #15): the
+        # CLI / batch builder now mirrors the hot-path PIT enforcement in
+        # ``score_execution_confidence`` so future-dated rows cannot leak
+        # into offline training data via ``build_execution_features``.
+        assert_pit_safe(
+            feature_timestamp=regime.timestamp,
+            decision_timestamp=decision_ts,
+            label="credit_regime",
+        )
         out["regime_score"] = float(regime.regime_score)
         out["regime_label"] = regime.regime_label
         out["regime_release_gate"] = bool(regime.release_gate)
@@ -800,6 +809,12 @@ def build_execution_features(
     if liquidity is None:
         liquidity = latest_liquidity_stress_score(warehouse)
     if liquidity is not None:
+        # v1.6.0 PIT rail (REVIEW_DEEP_V1_5_2.md A6 / Finding #15).
+        assert_pit_safe(
+            feature_timestamp=liquidity.timestamp,
+            decision_timestamp=decision_ts,
+            label="liquidity_stress",
+        )
         out["liquidity_index"] = float(liquidity.liquidity_index)
         out["liquidity_label"] = liquidity.liquidity_label
         out["liquidity_scope_type"] = liquidity.scope_type
