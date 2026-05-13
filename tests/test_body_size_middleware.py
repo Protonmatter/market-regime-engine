@@ -155,9 +155,17 @@ def test_production_profile_rejects_chunked_with_no_content_length(
     """
     db = tmp_path / "prod-body-cap.duckdb"
     monkeypatch.setenv("MRE_DB_PATH", str(db))
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md §3.14): production guard now
+    # requires slowapi importable when MRE_FI_RATE_LIMIT_ENABLED is
+    # truthy. Skip on dev boxes without the [security] extra.
+    pytest.importorskip("slowapi")
     monkeypatch.setenv("MRE_ENV", "production")
     monkeypatch.setenv("MRE_FI_BODY_SIZE_CAP_BYTES", "65536")
     monkeypatch.setenv("MRE_API_KEY", "test-body-cap-key")
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md §3.14): production guard now also
+    # requires the FI HMAC key + rate-limit-enabled env vars.
+    monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", "v1=" + ("a" * 64))
+    monkeypatch.setenv("MRE_FI_RATE_LIMIT_ENABLED", "1")
     close_pooled_warehouses()
     import importlib
 
