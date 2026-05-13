@@ -65,6 +65,11 @@ from typing import Any
 
 import pandas as pd
 
+from market_regime_engine.fixed_income.bps_precision import (
+    decimal_to_float_for_report,
+    to_bps,
+    to_decimal,
+)
 from market_regime_engine.fixed_income.credit_spread_regime import (
     latest_credit_regime_score,
 )
@@ -431,19 +436,33 @@ def score_execution_confidence(
         )
 
     # Limit-distance in bps (None when the caller did not pass a limit).
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md A5 / Finding §3.1): route through the
+    # Decimal-precision bps_precision helpers instead of raw float math.
+    # Per-request error is negligible (~1e-13 relative) but accumulates
+    # over millions of evaluations into a coefficient drift on the
+    # decision boundary; using Decimal eliminates that drift and brings
+    # this call site into agreement with the rest of the FI TCA stack.
     limit_distance_bps: float | None = None
     if request.limit_price is not None:
         # The exec-confidence dataclass intentionally does not carry a
         # mid-market quote; the request body's ``metadata.mid_price`` is
         # the canonical caller-supplied reference (informational input
         # only — the deterministic baseline can score without it).
-        mid_price = request.metadata.get("mid_price") if isinstance(request.metadata, dict) else None
+        mid_price = (
+            request.metadata.get("mid_price")
+            if isinstance(request.metadata, Mapping)
+            else None
+        )
         if mid_price is not None:
             try:
-                mid_price_f = float(mid_price)
-                if mid_price_f > 0:
-                    limit_distance_bps = abs(float(request.limit_price) - mid_price_f) / mid_price_f * 10_000.0
-            except (TypeError, ValueError):
+                mid_dec = to_decimal(mid_price)
+                if mid_dec > 0:
+                    price_diff = to_decimal(request.limit_price) - mid_dec
+                    if price_diff < 0:
+                        price_diff = -price_diff
+                    bps_dec = to_bps(price_diff, mid_dec)
+                    limit_distance_bps = decimal_to_float_for_report(bps_dec)
+            except (TypeError, ValueError, ZeroDivisionError):
                 limit_distance_bps = None
 
     rating_class = _rating_class(request.rating)
