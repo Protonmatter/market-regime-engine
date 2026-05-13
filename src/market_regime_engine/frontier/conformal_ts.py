@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+
 """Time-series-native conformal predictors (v1.2 frontier).
 
 This module bundles the 2021-2024 generation of conformal predictors that
@@ -177,20 +178,33 @@ def _coverage_by_bucket(
 class BlockConformalBinary:
     """Block-bootstrap conformal for binary probability forecasts.
 
-    Calibration scores ``s_i = 1 - p_hat(y_i)`` are resampled in contiguous
-    blocks of length ``L`` (Politis-Romano 1994 stationary block bootstrap).
-    Each replicate gives a single empirical ``(1 - alpha)``-quantile of the
-    individual-row scores; the per-bucket threshold is the median of those
-    bootstrap quantiles.
+    Calibration scores ``s_i = 1 - p_hat(y_i)`` are resampled in
+    contiguous **fixed-length** blocks of length ``L`` (Künsch 1989
+    moving-block bootstrap, MBB). Each replicate gives a single
+    empirical ``(1 - alpha)``-quantile of the individual-row scores;
+    the per-bucket threshold is the median of those bootstrap quantiles.
 
     The block aggregation ensures that under stationary beta-mixing the
     bootstrap quantile is a consistent estimate of the population
-    ``(1 - alpha)``-quantile of the calibration score distribution. Coverage
-    on *individual* prediction sets is preserved (in expectation), unlike a
-    naive block-mean threshold which would only cover block averages.
+    ``(1 - alpha)``-quantile of the calibration score distribution.
+    Coverage on *individual* prediction sets is preserved (in
+    expectation), unlike a naive block-mean threshold which would only
+    cover block averages.
 
-    The block_means_threshold is also exposed for diagnostic purposes; it is
-    the literal "quantile of block means" view referenced in the v1.2 spec.
+    The block_means_threshold is also exposed for diagnostic purposes;
+    it is the literal "quantile of block means" view referenced in the
+    v1.2 spec.
+
+    v1.6.0 docstring fix (REVIEW_DEEP_V1_5_2.md §1.7 / Finding for
+    BlockConformalBinary): the prior docstring cited "Politis-Romano
+    1994 stationary block bootstrap" but the implementation uses a
+    *fixed* block length per iteration — that is Künsch 1989 MBB, not
+    Politis-Romano which uses *random* block lengths drawn from
+    Geometric(1/L). For weakly stationary beta-mixing series MBB is
+    consistent with a slightly worse rate (Lahiri 1999); for production
+    conformal threshold estimation the difference is small. Citation is
+    corrected here; switching to true Politis-Romano (random block
+    lengths) is tracked as a v1.7.0 TODO.
     """
 
     alpha: float = 0.10
