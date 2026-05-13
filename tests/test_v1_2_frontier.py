@@ -32,7 +32,7 @@ from market_regime_engine.frontier.distributional import (
 )
 from market_regime_engine.frontier.gp_cpd import GPBOCPD
 from market_regime_engine.frontier.midas import MIDASLagSpec, MIDASRegressor
-from market_regime_engine.frontier.neural_seq import HAS_TORCH, PatchTSTHead
+from market_regime_engine.frontier.neural_seq import HAS_TORCH, MultivariateAvgPatchHead, PatchTSTHead
 from market_regime_engine.frontier.sequential_testing import (
     EValueLogScore,
     SafeTestPromotion,
@@ -353,6 +353,33 @@ def test_patchtst_head_raises_or_predicts_quantiles() -> None:
     assert "horizon" in out.columns
     quant_cols = [c for c in out.columns if c.startswith("q")]
     assert len(quant_cols) >= 3
+
+
+def test_patchtst_alias_resolves_to_renamed_class() -> None:
+    # REVIEW_DEEP_V1_5_2.md §1.13 / Finding #6: backwards-compat alias
+    # so v1.5.x callers do not break at import time.
+    assert PatchTSTHead is MultivariateAvgPatchHead
+
+
+def test_multivariate_avg_patch_head_raises_when_insufficient_data() -> None:
+    """REVIEW_DEEP_V1_5_2.md §1.13 / Finding #6: the prior degenerate
+    empirical-quantile fallback for ``n_train < 16`` is removed; the
+    head now raises ``ValueError`` so the caller decides whether to
+    fall back to a simpler head explicitly.
+    """
+    rng = np.random.default_rng(0)
+    n = 30  # too short: seq_len = patch_len*4 = 48 > n
+    dates = pd.date_range("2000-01-01", periods=n, freq="MS")
+    panel = pd.DataFrame({"x": rng.normal(size=n)}, index=dates)
+    target = pd.Series(rng.normal(size=n), index=dates)
+    head = MultivariateAvgPatchHead(n_epochs=2)
+    if not HAS_TORCH:
+        # Without torch the require_torch guard fires first.
+        with pytest.raises(ImportError):
+            head.fit(panel, target, horizon=1)
+        return
+    with pytest.raises(ValueError, match="Insufficient training data"):
+        head.fit(panel, target, horizon=1)
 
 
 # ---------------------------------------------------------------------------
