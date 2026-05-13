@@ -207,3 +207,80 @@ production worker from publishing a replay-vulnerable
 execution-confidence pack. Other components (`credit_regime`,
 `liquidity_stress`, `tca_segmentation`) do not consume an inbound
 request id and are exempt.
+
+## Canonical-JSON encoder versions (v1.6.0)
+
+Per `REVIEW_DEEP_V1_5_2.md` §2.5: the canonical-JSON encoder is now
+versioned. The encoder version is independent of the HMAC key version
+above — the HMAC prefix (`v1:` / `v2:`) routes the key, the metadata
+key `_canonical_version` routes the encoder.
+
+| Encoder | Implementation | Behaviour |
+|---|---|---|
+| `v1` (legacy) | `json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)` | Stable across same-CPython runs; v1.5.x wire format. NOT RFC 8785-compliant on numbers, non-ASCII strings, or NaN/Inf. |
+| `v2` (RFC 8785) | Pure-Python implementation of the JCS spec. Numbers via ECMA-262 7.1.12.1 Number::toString (`1.0` → `"1"`); raw UTF-8 strings with minimal escapes; UTF-16 code-point key sort; rejects NaN/Inf/non-JSON-native types. | Cross-language verifiable. A Java JCS or Rust `serde_jcs` library reproduces the same bytes byte-for-byte. |
+
+### v1 → v2 migration: when to migrate
+
+Migrate when **any** of the following is true:
+
+1. A non-Python consumer (Java JCS, Rust `serde_jcs`, Go JCS) needs
+   to re-derive the canonical bytes / hash from the pack contents.
+2. The pack contains floats whose representation matters at the ULP
+   level (BLP DSR thresholds, percentile bps, etc.) and a downstream
+   verifier may be running a different Python minor version. v1's
+   `json.dumps` is stable across same-Python-minor runs but
+   re-formatting `1.0` to `"1.0"` (vs ECMA's `"1"`) is a divergence
+   waiting to happen on a Python upgrade.
+3. The pack carries non-ASCII strings (`cusip`, dealer names with
+   accents, etc.) and a downstream verifier compares manifests
+   character-by-character. v1's `ensure_ascii=True` default escapes
+   non-ASCII as `\uXXXX`; v2 emits raw UTF-8.
+
+Do **NOT** migrate when:
+
+1. You need byte-identical reproduction of a v1.5.x persisted hash
+   (the v1 → v2 transition by design changes the canonical bytes,
+   and therefore the pack hash, even when logical content is
+   unchanged). Keep the v1 row alongside the v2 row.
+
+### How to migrate
+
+```bash
+# 1. Generate a v2 HMAC key alongside the existing v1.
+export MRE_FI_HMAC_KEY_VERSIONS='{"v1": "<v1 base64 key>", "v2": "<v2 base64 key>"}'
+
+# 2. Bulk re-sign every v1-signed pack under v2 with the new encoder.
+mre fi-evidence-resign \
+    --db data/mre.duckdb \
+    --from-key v1 \
+    --to-key v2 \
+    --to-version v2
+
+# 3. Optional: retire v1 from the key environment after the audit
+# window (operationally identical to the HMAC v1 → v2 rotation
+# described above).
+```
+
+The `--to-version` flag is **independent** of `--to-key`:
+
+| `--to-key` | `--to-version` | Effect |
+|---|---|---|
+| `v2` | (omitted) | Rotate HMAC key only; canonical encoder stays at whatever was stamped. Pack hash unchanged. |
+| `v2` | `v2` | Rotate HMAC key AND upgrade canonical encoder to RFC 8785. Pack hash changes. |
+| `v2` | `v1` | Rotate HMAC key AND explicitly downgrade canonical encoder (rare; usually for forensic reproduction). Pack hash changes. |
+
+### Legacy-verify guarantee
+
+A v1 pack (no `_canonical_version` metadata) verified with the v1
+HMAC key continues to verify under v1.6.0+ code paths verbatim:
+
+- `compute_pack_hash(pack)` reads the (absent) metadata key, defaults
+  to `version="v1"`, computes the legacy bytes, hashes them.
+- `verify_pack(pack)` reads the HMAC prefix (`v1:`), looks up the v1
+  key, recomputes HMAC over the legacy bytes, compares with
+  `hmac.compare_digest`.
+
+This contract is pinned by `tests/test_fi_evidence_pack_canonical_v2.py`
+and `tests/test_fi_evidence_resign.py`; any future refactor that
+breaks legacy verification will fail those tests.

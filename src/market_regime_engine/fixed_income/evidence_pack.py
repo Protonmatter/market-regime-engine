@@ -51,8 +51,10 @@ from typing import Any
 import pandas as pd
 
 from market_regime_engine.evidence_common import (
+    CanonicalVersion,
     canonical_json,
     canonical_sha256,
+    coerce_for_canonical,
     hmac_sha256_hex,
 )
 from market_regime_engine.fixed_income.schemas import FixedIncomeEvidencePack
@@ -85,6 +87,18 @@ _ENVELOPE_HASH_METADATA_KEY = "_envelope_hash"
 # preserved verbatim under the new code.
 _REQUEST_ID_BOUND_METADATA_KEY = "_request_id_bound"
 
+# v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): canonical-JSON encoder
+# version. When this metadata key is absent, the pack is encoded under
+# the legacy ``json.dumps(default=str)`` form (v1). When set to ``"v2"``
+# the pack is encoded under :func:`evidence_common._canonical_json_v2`
+# (RFC 8785 / JCS). The key is part of canonical bytes so an attacker
+# cannot strip the key to downgrade the encoding silently -- removing it
+# changes the byte sequence the verifier will recompute and HMAC
+# verification fails. Legacy v1.5.x packs carry no key and continue to
+# verify under v1; v1.6.0+ packs default to v2 (see
+# :func:`build_evidence_pack`).
+_CANONICAL_VERSION_METADATA_KEY = "_canonical_version"
+
 # Env vars (per AGENT.md PR-7 + INSTRUCTIONS.md §10 governance rules).
 _HMAC_KEY_VERSIONS_ENV = "MRE_FI_HMAC_KEY_VERSIONS"
 _HMAC_KEY_SINGLETON_ENV = "MRE_FI_HMAC_KEY"
@@ -97,6 +111,26 @@ _ENV_NAME_ENV = "MRE_ENV"
 # ---------------------------------------------------------------------------
 
 
+def _pack_canonical_version(pack: FixedIncomeEvidencePack) -> CanonicalVersion:
+    """Read the canonical-JSON encoder version stamped into a pack.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): legacy packs carry no
+    ``_canonical_version`` metadata key and use the v1 encoder; new
+    packs stamp ``"v2"`` and use the RFC 8785 encoder. Any other
+    value is treated as v1 so a forward-rev pack does not silently
+    bypass verification when an older verifier reads it (the
+    canonical bytes would mismatch and HMAC verification would fail
+    -- but we want the failure to come from the integrity check, not
+    from an :class:`KeyError` raised mid-decode).
+    """
+    metadata = pack.metadata or {}
+    if isinstance(metadata, dict):
+        value = metadata.get(_CANONICAL_VERSION_METADATA_KEY)
+        if value == "v2":
+            return "v2"
+    return "v1"
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
@@ -105,7 +139,11 @@ def _python_version() -> str:
     return ".".join(str(x) for x in sys.version_info[:3])
 
 
-def _pack_to_canonical_dict(pack: FixedIncomeEvidencePack) -> dict[str, Any]:
+def _pack_to_canonical_dict(
+    pack: FixedIncomeEvidencePack,
+    *,
+    version: CanonicalVersion = "v1",
+) -> dict[str, Any]:
     """Return the pack as a canonical dict, dropping ``hmac_signature``
     and the self-referential envelope-hash key from ``metadata``.
 
@@ -148,6 +186,18 @@ def _pack_to_canonical_dict(pack: FixedIncomeEvidencePack) -> dict[str, Any]:
         raw["metadata"] = {
             k: v for k, v in metadata.items() if k != _ENVELOPE_HASH_METADATA_KEY
         }
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): under the RFC 8785
+    # encoder the dict must be JSON-native (no datetime / Decimal /
+    # Path / set). ``coerce_for_canonical`` is the documented
+    # pre-coercion hook -- it converts datetime -> isoformat, Decimal
+    # -> str, Path -> POSIX string, set -> sorted list. The pack's
+    # ``timestamp`` is already a string, and all numeric dict fields
+    # in evidence packs are JSON-native (float / int) by contract,
+    # so the coercion is usually a no-op -- but the hook is the
+    # right place to handle a stray non-native value rather than
+    # letting the v2 encoder raise from a deep call stack.
+    if version == "v2":
+        raw = coerce_for_canonical(raw)
     return raw
 
 
@@ -170,6 +220,7 @@ def build_evidence_pack(
     timestamp: str | None = None,
     python_version: str | None = None,
     request_id: str | None = None,
+    canonical_version: CanonicalVersion = "v2",
 ) -> FixedIncomeEvidencePack:
     """Construct a :class:`FixedIncomeEvidencePack`.
 
@@ -188,6 +239,17 @@ def build_evidence_pack(
     ``(model_run_id, output_hash)`` under a different request id no
     longer verifies. Legacy v1.5.0 packs were built with
     ``request_id=None`` and continue to verify under the v1 key.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): ``canonical_version``
+    selects the canonical-JSON encoder: ``"v2"`` (default for new
+    packs) emits RFC 8785 / JCS-conformant bytes -- numbers via
+    ECMA-262 Number::toString, raw UTF-8 strings, UTF-16 code-point
+    key ordering, NaN/Infinity rejected. ``"v1"`` is the legacy
+    ``json.dumps(default=str)`` form retained for verifying historic
+    packs (and for tests that need byte-identical reproduction of
+    v1.5.x persisted hashes). The choice is stamped into
+    ``pack.metadata[_canonical_version]`` so :func:`compute_pack_hash`
+    and :func:`verify_pack` route to the same encoder later.
     """
     # v1.5.1 (PR-9 FIX 3): when ``request_id`` is set, stamp the
     # metadata flag that ``_pack_to_canonical_dict`` reads to decide
@@ -197,6 +259,17 @@ def build_evidence_pack(
     metadata_dict: dict[str, Any] = dict(metadata or {})
     if request_id is not None and not metadata_dict.get(_REQUEST_ID_BOUND_METADATA_KEY):
         metadata_dict[_REQUEST_ID_BOUND_METADATA_KEY] = True
+    # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): stamp the canonical-
+    # JSON encoder version into metadata when the new RFC 8785 (``v2``)
+    # encoder is used. Legacy callers can opt back to v1 explicitly
+    # (``canonical_version="v1"``) and the stamp is omitted so the
+    # bytestream stays byte-identical to v1.5.x.
+    if canonical_version == "v2":
+        metadata_dict[_CANONICAL_VERSION_METADATA_KEY] = "v2"
+    # Explicit downgrade by a caller (test fixture) wins -- strip a
+    # stale "v2" stamp if the caller passed ``canonical_version="v1"``.
+    elif canonical_version == "v1" and metadata_dict.get(_CANONICAL_VERSION_METADATA_KEY) is not None:
+        metadata_dict.pop(_CANONICAL_VERSION_METADATA_KEY, None)
     return FixedIncomeEvidencePack(
         model_run_id=model_run_id,
         component_name=component_name,
@@ -218,26 +291,51 @@ def build_evidence_pack(
     )
 
 
-def compute_pack_hash(pack: FixedIncomeEvidencePack) -> str:
+def compute_pack_hash(
+    pack: FixedIncomeEvidencePack,
+    *,
+    version: CanonicalVersion | None = None,
+) -> str:
     """Return ``"sha256:..."`` over the canonical JSON of the pack.
 
     The ``hmac_signature`` field is excluded so the same pack can be
     re-signed under a rotated HMAC key without invalidating the
     artifact hash. PR-7 ``verify-run`` cross-references this hash
     against the stored value in ``fixed_income_evidence_packs``.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): when ``version`` is
+    ``None`` (the default) the encoder version is read from
+    ``pack.metadata[_canonical_version]``; legacy packs without that
+    key fall back to ``"v1"`` so historical verify continues to
+    match. Passing an explicit ``version="v2"`` overrides the
+    metadata (used by ``fi-evidence-resign --to-version v2`` to
+    transition an existing pack to the new encoder).
     """
-    return canonical_sha256(_pack_to_canonical_dict(pack))
+    resolved = version if version is not None else _pack_canonical_version(pack)
+    return canonical_sha256(
+        _pack_to_canonical_dict(pack, version=resolved), version=resolved
+    )
 
 
-def canonical_pack_payload(pack: FixedIncomeEvidencePack) -> str:
+def canonical_pack_payload(
+    pack: FixedIncomeEvidencePack,
+    *,
+    version: CanonicalVersion | None = None,
+) -> str:
     """Return the exact canonical JSON bytestream used for hashing/signing.
 
     Exposed so PR-7 HMAC signing can compute ``hmac.digest(key, body)``
     over the same bytes that :func:`compute_pack_hash` SHA-256s. Keeps
     the two derivations in lockstep without callers needing to know
     which dict keys are excluded.
+
+    v1.6.0: version-aware -- see :func:`compute_pack_hash` for the
+    encoder-version resolution rules.
     """
-    return canonical_json(_pack_to_canonical_dict(pack))
+    resolved = version if version is not None else _pack_canonical_version(pack)
+    return canonical_json(
+        _pack_to_canonical_dict(pack, version=resolved), version=resolved
+    )
 
 
 def verify_pack_hash(pack: FixedIncomeEvidencePack, expected_hash: str) -> bool:
@@ -247,6 +345,9 @@ def verify_pack_hash(pack: FixedIncomeEvidencePack, expected_hash: str) -> bool:
     insensitive on the hex tail; the ``"sha256:"`` prefix must match
     exactly). PR-7 introduces an HMAC verify variant on top of this
     integrity check.
+
+    v1.6.0: routes through :func:`compute_pack_hash` so the version
+    stamped into ``pack.metadata[_canonical_version]`` is honoured.
     """
     computed = compute_pack_hash(pack)
     return computed.lower() == expected_hash.lower()
