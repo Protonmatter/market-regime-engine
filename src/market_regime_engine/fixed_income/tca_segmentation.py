@@ -69,6 +69,7 @@ from market_regime_engine.fixed_income.calendars import (
     TradingCalendar,
     next_trading_day,
 )
+from market_regime_engine.fixed_income.correlation import log_safe
 from market_regime_engine.fixed_income.credit_spread_regime import (
     classify_with_hysteresis as classify_credit_with_hysteresis,
 )
@@ -1107,7 +1108,7 @@ def _build_trades_frame_from_outcomes(
         except PitViolationError:
             log.warning(
                 "materialize_tca_segments_for_day: dropping request_id=%s due to outcome-observation-lag violation",
-                request_id,
+                log_safe(request_id),
             )
             continue
         row_out: dict[str, Any] = {

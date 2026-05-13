@@ -43,6 +43,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from market_regime_engine.fixed_income.correlation import log_safe
 from market_regime_engine.fixed_income.credit_spread_regime import (
     latest_credit_regime_score,
     latest_credit_regime_score_identity,
@@ -754,7 +755,7 @@ def build_router(
                 # release-gate contract holds even on scorer bugs.
                 log.exception(
                     "execution_confidence score failed (request_id=%s)",
-                    body.request_id,
+                    log_safe(body.request_id),
                 )
                 raise HTTPException(
                     status_code=_HTTP_SERVICE_UNAVAILABLE,
@@ -770,7 +771,7 @@ def build_router(
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",
-                    body.request_id,
+                    log_safe(body.request_id),
                     exc,
                 )
         finally:

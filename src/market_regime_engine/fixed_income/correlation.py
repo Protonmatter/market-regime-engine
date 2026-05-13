@@ -28,8 +28,26 @@ __all__ = [
     "CorrelationIdMiddleware",
     "current_request_id",
     "install_correlation_id_log_filter",
+    "log_safe",
     "set_request_id",
 ]
+
+
+def log_safe(value: object) -> str:
+    """Return a log-safe rendering of ``value``.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F8 / Finding §3.12): strips
+    newlines and carriage returns from caller-controlled strings
+    so a request_id like ``"abc\nINFO: synthetic line"`` cannot
+    split downstream log records / confuse log forwarding / SIEM.
+    The replacement turns ``\n`` into literal two-character
+    ``\\n`` and ``\r`` into ``\\r`` so the resulting line is
+    still readable and the original payload is not lost.
+    """
+    if value is None:
+        return "None"
+    s = value if isinstance(value, str) else str(value)
+    return s.replace("\r", "\\r").replace("\n", "\\n")
 
 
 _REQUEST_ID_HEADER = "x-request-id"
@@ -78,6 +96,12 @@ class CorrelationIdMiddleware:
                 request_id = uuid.uuid4().hex
         else:
             request_id = uuid.uuid4().hex
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md F8 / Finding §3.12):
+        # ``X-Request-ID`` is caller-controlled and decodes as
+        # ASCII (which permits ``\n`` / ``\r``). Sanitise here so
+        # the contextvar that the log filter and HTTP response
+        # header consume is already log-safe.
+        request_id = log_safe(request_id)
         token = _REQUEST_ID_CTX.set(request_id)
         try:
 
