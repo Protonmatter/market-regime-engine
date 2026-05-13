@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from market_regime_engine.frontier.data_cleaning import NanPolicy, clean_with_policy
+
 
 @dataclass
 class MIDASLagSpec:
@@ -51,12 +53,23 @@ class MIDASLagSpec:
 
 @dataclass
 class MIDASRegressor:
-    """Almon-polynomial MIDAS regression."""
+    """Almon-polynomial MIDAS regression.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md F17 / Finding #19): the high-frequency
+    NaN policy is now explicit via the ``nan_policy`` parameter. The
+    previous ``series.fillna(0.0)`` silently turned missing prints into
+    "zero spread today" — a strong risk-on signal — for every missing
+    high-frequency observation. The new default
+    :attr:`NanPolicy.NAN_TO_LAST_VALID` forward-fills within market
+    hours; production callers should consider
+    :attr:`NanPolicy.NAN_FAILS_PIT_AUDIT` for the strictest contract.
+    """
 
     learning_rate: float = 0.05
     max_iter: int = 200
     tol: float = 1e-6
     ridge: float = 1e-4
+    nan_policy: NanPolicy = NanPolicy.NAN_TO_LAST_VALID
 
     fitted: bool = False
     intercept: float = 0.0
@@ -84,10 +97,23 @@ class MIDASRegressor:
         return X @ w
 
     def _build_lag_matrix(self, frame: pd.DataFrame, spec: MIDASLagSpec) -> np.ndarray:
-        """Build the (n, lags) matrix of high-frequency lags for ``spec``."""
+        """Build the (n, lags) matrix of high-frequency lags for ``spec``.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md F17 / Finding #19): NaN policy is
+        applied explicitly via :func:`clean_with_policy`. Previously
+        missing prints were silently zero-filled — a strong (and
+        spurious) risk-on signal for credit-spread MIDAS features.
+        """
         if spec.column not in frame.columns:
             return np.zeros((len(frame), spec.lags))
-        series = frame[spec.column].astype(float).fillna(0.0).to_numpy()
+        col_frame = frame[[spec.column]].astype(float)
+        cleaned = clean_with_policy(col_frame, default_policy=self.nan_policy)
+        series = cleaned[spec.column].to_numpy()
+        # If the policy still left NaNs (e.g. a leading run of missing
+        # observations under NAN_TO_LAST_VALID), drop them by treating as
+        # zero contribution to the lag matrix only AFTER the policy has
+        # had its say. This is the documented post-policy fallback.
+        series = np.where(np.isfinite(series), series, 0.0)
         n = len(series)
         out = np.zeros((n, spec.lags))
         for k in range(1, spec.lags + 1):
@@ -103,12 +129,21 @@ class MIDASRegressor:
         *,
         lag_specs: list[MIDASLagSpec],
     ) -> MIDASRegressor:
-        """Fit the MIDAS regression by Newton-CG over (theta, beta).
+        """Fit the MIDAS regression by **coordinate gradient descent** at
+        a fixed learning rate.
 
         ``X`` is a date-indexed dataframe whose columns include every
         ``lag_specs[i].column``. ``y`` is the target series of the same
         length. Missing values in ``y`` cause the corresponding rows to be
-        dropped.
+        dropped; missing values in the high-frequency predictors are
+        handled per :attr:`nan_policy`.
+
+        v1.6.0 docstring fix (REVIEW_DEEP_V1_5_2.md §1.12): the previous
+        docstring claimed Newton-CG over (theta, beta); the actual
+        implementation alternates an OLS solve for ``beta`` (given
+        ``theta``) with a fixed-step gradient update on ``theta`` (given
+        ``beta``) — coordinate descent, not Newton-CG. The behaviour is
+        unchanged; only the docstring is corrected.
         """
         if X is None or X.empty or len(lag_specs) == 0:
             return self

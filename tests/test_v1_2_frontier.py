@@ -256,6 +256,37 @@ def test_midas_regressor_fit_and_predict_smoke() -> None:
     assert preds.shape == (n,)
 
 
+def test_midas_regressor_nan_policy_replaces_silent_fillna_zero() -> None:
+    """REVIEW_DEEP_V1_5_2.md F17 / Finding #19: MIDAS no longer silently
+    treats missing high-frequency observations as zero. The default
+    NanPolicy.NAN_TO_LAST_VALID forward-fills within market hours; a
+    leading run of NaNs is post-policy zeroed (documented), not
+    pre-policy as before.
+    """
+    from market_regime_engine.frontier.data_cleaning import NanPolicy
+
+    rng = np.random.default_rng(7)
+    n = 120
+    dates = pd.date_range("2000-01-01", periods=n, freq="MS")
+    x = rng.normal(size=n)
+    y = 0.5 * x + rng.normal(scale=0.5, size=n)
+    # Inject NaNs in the middle of x so the difference between
+    # silent-zero (old behaviour) and forward-fill (new default) is
+    # observable.
+    x[40:50] = np.nan
+    X = pd.DataFrame({"x": x}, index=dates)
+    y_s = pd.Series(y, index=dates)
+    spec = MIDASLagSpec(column="x", lags=6, polynomial_degree=2)
+    model = MIDASRegressor(max_iter=10, nan_policy=NanPolicy.NAN_TO_LAST_VALID).fit(
+        X, y_s, lag_specs=[spec]
+    )
+    assert model.fitted
+    assert model.nan_policy is NanPolicy.NAN_TO_LAST_VALID
+    preds = model.predict(X)
+    assert preds.shape == (n,)
+    assert np.all(np.isfinite(preds))
+
+
 # ---------------------------------------------------------------------------
 # §C distributional heads
 # ---------------------------------------------------------------------------
