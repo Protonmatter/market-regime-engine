@@ -385,6 +385,101 @@ def hmac_sha256_hex(key: bytes, payload: bytes) -> str:
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 
+_BLAS_VARIANTS: tuple[str, ...] = (
+    "mkl",
+    "accelerate",
+    "openblas",
+    "blis",
+    "atlas",
+    "netlib",
+)
+
+
+def _detect_numpy_blas() -> str:
+    """Return the BLAS variant linked into the running NumPy build.
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md section 3.7): the reproducibility
+    envelope captures the BLAS variant so a verifier can detect
+    OpenBLAS vs. MKL vs. Accelerate divergence. ``np.linalg.solve``
+    and related LAPACK routines differ by 1-2 ULP between variants;
+    a reviewer who refits a model on a non-matching BLAS sees that
+    in the verify-run drift report rather than chasing a phantom
+    numerical regression.
+
+    Resolution order:
+
+    1. ``numpy.show_config(mode="dicts")`` (NumPy >= 1.26):
+       structured output -- look for ``blas.name``.
+    2. ``numpy.show_config()`` redirected to a buffer (older NumPy):
+       fall back to string-matching the printed output.
+    3. ``"unknown"`` if neither path resolves a known variant (the
+       envelope keeps the field shape stable even when capture
+       fails).
+
+    Returns one of ``mkl`` / ``accelerate`` / ``openblas`` /
+    ``blis`` / ``atlas`` / ``netlib`` / ``unknown``. ``openblas``
+    subsumes both upstream OpenBLAS and the SciPy-bundled
+    ``scipy-openblas`` repackaging because they ship the same
+    kernel.
+    """
+    try:
+        import numpy as _np
+    except Exception:
+        return "unknown"
+
+    # NumPy >= 1.26 exposes structured output via mode="dicts".
+    try:
+        cfg = _np.show_config(mode="dicts")
+    except Exception:
+        cfg = None
+    if isinstance(cfg, dict):
+        bd = cfg.get("Build Dependencies") or {}
+        if isinstance(bd, dict):
+            blas = bd.get("blas")
+            if isinstance(blas, dict):
+                name = str(blas.get("name", "")).lower()
+                if name:
+                    return _normalise_blas_name(name)
+
+    # Fallback: capture printed output (legacy NumPy < 1.26).
+    import contextlib as _ctx
+    import io as _io
+
+    buf = _io.StringIO()
+    try:
+        with _ctx.redirect_stdout(buf):
+            _np.show_config()
+    except Exception:
+        return "unknown"
+    text = buf.getvalue().lower()
+    # Order matters: ``mkl_info`` may appear inside an
+    # ``openblas_info`` section header on legacy NumPy builds.
+    # Check the more-specific variants first (mkl, accelerate)
+    # before the generic openblas key.
+    for variant in _BLAS_VARIANTS:
+        # Each variant's section header is ``<variant>_info`` on
+        # legacy NumPy (< 2.0); the new structured output emits
+        # a ``name: <variant>`` line.
+        if f"{variant}_info" in text or f"name: {variant}" in text:
+            return variant
+    # scipy-openblas is upstream OpenBLAS repackaged by SciPy;
+    # treat them identically for envelope purposes.
+    if "scipy-openblas" in text or "scipy_openblas" in text:
+        return "openblas"
+    return "unknown"
+
+
+def _normalise_blas_name(name: str) -> str:
+    """Collapse upstream BLAS names onto the envelope vocabulary."""
+    lowered = name.lower().strip()
+    if "scipy-openblas" in lowered or "scipy_openblas" in lowered:
+        return "openblas"
+    for variant in _BLAS_VARIANTS:
+        if variant in lowered:
+            return variant
+    return "unknown"
+
+
 def git_revision(short: bool = False) -> str:
     """Return the current git HEAD SHA, or ``"unknown"`` when unavailable.
 
@@ -430,8 +525,17 @@ __all__ = [
     "canonical_json",
     "canonical_sha256",
     "coerce_for_canonical",
+    "detect_numpy_blas",
     "git_dirty",
     "git_revision",
     "hmac_sha256_hex",
     "strip_hash_prefix",
 ]
+
+
+# Public alias for the BLAS-variant detection helper -- the leading
+# underscore is preserved on the implementation function for the
+# call site (see ``model_runs.build_repro_envelope``) but a public
+# name lets external integrators query the same value without
+# touching a private symbol.
+detect_numpy_blas = _detect_numpy_blas
