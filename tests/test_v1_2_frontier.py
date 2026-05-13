@@ -28,7 +28,9 @@ from market_regime_engine.frontier.dfm_mq import (
 from market_regime_engine.frontier.distributional import (
     DeepStateSpaceHead,
     IsotonicDistributionalHead,
+    IsotonicMarginalRegressor,
     NGBoostHead,
+    VariationalEncoderHead,
 )
 from market_regime_engine.frontier.gp_cpd import GPBOCPD
 from market_regime_engine.frontier.midas import MIDASLagSpec, MIDASRegressor
@@ -325,6 +327,17 @@ def test_deep_state_space_head_soft_degrades_or_torch() -> None:
     assert head.backend in ("torch", "fallback")
     preds = head.predict(X[:5])
     assert preds.shape == (5,)
+
+
+def test_distributional_head_renames_and_aliases() -> None:
+    """REVIEW_DEEP_V1_5_2.md §1.10 / Finding #7: honest renames preserve
+    backwards compatibility via aliases.
+    """
+    assert IsotonicDistributionalHead is IsotonicMarginalRegressor
+    assert DeepStateSpaceHead is VariationalEncoderHead
+    # Both names must instantiate to the same concrete class.
+    assert isinstance(IsotonicDistributionalHead(), IsotonicMarginalRegressor)
+    assert isinstance(DeepStateSpaceHead(), VariationalEncoderHead)
 
 
 # ---------------------------------------------------------------------------
