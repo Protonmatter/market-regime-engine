@@ -498,13 +498,21 @@ class LocalizedSplitConformal:
         order = np.argsort(self._calibration_scores)
         sorted_scores = self._calibration_scores[order]
         sorted_weights = weights[order]
-        # Augment with a "test-point" dummy weight (Vovk's NexCP formulation)
-        # so the weighted quantile corresponds to the (n+1)-th order statistic
-        # under the kernel reweighting.
-        test_weight = float(np.exp(0.0))  # 1.0 (kernel at zero distance)
-        cum = np.cumsum(sorted_weights) + test_weight
-        total = cum[-1]
+        # NexCP / Lin-Trivedi-Sun 2023 weighted-quantile construction
+        # (REVIEW_DEEP_V1_5_2.md §1.7 / Finding #12 fix). The test-point
+        # nonconformity is conventionally appended at +infinity (rank n+1)
+        # with weight equal to the kernel at zero distance (= 1.0). The
+        # weighted (1 - alpha) quantile is therefore the smallest
+        # calibration score whose cumulative calibration weight reaches
+        # ``(1 - alpha) * (sum_of_calibration_weights + test_weight)``.
+        # The earlier ``cum = cumsum + test_weight`` was equivalent to
+        # inserting the test point at rank 0 (smallest score), shifting
+        # every empirical CDF value up by ``test_weight / total`` and
+        # producing an over-narrow prediction set.
+        test_weight = 1.0  # RBF at zero distance.
+        total = float(np.sum(sorted_weights)) + test_weight
         target = (1.0 - float(self.alpha)) * total
+        cum = np.cumsum(sorted_weights)
         idx = int(np.searchsorted(cum, target, side="left"))
         idx = min(max(idx, 0), len(sorted_scores) - 1)
         return float(sorted_scores[idx])
