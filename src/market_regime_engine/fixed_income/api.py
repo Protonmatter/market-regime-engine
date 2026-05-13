@@ -191,6 +191,19 @@ class ExecutionConfidenceRequestModel(BaseModel):
     @field_validator("timestamp")
     @classmethod
     def _ts_must_be_utc_iso8601(cls, v: str) -> str:
+        """Coerce inbound timestamp to canonical UTC ``...Z`` form.
+
+        v1.6.0 (REVIEW_DEEP_V1_5_2.md A9 / Finding §3.4): the
+        v1.5.x validator accepted any tz-aware ISO-8601 string
+        (``+05:30``, ``-08:00``, ``Z``) without normalisation, so
+        the same logical instant submitted from different
+        operator timezones produced different canonical bytes and
+        therefore different artifact hashes. The validator now
+        rewrites every accepted timestamp to ``YYYY-MM-DDTHH:MM:SS[.ffffff]Z`` (UTC, microseconds-when-present), so two requests
+        for the same instant under different offsets produce
+        byte-identical canonical payloads and therefore identical
+        ``artifact_hash`` values.
+        """
         import pandas as pd
 
         try:
@@ -198,8 +211,15 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
-        return v
+            raise ValueError(
+                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
+            )
+        utc_ts = parsed.tz_convert("UTC")
+        canonical = utc_ts.strftime("%Y-%m-%dT%H:%M:%S")
+        if utc_ts.microsecond:
+            canonical += f".{utc_ts.microsecond:06d}"
+        canonical += "Z"
+        return canonical
 
     @field_validator("cusip")
     @classmethod
