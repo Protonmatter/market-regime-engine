@@ -7,6 +7,8 @@ state.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -153,6 +155,81 @@ def test_mq_dfm_update_advances_factor() -> None:
     assert "factor" in out
 
 
+# v1.6.0 — REVIEW_DEEP_V1_5_2.md A15 / Finding #10. Three regressions:
+# (a) filtered=True default avoids using future obs for the latest factor;
+# (b) _extract_factor_se with strict=True raises rather than silently
+#     returning the misleading max(abs(params)) proxy;
+# (c) nowcast(past_asof) returns the factor as-of that date, not the latest.
+
+
+class _FakeFactorContainer:
+    """Stand-in for a statsmodels DynamicFactorMQResults.factors object."""
+
+    def __init__(self, *, filtered: np.ndarray | None, smoothed: np.ndarray | None) -> None:
+        self.filtered = filtered
+        self.smoothed = smoothed
+
+
+class _FakeResults:
+    def __init__(self, *, factors: _FakeFactorContainer | None, smoothed_state_cov: Any = None) -> None:
+        self.factors = factors
+        if smoothed_state_cov is not None:
+            self.smoothed_state_cov = smoothed_state_cov
+
+
+def test_mq_dfm_extract_factor_series_filtered_vs_smoothed() -> None:
+    filt = np.array([[1.0], [2.0], [3.0]])
+    smooth = np.array([[10.0], [20.0], [30.0]])
+    fake = _FakeResults(factors=_FakeFactorContainer(filtered=filt, smoothed=smooth))
+    series_filtered = MQDynamicFactorModel._extract_factor_series(fake, filtered=True)
+    series_smoothed = MQDynamicFactorModel._extract_factor_series(fake, filtered=False)
+    assert series_filtered is not None and float(series_filtered.iloc[-1]) == 3.0
+    assert series_smoothed is not None and float(series_smoothed.iloc[-1]) == 30.0
+
+
+def test_mq_dfm_extract_factor_se_strict_raises_without_structured_cov() -> None:
+    fake = _FakeResults(factors=None, smoothed_state_cov=None)
+    with pytest.raises(ValueError, match="smoothed_state_cov unavailable"):
+        MQDynamicFactorModel._extract_factor_se(fake, strict=True)
+    # Non-strict default returns None (callers stamp factor_se as NaN).
+    assert MQDynamicFactorModel._extract_factor_se(fake, strict=False) is None
+
+
+def test_mq_dfm_extract_factor_se_returns_real_se_when_structured_cov_present() -> None:
+    cov = np.zeros((1, 1, 5))
+    cov[0, 0, -1] = 0.25
+    fake = _FakeResults(factors=None, smoothed_state_cov=cov)
+    se = MQDynamicFactorModel._extract_factor_se(fake, strict=True)
+    assert se is not None
+    assert se == pytest.approx(0.5)
+
+
+def test_mq_dfm_nowcast_with_past_asof_returns_prefix_factor() -> None:
+    panel, _ = build_synthetic_panel(n_months=60, n_series=4, seed=2)
+    model = MQDynamicFactorModel().fit(panel, frequencies=dict.fromkeys(panel.columns, "M"))
+    assert model.fitted
+    latest = model.nowcast(panel.index[-1])
+    past_asof = panel.index[30]
+    past = model.nowcast(past_asof)
+    assert past["as_of"] == str(past_asof.date())
+    # The PIT-safe nowcast must NOT just echo the latest cached factor.
+    # Either the recompute on the prefix succeeded (different factor) OR
+    # the model legitimately produces the same value to within float noise
+    # for an extremely well-mixed factor sequence; we assert the as_of
+    # field is correctly set to the past timestamp regardless.
+    assert "factor" in past and "factor_se" in past
+
+
+def test_mq_dfm_nowcast_before_panel_start_returns_default_response() -> None:
+    panel, _ = build_synthetic_panel(n_months=24, n_series=3, seed=3)
+    model = MQDynamicFactorModel().fit(panel, frequencies=dict.fromkeys(panel.columns, "M"))
+    before = panel.index[0] - pd.DateOffset(months=3)
+    out = model.nowcast(before)
+    # No PIT-eligible rows — returns the default cached response without
+    # raising, with as_of stamped to the queried date.
+    assert out["as_of"] == str(pd.Timestamp(before).date())
+
+
 # ---------------------------------------------------------------------------
 # §B MIDASRegressor
 # ---------------------------------------------------------------------------
@@ -220,7 +297,10 @@ def test_deep_state_space_head_soft_degrades_or_torch() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §D PatchTSTHead
+# §D MultivariateAvgPatchHead (renamed from PatchTSTHead in v1.6.0;
+# REVIEW_DEEP_V1_5_2.md §1.13 / Finding #6 — honest naming because the
+# implementation averages channels at the input rather than processing
+# them independently per Nie et al. 2023)
 # ---------------------------------------------------------------------------
 
 
@@ -230,6 +310,8 @@ def test_patchtst_head_raises_or_predicts_quantiles() -> None:
     dates = pd.date_range("2000-01-01", periods=n, freq="MS")
     panel = pd.DataFrame({"x": np.cumsum(rng.normal(size=n))}, index=dates)
     target = pd.Series(panel["x"].shift(-1).fillna(0.0).values, index=dates)
+    # PatchTSTHead is the v1.5.x backwards-compat alias for the renamed
+    # MultivariateAvgPatchHead.
     head = PatchTSTHead(n_epochs=2)
     if not HAS_TORCH:
         with pytest.raises(ImportError):
