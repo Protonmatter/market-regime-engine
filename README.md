@@ -1,4 +1,4 @@
-# Market Regime Engine v1.5.2
+# Market Regime Engine v1.6.1
 
 Python-first, Rust-ready probabilistic macro/market regime intelligence
 engine with a 2026-2027-frontier modeling layer **and the v1.5
@@ -56,6 +56,21 @@ Fixed-Income RCIE / X-Pro Auto-X adapter**.
 > tests in `tests/test_validation_dsr_mtrl_audit.py` were updated to
 > encode the BLP-correct expectations and four new property-style
 > anchors were added (one per bug plus a Gaussian-iid sanity).
+>
+> **v1.6.1 (release-identity sync):** behaviorally identical to v1.6.0
+> (PR #23, tag `v1.6.0`); a patch release that fixes a source-vs-tag
+> identity mismatch where `pip install` and runtime `__version__`
+> reported `1.5.2` despite the v1.6.0 git tag and GitHub Release.
+> No code changes; only the version string in `pyproject.toml`,
+> `src/market_regime_engine/__init__.py`, the README banner, and a
+> hardening to `scripts/check_readme_version.py` to also verify the
+> `pyproject.toml` version (which the v1.6.0 release would have caught
+> if Actions weren't billing-blocked).
+>
+> **v1.6.0** is the substantive release (frontier hardening + governed
+> signal layer + software-engineering quality - 64 commits, ~+300
+> tests, mypy 13 -> 0). See PR #23 and the v1.6.0 release notes for the
+> full release narrative.
 >
 > v1.5.0 references:
 > [`docs/V1_5_FIXED_INCOME_RCIE.md`](docs/V1_5_FIXED_INCOME_RCIE.md)
