@@ -375,6 +375,19 @@ def _build_fi_evidence_resign(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         dest="dry_run",
     )
+    parser.add_argument(
+        "--to-version",
+        help=(
+            "Target canonical-JSON encoder version for the re-signed packs. "
+            "``v1`` keeps the legacy json.dumps(default=str) bytes; ``v2`` "
+            "upgrades to RFC 8785 (REVIEW_DEEP_V1_5_2.md section 2.5). "
+            "Default: preserve whatever encoder the pack was originally "
+            "signed under (no encoder migration)."
+        ),
+        choices=["v1", "v2"],
+        default=None,
+        dest="to_version",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1187,10 +1200,14 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
         matching = df[mask]
         matched_count = len(matching)
         null_request_id_warnings: list[str] = []
+        to_version: str | None = getattr(ns, "to_version", None)
         if not dry_run and not matching.empty:
             from dataclasses import replace as _dataclass_replace
 
-            from market_regime_engine.fixed_income.evidence_pack import _row_to_pack
+            from market_regime_engine.fixed_income.evidence_pack import (
+                _CANONICAL_VERSION_METADATA_KEY,
+                _row_to_pack,
+            )
 
             rows: list[dict[str, Any]] = []
             for _, row in matching.iterrows():
@@ -1207,6 +1224,22 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
                 # doesn't re-include a stale value (defensive — the helper
                 # already drops hmac_signature before signing).
                 pack = _dataclass_replace(pack, hmac_signature=None)
+                # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): when an
+                # explicit ``--to-version v2`` (or ``v1``) is requested,
+                # stamp / strip the canonical-JSON encoder version
+                # metadata key BEFORE signing so the HMAC canonical
+                # bytes include the new stamp. An operator who upgrades
+                # a v1 pack to v2 explicitly accepts that the canonical
+                # bytes (and therefore the pack hash) will change --
+                # this is the documented migration path; the original
+                # v1 hash is no longer recoverable after the re-sign.
+                if to_version is not None:
+                    new_meta = dict(pack.metadata or {})
+                    if to_version == "v2":
+                        new_meta[_CANONICAL_VERSION_METADATA_KEY] = "v2"
+                    else:
+                        new_meta.pop(_CANONICAL_VERSION_METADATA_KEY, None)
+                    pack = _dataclass_replace(pack, metadata=new_meta)
                 signed = sign_pack(pack, key_version=to_key)
                 rows.append(evidence_pack_to_row(signed, request_id=str(row["request_id"])))
                 resigned_count += 1
@@ -1214,7 +1247,7 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
     finally:
         wh.close()
 
-    payload = {
+    payload: dict[str, Any] = {
         "status": "ok",
         "from_key": from_key,
         "to_key": to_key,
@@ -1222,6 +1255,9 @@ def _cmd_fi_evidence_resign(ns: argparse.Namespace) -> int:
         "matched": matched_count,
         "resigned": int(resigned_count),
     }
+    to_version_out: str | None = getattr(ns, "to_version", None)
+    if to_version_out is not None:
+        payload["to_version"] = to_version_out
     # v1.5.1 (PR-9 FIX 3): when packs were re-signed under v2+ but
     # carried a null ``request_id`` we surface a warning so operators
     # know which model_run_ids are still replay-vulnerable. The warning

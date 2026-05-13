@@ -39,6 +39,9 @@ from market_regime_engine.evidence_common import (
     canonical_json as _shared_canonical_json,
 )
 from market_regime_engine.evidence_common import (
+    coerce_for_canonical as _shared_coerce,
+)
+from market_regime_engine.evidence_common import (
     git_dirty as _shared_git_dirty,
 )
 from market_regime_engine.evidence_common import (
@@ -72,16 +75,27 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _canonical_json(obj: object) -> bytes:
-    """Local thin wrapper that emits bytes — calls the shared encoder.
+def _canonical_json(obj: object, *, version: str = "v2") -> bytes:
+    """Local thin wrapper that emits bytes -- calls the shared encoder.
 
     v1.6 PR-22: the canonical-JSON encoding is shared with the FI
     evidence-pack subpack via :mod:`market_regime_engine.evidence_common`.
     We keep this wrapper to preserve the local byte-returning signature
     that this module's manifest writer expects (the shared helper
     returns a ``str``).
+
+    v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): defaults to the RFC 8785
+    encoder (``version="v2"``) so a new validation evidence pack
+    produces cross-language verifiable canonical bytes. Floats,
+    non-ASCII strings, datetime / Decimal / Path values are pre-coerced
+    via :func:`evidence_common.coerce_for_canonical` so the strict
+    encoder's reject-on-non-native rule does not surprise existing
+    manifest builders. ``version="v1"`` is retained for tests that
+    need byte-identical reproduction of v1.5.x packs.
     """
-    return _shared_canonical_json(obj).encode("utf-8")
+    if version == "v2":
+        obj = _shared_coerce(obj)
+    return _shared_canonical_json(obj, version=version).encode("utf-8")  # type: ignore[arg-type]
 
 
 _git_revision = _shared_git_revision
@@ -217,6 +231,14 @@ def build_evidence_pack(
     raw_command_line = list(command_line) if command_line is not None else sys.argv
     manifest = {
         "schema": "mre.validation_evidence_pack.v2",
+        # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): canonical-JSON
+        # encoder version stamped into the manifest. New packs default to
+        # v2 (RFC 8785). Verifier hashes the file bytes verbatim so the
+        # stamp is informational -- a cross-language verifier can read it
+        # to choose the right re-derivation algorithm if it ever wants
+        # to recompute the manifest hash from the underlying artifact
+        # set.
+        "canonical_version": "v2",
         "created_at_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "engine_version": __version__,
         "git_sha": _git_revision(short=False),
