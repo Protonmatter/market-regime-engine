@@ -41,7 +41,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Response
 
@@ -512,7 +512,8 @@ def _mount_fixed_income_router() -> None:
                         headers={"Retry-After": "1"},
                     )
 
-                app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)  # type: ignore[arg-type]
+                exception_handler = cast(Callable[[Any, Exception], Any], _rate_limit_handler)
+                app.add_exception_handler(RateLimitExceeded, exception_handler)
             except Exception as exc:  # pragma: no cover - defensive
                 log.warning("slowapi exception handler setup failed: %s", exc)
                 limiter = None

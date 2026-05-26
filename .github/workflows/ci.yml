@@ -70,7 +70,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pip install pytest
+          pip install pytest httpx
           pytest tests/test_version_sanity.py tests/test_readme_version_sanity.py -q
       - name: README banner version-drift guard (PR-9 FIX 6)
         shell: bash
@@ -414,10 +414,11 @@ jobs:
         shell: bash
         run: |
           python -m venv .smoke-venv
+          VENV_ROOT="$PWD/.smoke-venv"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            VENV_PY=".smoke-venv/Scripts/python.exe"
+            VENV_PY="${VENV_ROOT}/Scripts/python.exe"
           else
-            VENV_PY=".smoke-venv/bin/python"
+            VENV_PY="${VENV_ROOT}/bin/python"
           fi
           "${VENV_PY}" -m pip install --upgrade pip
           "${VENV_PY}" -m pip install dist/market_regime_engine-*.whl
@@ -425,10 +426,11 @@ jobs:
       - name: Run package-metadata tests against the installed wheel
         shell: bash
         run: |
+          VENV_ROOT="$PWD/.smoke-venv"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            VENV_PY=".smoke-venv/Scripts/python.exe"
+            VENV_PY="${VENV_ROOT}/Scripts/python.exe"
           else
-            VENV_PY=".smoke-venv/bin/python"
+            VENV_PY="${VENV_ROOT}/bin/python"
           fi
           # Run from a directory OUTSIDE the source tree so the test
           # exercises the installed package, not the editable source.
