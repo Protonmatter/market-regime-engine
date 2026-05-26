@@ -13,13 +13,14 @@ v1.4 posterior trace exactly).
 
 from __future__ import annotations
 
-import hashlib
+import math
 import time
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from market_regime_engine.frontier import gp_cpd as gp_cpd_module
 from market_regime_engine.frontier.gp_cpd import GPBOCPD, _GPRun
 
 
@@ -115,15 +116,70 @@ def test_gp_cpd_ring_buffer_rejects_invalid_dims() -> None:
 # ---------------------------------------------------------------------------
 
 
-_PINNED_OUTPUT_SHA256_BY_RUNTIME = {
-    # Windows/local baseline captured against the v1.4-list implementation.
-    "c1f92235dd11af282784ce817ab3d18e8ddfc32dbea445f13798b291d99d9d25",
-    # Linux CI emits a different byte stream for the same deterministic trace
-    # under the NumPy/Pandas wheel stack, while the ring-buffer semantics remain
-    # unchanged. Keep the pin strict to known hashes instead of relaxing to a
-    # broad tolerance.
-    "c77b6915b5b747d94b67b4a3e6883ac12459f4319a6359de480453132de69ee5",
-}
+class _LegacyListGPRun:
+    """Pre-ring-buffer list-backed run state used as an in-process oracle."""
+
+    def __init__(
+        self,
+        *,
+        max_run: int,
+        d: int,
+        length_scale: float = 1.0,
+        noise_var: float = 0.1,
+        signal_var: float = 1.0,
+    ) -> None:
+        del max_run, d
+        self.xs: list[np.ndarray] = []
+        self.length_scale = float(length_scale)
+        self.noise_var = float(noise_var)
+        self.signal_var = float(signal_var)
+
+    def update(self, x: np.ndarray) -> _LegacyListGPRun:
+        new = _LegacyListGPRun(
+            max_run=1,
+            d=len(x),
+            length_scale=self.length_scale,
+            noise_var=self.noise_var,
+            signal_var=self.signal_var,
+        )
+        new.xs = [*self.xs, np.asarray(x, dtype=np.float64)]
+        return new
+
+    def predictive_logpdf(self, x: np.ndarray) -> float:
+        n = len(self.xs)
+        if n == 0:
+            d = len(x)
+            var = self.noise_var + self.signal_var
+            return float(
+                -0.5 * d * math.log(2 * math.pi * max(var, 1e-9)) - 0.5 * float(np.sum((x**2) / max(var, 1e-9)))
+            )
+        y = np.stack(self.xs)
+        t = np.arange(n, dtype=float).reshape(-1, 1)
+        t_star = np.array([[float(n)]])
+        diff = t[:, None, :] - t[None, :, :]
+        k = self.signal_var * np.exp(-0.5 * np.sum(diff**2, axis=-1) / max(self.length_scale**2, 1e-9))
+        k += self.noise_var * np.eye(n)
+        k_star = self.signal_var * np.exp(
+            -0.5 * np.sum((t - t_star.T) ** 2, axis=-1, keepdims=True) / max(self.length_scale**2, 1e-9)
+        )
+        k_starstar = self.signal_var + self.noise_var
+        try:
+            chol = np.linalg.cholesky(k + 1e-9 * np.eye(n))
+            alpha = np.linalg.solve(chol.T, np.linalg.solve(chol, y))
+            mean_star = (k_star.T @ alpha).flatten()
+            v = np.linalg.solve(chol, k_star)
+            quad = float(np.asarray(v.T @ v).reshape(-1)[0])
+            var_star = max(k_starstar - quad, 1e-9)
+            d = len(x)
+            return float(
+                -0.5 * d * math.log(2 * math.pi * var_star) - 0.5 * float(np.sum((x - mean_star) ** 2) / var_star)
+            )
+        except np.linalg.LinAlgError:
+            d = len(x)
+            var = self.noise_var + self.signal_var
+            return float(
+                -0.5 * d * math.log(2 * math.pi * max(var, 1e-9)) - 0.5 * float(np.sum((x - 0.0) ** 2) / max(var, 1e-9))
+            )
 
 
 def _pinned_panel(T: int = 80, *, seed: int = 42) -> pd.DataFrame:
@@ -132,16 +188,16 @@ def _pinned_panel(T: int = 80, *, seed: int = 42) -> pd.DataFrame:
     return pd.DataFrame({"x": x}, index=pd.date_range("2024-01-01", periods=T, freq="D"))
 
 
-def test_gp_cpd_posterior_unchanged_after_ring_buffer_migration() -> None:
-    """Pin the deterministic GP-BOCPD output bytes against the v1.4 baseline."""
-    out = GPBOCPD(hazard=1 / 24.0, max_run=24).score(_pinned_panel())
+def test_gp_cpd_posterior_unchanged_after_ring_buffer_migration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the ring-buffer output against the same-runtime legacy list path."""
+    panel = _pinned_panel()
+    out = GPBOCPD(hazard=1 / 24.0, max_run=24).score(panel)
+    monkeypatch.setattr(gp_cpd_module, "_GPRun", _LegacyListGPRun)
+    legacy = GPBOCPD(hazard=1 / 24.0, max_run=24).score(panel)
     cols = ["change_point_prob", "bocpd_run_length_mean", "bocpd_map_run_length", "predictive_log_likelihood"]
     arr = out[cols].to_numpy(dtype=np.float64)
-    digest = hashlib.sha256(arr.tobytes()).hexdigest()
-    assert digest in _PINNED_OUTPUT_SHA256_BY_RUNTIME, (
-        f"GP-BOCPD output drifted from v1.4 baseline (sha256={digest}); "
-        f"the ring buffer must preserve bit-for-bit numerical equivalence."
-    )
+    legacy_arr = legacy[cols].to_numpy(dtype=np.float64)
+    assert arr.tobytes() == legacy_arr.tobytes(), "ring-buffer GP-BOCPD output drifted from the list-backed path"
 
 
 # ---------------------------------------------------------------------------
