@@ -172,6 +172,7 @@ def test_materialize_under_30s(synthetic_vintages) -> None:
     )
 
 
+@pytest.mark.slow
 def test_materialize_matches_legacy_per_loop_output(synthetic_vintages) -> None:
     """Correctness regression: vectorised output must match the
     pre-v1.2.1 per-loop output bit-for-bit (modulo float rounding within

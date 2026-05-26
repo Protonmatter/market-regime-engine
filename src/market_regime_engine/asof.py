@@ -479,6 +479,42 @@ def _materialize_with_revisions(
     return pd.concat(out_rows, ignore_index=True)
 
 
+def _collapse_settled_revisions(
+    df: pd.DataFrame,
+    asof_ts_list: list[pd.Timestamp],
+) -> tuple[pd.DataFrame, bool]:
+    """Collapse revision duplicates that cannot affect any requested as-of.
+
+    If every duplicated (series, observation_date) group has its latest
+    effective vintage already visible by the first requested as-of, older rows
+    are unreachable for the whole grid. In that case the no-revisions fast path
+    is semantically equivalent and avoids rebuilding feature panels per as-of.
+    """
+    duplicate_mask = df.duplicated(["series_id", "observation_date"], keep=False)
+    if not bool(duplicate_mask.any()):
+        return df, False
+    first_asof = min(asof_ts_list)
+    work = df.copy()
+    if "realtime_start" in work:
+        work["realtime_start"] = pd.to_datetime(work["realtime_start"], errors="coerce").fillna(work["vintage_date"])
+    else:
+        work["realtime_start"] = work["vintage_date"]
+    work["_effective_vintage_date"] = work[["vintage_date", "realtime_start"]].max(axis=1)
+    latest_effective = (
+        work.loc[duplicate_mask].groupby(["series_id", "observation_date"])["_effective_vintage_date"].max()
+    )
+    if latest_effective.isna().any() or not bool((latest_effective <= first_asof).all()):
+        return df, True
+    collapsed = (
+        work.sort_values(["series_id", "observation_date", "vintage_date", "realtime_start"])
+        .drop_duplicates(["series_id", "observation_date"], keep="last")
+        .drop(columns=["_effective_vintage_date"])
+    )
+    if "realtime_start" not in df.columns:
+        collapsed = collapsed.drop(columns=["realtime_start"])
+    return collapsed, False
+
+
 def materialize_feature_asof_values(
     vintage_observations: pd.DataFrame,
     catalog: list[dict],
@@ -508,7 +544,7 @@ def materialize_feature_asof_values(
         asof_ts_list = [pd.Timestamp(d).normalize() for d in asof_dates]
     if not asof_ts_list:
         return _empty_feature_asof_values()
-    has_revisions = bool(df.duplicated(["series_id", "observation_date"], keep=False).any())
+    df, has_revisions = _collapse_settled_revisions(df, asof_ts_list)
     if has_revisions:
         return _materialize_with_revisions(df, catalog, asof_ts_list)
     return _materialize_no_revisions(df, catalog, asof_ts_list)
