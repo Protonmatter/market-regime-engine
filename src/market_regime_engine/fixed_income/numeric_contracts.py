@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 from typing import Any
 
 import pandas as pd

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import os
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -31,6 +30,13 @@ from market_regime_engine.asof import (
 from market_regime_engine.attribution import domain_driver_attribution, feature_driver_attribution
 from market_regime_engine.backtest import benchmark_report
 from market_regime_engine.calibration import apply_binary_calibration, fit_calibrators_from_validation
+from market_regime_engine.cli_helpers import (
+    _load_training_audit,
+    _persist_training_audit,
+    _resolve_allow_legacy_fallback,
+    _resolve_training_mode,
+    _verify_fi_evidence_pack,
+)
 from market_regime_engine.confidence import compute_model_confidence
 from market_regime_engine.config import load_catalog
 from market_regime_engine.drift import compute_feature_drift, drift_summary
@@ -40,7 +46,7 @@ from market_regime_engine.fred_recession import fetch_fred_recession_indicator
 from market_regime_engine.fred_vintage import FredVintageIngestionPlan, fetch_fred_vintage_plan
 from market_regime_engine.hazard_model import hazard_backtest_matrix, train_fitted_hazard_outputs
 from market_regime_engine.invalidation import forecast_invalidation_triggers
-from market_regime_engine.logging_setup import configure_logging, get_logger
+from market_regime_engine.logging_setup import get_logger
 from market_regime_engine.model_registry import create_model_card, write_model_card
 from market_regime_engine.model_runs import create_model_run, model_run_frame
 from market_regime_engine.models import train_latest_outputs
@@ -65,7 +71,7 @@ from market_regime_engine.stacking_v2 import regime_conditioned_stacking
 from market_regime_engine.storage import Warehouse, migrate_warehouse
 from market_regime_engine.survival import recession_hazard_scores, survival_summary
 from market_regime_engine.targets import make_targets
-from market_regime_engine.training_data import TrainingMode, join_X_y, load_targets, load_training_panel
+from market_regime_engine.training_data import join_X_y, load_targets, load_training_panel
 
 log = get_logger("mre.cli")
 
@@ -234,16 +240,6 @@ def score_regime_cmd(args: argparse.Namespace) -> None:
     finally:
         db.close()
 
-
-
-
-from market_regime_engine.cli_helpers import (
-    _load_training_audit,
-    _persist_training_audit,
-    _resolve_allow_legacy_fallback,
-    _resolve_training_mode,
-    _verify_fi_evidence_pack,
-)
 
 def train_baseline_cmd(args: argparse.Namespace) -> None:
     db = Warehouse(args.db)
@@ -1466,7 +1462,6 @@ def report_cmd(args: argparse.Namespace) -> None:
                 print(frame.tail(20).to_string(index=False))
     finally:
         db.close()
-
 
 
 __all__ = [name for name in globals() if name.endswith("_cmd") or name == "bootstrap_sample"]

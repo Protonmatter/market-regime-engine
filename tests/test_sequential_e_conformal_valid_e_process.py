@@ -67,9 +67,7 @@ def test_empirical_e_variable_property_under_calibrated_forecaster(p_hat: float)
     layer = SequentialEConformal()
     increments = np.array([layer._increment(p_hat, int(y)) for y in ys])
     emp_mean = float(increments.mean())
-    assert abs(emp_mean - 1.0) < 0.05, (
-        f"Empirical mean {emp_mean} too far from 1 for p_hat={p_hat}"
-    )
+    assert abs(emp_mean - 1.0) < 0.05, f"Empirical mean {emp_mean} too far from 1 for p_hat={p_hat}"
 
 
 def test_e_process_is_martingale_under_h0() -> None:
@@ -116,9 +114,7 @@ def test_fit_consumes_y_and_p_columns_for_e_process() -> None:
     # The fit-time e-statistic should reflect the betting e-process; for a
     # calibrated forecaster the running product should be close to 1
     # (geometric mean of expectation-1 increments).
-    assert layer.e_per_bucket["a"] < 10.0, (
-        f"Calibrated fit produced runaway e-statistic: {layer.e_per_bucket['a']}"
-    )
+    assert layer.e_per_bucket["a"] < 10.0, f"Calibrated fit produced runaway e-statistic: {layer.e_per_bucket['a']}"
 
 
 def test_update_uses_outcome_not_just_score() -> None:
@@ -130,11 +126,7 @@ def test_update_uses_outcome_not_just_score() -> None:
 
     # Calibrated case: e-stat hovers around 1.
     layer_cal = SequentialEConformal(alpha=0.05)
-    layer_cal.fit(
-        pd.DataFrame(
-            {"y": rng.binomial(1, 0.5, size=100), "p": [0.5] * 100, "regime_bucket": ["a"] * 100}
-        )
-    )
+    layer_cal.fit(pd.DataFrame({"y": rng.binomial(1, 0.5, size=100), "p": [0.5] * 100, "regime_bucket": ["a"] * 100}))
     e_initial = layer_cal.e_per_bucket["a"]
     for _ in range(500):
         y_val = int(rng.binomial(1, 0.5))
@@ -144,11 +136,7 @@ def test_update_uses_outcome_not_just_score() -> None:
     # Miscalibrated case: predict 0.5 but truth is 0.95 → e-stat grows
     # because each y=1 increment is 1 + (1 - 0.5) = 1.5 with prob 0.95.
     layer_mis = SequentialEConformal(alpha=0.05)
-    layer_mis.fit(
-        pd.DataFrame(
-            {"y": rng.binomial(1, 0.95, size=100), "p": [0.5] * 100, "regime_bucket": ["a"] * 100}
-        )
-    )
+    layer_mis.fit(pd.DataFrame({"y": rng.binomial(1, 0.95, size=100), "p": [0.5] * 100, "regime_bucket": ["a"] * 100}))
     for _ in range(500):
         y_val = int(rng.binomial(1, 0.95))
         layer_mis.update("a", y_val, 0.5)
@@ -162,9 +150,7 @@ def test_update_uses_outcome_not_just_score() -> None:
     # with high probability after 500 updates with ~0.95 success rate
     # (alpha=0.05). This is the Ville-inequality contract: H_1 detection
     # is fast, H_0 type-I control is anytime-valid.
-    assert e_final_mis > 1.0 / 0.05, (
-        f"Miscalibrated H_1 not detected: e = {e_final_mis}"
-    )
+    assert e_final_mis > 1.0 / 0.05, f"Miscalibrated H_1 not detected: e = {e_final_mis}"
 
 
 def test_p_hat_clipped_to_eps_keeps_increment_admissible() -> None:

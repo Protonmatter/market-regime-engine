@@ -8,9 +8,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from tests.test_protocol_recommendation import _seed
-
 from market_regime_engine.storage import Warehouse, close_pooled_warehouses
+from tests.test_protocol_recommendation import _seed
 
 
 @pytest.fixture

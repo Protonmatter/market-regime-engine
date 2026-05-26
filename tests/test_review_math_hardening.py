@@ -59,7 +59,9 @@ def test_mq_dfm_custom_state_space_supports_daily_weekly_monthly_layout() -> Non
     weekly.iloc[6::7] = pd.Series(daily, index=idx).rolling(7, min_periods=1).mean().iloc[6::7]
     monthly = pd.Series(np.nan, index=idx)
     month_end_mask = idx.is_month_end
-    monthly.loc[month_end_mask] = pd.Series(daily, index=idx).groupby(idx.to_period("M")).transform("mean").loc[month_end_mask]
+    monthly.loc[month_end_mask] = (
+        pd.Series(daily, index=idx).groupby(idx.to_period("M")).transform("mean").loc[month_end_mask]
+    )
     panel = pd.DataFrame({"daily": daily, "weekly": weekly, "monthly": monthly}, index=idx)
 
     model = MQDynamicFactorModel().fit(panel, frequencies={"daily": "D", "weekly": "W", "monthly": "M"})
@@ -75,7 +77,7 @@ def test_mq_dfm_custom_state_space_supports_daily_weekly_monthly_layout() -> Non
 
 def test_mq_dfm_rejects_unsupported_quarterly_daily_mix() -> None:
     panel, _ = build_synthetic_panel(n_months=24, n_series=2, seed=7)
-    with pytest.raises(ValueError, match="quarterly .* daily/weekly"):
+    with pytest.raises(ValueError, match=r"quarterly .* daily/weekly"):
         MQDynamicFactorModel().fit(panel, frequencies={panel.columns[0]: "D", panel.columns[1]: "Q"})
 
 

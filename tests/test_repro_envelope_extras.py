@@ -176,9 +176,7 @@ def test_verify_run_warns_on_numpy_blas_drift(
 
     stored_env_dict = json.loads(run.metadata_json)["repro_envelope"]
     stored_env_dict["numpy_blas"] = "openblas"
-    metadata_json = json.dumps(
-        {"repro_envelope": stored_env_dict}, sort_keys=True, default=str
-    )
+    metadata_json = json.dumps({"repro_envelope": stored_env_dict}, sort_keys=True, default=str)
     row = pd.Series({"metadata_json": metadata_json})
 
     # Set drift_env to be byte-identical to the stored envelope EXCEPT
@@ -219,9 +217,7 @@ def test_verify_run_warns_on_python_hash_seed_drift() -> None:
 
     stored = json.loads(run.metadata_json)["repro_envelope"]
     stored["python_hash_seed"] = "0"
-    metadata_json = json.dumps(
-        {"repro_envelope": stored}, sort_keys=True, default=str
-    )
+    metadata_json = json.dumps({"repro_envelope": stored}, sort_keys=True, default=str)
     row = pd.Series({"metadata_json": metadata_json})
 
     drift_env = ReproEnvelope(
@@ -262,9 +258,7 @@ def test_verify_run_warns_on_runtime_env_snapshot_drift() -> None:
         "MRE_ENV": "production",
         "TZ": "UTC",
     }
-    metadata_json = json.dumps(
-        {"repro_envelope": stored}, sort_keys=True, default=str
-    )
+    metadata_json = json.dumps({"repro_envelope": stored}, sort_keys=True, default=str)
     row = pd.Series({"metadata_json": metadata_json})
 
     drift_env = ReproEnvelope(
@@ -349,9 +343,7 @@ def test_envelope_legacy_v1_5_x_missing_keys_silent() -> None:
         "extra": {},
         "lockfile_hashes": {},
     }
-    metadata_json = json.dumps(
-        {"repro_envelope": legacy_envelope}, sort_keys=True, default=str
-    )
+    metadata_json = json.dumps({"repro_envelope": legacy_envelope}, sort_keys=True, default=str)
     row = pd.Series({"metadata_json": metadata_json})
     current_env = build_repro_envelope(
         features=pd.DataFrame(),

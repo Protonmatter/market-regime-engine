@@ -43,9 +43,7 @@ def _seed(wh: Warehouse, ts: pd.Timestamp) -> None:
     ]
     features = pd.DataFrame(rows)
     features.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
-    write_credit_regime_score(
-        wh, score_credit_regime(features, asof=ts, release_gate=True)
-    )
+    write_credit_regime_score(wh, score_credit_regime(features, asof=ts, release_gate=True))
 
     rows = [
         {
@@ -104,9 +102,7 @@ def _payload(request_id: str = "req-score-fail") -> dict:
     }
 
 
-def test_unexpected_scorer_exception_returns_503_fail_closed_envelope(
-    client, monkeypatch
-) -> None:
+def test_unexpected_scorer_exception_returns_503_fail_closed_envelope(client, monkeypatch) -> None:
     """A10: a ``ValueError`` raised inside ``score_execution_confidence``
     must NOT propagate as an UnboundLocalError; the handler maps it to
     503 with the canonical fail-closed body."""
@@ -127,9 +123,7 @@ def test_unexpected_scorer_exception_returns_503_fail_closed_envelope(
     assert body["detail"]["release_gate"] is False
 
 
-def test_unexpected_scorer_exception_does_not_leak_unbound_local(
-    client, monkeypatch
-) -> None:
+def test_unexpected_scorer_exception_does_not_leak_unbound_local(client, monkeypatch) -> None:
     """A10: an arbitrary RuntimeError must also produce the fail-closed
     envelope — pinning that the handler does not fall through to a
     bare ``return JSONResponse(execution_confidence_response_to_dict(
@@ -144,9 +138,7 @@ def test_unexpected_scorer_exception_does_not_leak_unbound_local(
         _boom,
     )
 
-    resp = testclient.post(
-        "/v1/execution_confidence", json=_payload("req-unbound")
-    )
+    resp = testclient.post("/v1/execution_confidence", json=_payload("req-unbound"))
     assert resp.status_code == 503, resp.text
     body = resp.json()
     assert body["detail"]["detail"] == "score_failed"

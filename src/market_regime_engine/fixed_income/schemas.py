@@ -71,9 +71,7 @@ class _ReadOnlyMetadata(dict):
     def clear(self) -> None:
         raise TypeError(self._frozen_msg)
 
-    def setdefault(
-        self, key: Any, default: Any = None
-    ) -> Any:
+    def setdefault(self, key: Any, default: Any = None) -> Any:
         raise TypeError(self._frozen_msg)
 
     def __copy__(self) -> dict[Any, Any]:
@@ -99,6 +97,7 @@ def _freeze_metadata(obj: object) -> None:
     if isinstance(raw, _ReadOnlyMetadata):
         return
     object.__setattr__(obj, "metadata", _ReadOnlyMetadata(raw))
+
 
 # ---------------------------------------------------------------------------
 # Label enums
@@ -508,6 +507,7 @@ class FixedIncomeEvidencePack:
         # the frozen-dataclass immutability contract extends
         # to the dict's contents, not just the field binding.
         _freeze_metadata(self)
+
     request_id: str | None = None
 
 

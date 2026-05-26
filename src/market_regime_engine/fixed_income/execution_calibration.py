@@ -37,7 +37,8 @@ import math
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from itertools import pairwise
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -160,7 +161,7 @@ def _ece(y: np.ndarray, p: np.ndarray, *, bins: int = 10) -> float:
     edges = np.linspace(0.0, 1.0, int(bins) + 1)
     total = float(yy.size)
     acc = 0.0
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in pairwise(edges):
         if hi >= 1.0:
             mask = (pp >= lo) & (pp <= hi)
         else:
@@ -348,15 +349,15 @@ def fit_execution_probability_calibrator(
         raise ValueError("no joined prediction/outcome rows available for calibration")
     frame = dataset.copy()
     frame = frame.dropna(subset=["raw_confidence_score", FILL_SUCCESS_TARGET])
-    frame = frame.loc[
-        np.isfinite(pd.to_numeric(frame["raw_confidence_score"], errors="coerce"))
-    ].copy()
+    frame = frame.loc[np.isfinite(pd.to_numeric(frame["raw_confidence_score"], errors="coerce"))].copy()
     if len(frame) < int(min_observations):
-        raise ValueError(
-            f"fill-success calibration requires at least {int(min_observations)} rows; got {len(frame)}"
-        )
+        raise ValueError(f"fill-success calibration requires at least {int(min_observations)} rows; got {len(frame)}")
 
-    raw = np.clip(pd.to_numeric(frame["raw_confidence_score"], errors="coerce").to_numpy(dtype=float), _DEFAULT_EPS, 1.0 - _DEFAULT_EPS)
+    raw = np.clip(
+        pd.to_numeric(frame["raw_confidence_score"], errors="coerce").to_numpy(dtype=float),
+        _DEFAULT_EPS,
+        1.0 - _DEFAULT_EPS,
+    )
     y = pd.to_numeric(frame[FILL_SUCCESS_TARGET], errors="coerce").to_numpy(dtype=float)
     intercept, slope, calibrated = _fit_platt(raw, y, l2=l2)
     cutoff = _coerce_asof(asof or frame["training_cutoff_utc"].iloc[0])
@@ -381,7 +382,7 @@ def fit_execution_probability_calibrator(
         "intercept": intercept,
         "slope": slope,
         "fallback_rate": fallback,
-        "observations": int(len(frame)),
+        "observations": len(frame),
         "raw_mean": float(raw.mean()),
         "calibrated_mean": float(calibrated.mean()),
         "training_cutoff_utc": iso8601_z(cutoff),
@@ -402,7 +403,7 @@ def fit_execution_probability_calibrator(
         run_id=rid,
         target=FILL_SUCCESS_TARGET,
         method=FILL_SUCCESS_METHOD,
-        observations=int(len(frame)),
+        observations=len(frame),
         training_cutoff_utc=iso8601_z(cutoff),
         intercept=intercept,
         slope=slope,
@@ -438,9 +439,7 @@ def fit_execution_slippage_calibrator(
     frame["observed_slippage_bps"] = pd.to_numeric(frame.get("observed_slippage_bps"), errors="coerce")
     frame = frame.dropna(subset=["raw_expected_slippage_bps", "observed_slippage_bps"])
     if len(frame) < int(min_observations):
-        raise ValueError(
-            f"slippage calibration requires at least {int(min_observations)} rows; got {len(frame)}"
-        )
+        raise ValueError(f"slippage calibration requires at least {int(min_observations)} rows; got {len(frame)}")
     raw = frame["raw_expected_slippage_bps"].to_numpy(dtype=float)
     y = frame["observed_slippage_bps"].to_numpy(dtype=float)
     intercept, slope, calibrated = _fit_linear(raw, y, l2=l2)
@@ -465,7 +464,7 @@ def fit_execution_slippage_calibrator(
         "method": SLIPPAGE_METHOD,
         "intercept": intercept,
         "slope": slope,
-        "observations": int(len(frame)),
+        "observations": len(frame),
         "raw_mean": float(raw.mean()),
         "calibrated_mean": float(calibrated.mean()),
         "training_cutoff_utc": iso8601_z(cutoff),
@@ -479,7 +478,7 @@ def fit_execution_slippage_calibrator(
         run_id=rid,
         target=SLIPPAGE_TARGET,
         method=SLIPPAGE_METHOD,
-        observations=int(len(frame)),
+        observations=len(frame),
         training_cutoff_utc=iso8601_z(cutoff),
         intercept=intercept,
         slope=slope,
@@ -624,9 +623,7 @@ def _read_calibration_row(
 def load_execution_probability_calibrator(warehouse: Any) -> dict[str, Any] | None:
     """Load the persisted fill-success calibrator, if present."""
 
-    return _read_calibration_row(
-        warehouse, target=FILL_SUCCESS_TARGET, method=FILL_SUCCESS_METHOD
-    )
+    return _read_calibration_row(warehouse, target=FILL_SUCCESS_TARGET, method=FILL_SUCCESS_METHOD)
 
 
 def load_execution_slippage_calibrator(warehouse: Any) -> dict[str, Any] | None:

@@ -89,9 +89,7 @@ def test_murphy_decomposition_accepts_ndarray_inputs():
         assert np.isfinite(out[key])
     # Brier-ish identity (Murphy 1973, binned): brier ≈ REL - RES + UNC
     # within the bin-discretisation error budget (~1e-2 for n=200, 10 bins).
-    assert out["brier"] == pytest.approx(
-        out["reliability"] - out["resolution"] + out["uncertainty"], abs=2e-2
-    )
+    assert out["brier"] == pytest.approx(out["reliability"] - out["resolution"] + out["uncertainty"], abs=2e-2)
 
 
 # ---------------------------------------------------------------------------

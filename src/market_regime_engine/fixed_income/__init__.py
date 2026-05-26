@@ -59,9 +59,6 @@ from market_regime_engine.fixed_income.evidence_pack import (
     verify_pack_hash,
     write_evidence_pack,
 )
-from market_regime_engine.fixed_income.execution_confidence import (
-    DEFAULT_WEIGHTS as EXECUTION_CONFIDENCE_DEFAULT_WEIGHTS,
-)
 from market_regime_engine.fixed_income.execution_calibration import (
     ExecutionCalibrationResult,
     build_execution_calibration_dataset,
@@ -70,10 +67,8 @@ from market_regime_engine.fixed_income.execution_calibration import (
     load_execution_probability_calibrator,
     load_execution_slippage_calibrator,
 )
-from market_regime_engine.fixed_income.execution_validation import (
-    ExecutionValidationReport,
-    certification_confidence_row,
-    validate_execution_confidence_realized_outcomes,
+from market_regime_engine.fixed_income.execution_confidence import (
+    DEFAULT_WEIGHTS as EXECUTION_CONFIDENCE_DEFAULT_WEIGHTS,
 )
 from market_regime_engine.fixed_income.execution_confidence import (
     build_execution_features,
@@ -82,27 +77,16 @@ from market_regime_engine.fixed_income.execution_confidence import (
     write_execution_confidence_prediction,
     write_execution_outcome,
 )
+from market_regime_engine.fixed_income.execution_validation import (
+    ExecutionValidationReport,
+    certification_confidence_row,
+    validate_execution_confidence_realized_outcomes,
+)
 from market_regime_engine.fixed_income.feature_builders import (
     build_credit_features,
     build_liquidity_features,
 )
 from market_regime_engine.fixed_income.hashing import canonical_sha256
-from market_regime_engine.fixed_income.numeric_contracts import (
-    DEFAULT_NUMERIC_POLICY,
-    NumericPolicy,
-    assert_no_float_artifact,
-    bps_to_q4,
-    money_to_cents,
-    price_to_q6,
-    prob_to_ppm,
-    timestamp_to_epoch_ns_str,
-)
-from market_regime_engine.fixed_income.protocol_recommendation import (
-    ProtocolCandidateScore,
-    ProtocolRecommendation,
-    ProtocolScore,
-    recommend_execution_protocol,
-)
 from market_regime_engine.fixed_income.liquidity_stress import (
     DEFAULT_WEIGHTS as LIQUIDITY_STRESS_DEFAULT_WEIGHTS,
 )
@@ -116,11 +100,27 @@ from market_regime_engine.fixed_income.liquidity_stress import (
 from market_regime_engine.fixed_income.liquidity_stress import (
     classify_with_hysteresis as classify_liquidity_with_hysteresis,
 )
+from market_regime_engine.fixed_income.numeric_contracts import (
+    DEFAULT_NUMERIC_POLICY,
+    NumericPolicy,
+    assert_no_float_artifact,
+    bps_to_q4,
+    money_to_cents,
+    price_to_q6,
+    prob_to_ppm,
+    timestamp_to_epoch_ns_str,
+)
 from market_regime_engine.fixed_income.pit_guard import assert_pit_safe, assert_trading_day
 from market_regime_engine.fixed_income.posterior_mode import (
     FilteredPosterior,
     PosteriorMode,
     SmoothedPosterior,
+)
+from market_regime_engine.fixed_income.protocol_recommendation import (
+    ProtocolCandidateScore,
+    ProtocolRecommendation,
+    ProtocolScore,
+    recommend_execution_protocol,
 )
 from market_regime_engine.fixed_income.schema import FI_TABLE_NAMES
 from market_regime_engine.fixed_income.schema import register as _register_fi_schema
@@ -205,10 +205,10 @@ __all__ = [
     "TradeRecord",
     "TradingCalendar",
     "aggregate_tca_by_regime",
+    "assert_no_float_artifact",
     "assert_pit_safe",
     "assert_trading_day",
     "assert_utc",
-    "assert_no_float_artifact",
     "bps_to_q4",
     "build_credit_features",
     "build_evidence_pack",
@@ -218,11 +218,10 @@ __all__ = [
     "build_xpro_decision_artifact",
     "calibrate_execution_confidence_from_outcomes",
     "calibration_summary_payload",
-    "validate_execution_confidence_realized_outcomes",
-    "certification_confidence_row",
     "canonical_pack_payload",
     "canonical_sha256",
     "capture_data_vintages",
+    "certification_confidence_row",
     "classify_credit_with_hysteresis",
     "classify_liquidity_with_hysteresis",
     "compute_execution_success_label",
@@ -235,11 +234,11 @@ __all__ = [
     "latest_credit_regime_score",
     "latest_execution_confidence_prediction",
     "latest_hmac_version",
-    "load_execution_probability_calibrator",
-    "load_execution_slippage_calibrator",
     "latest_liquidity_stress_score",
     "latest_tca_regime_segments",
     "list_recent_liquidity_stress_scores",
+    "load_execution_probability_calibrator",
+    "load_execution_slippage_calibrator",
     "materialize_tca_segments_for_day",
     "money_to_cents",
     "next_trading_day",
@@ -247,17 +246,18 @@ __all__ = [
     "price_to_q6",
     "prob_to_ppm",
     "read_evidence_pack",
+    "recommend_execution_protocol",
     "require_production_hmac",
     "score_credit_regime",
     "score_execution_confidence",
     "score_liquidity_stress",
-    "recommend_execution_protocol",
-    "sign_xpro_decision_artifact",
     "sign_pack",
+    "sign_xpro_decision_artifact",
     "tag_trade_with_regime_context",
+    "timestamp_to_epoch_ns_str",
     "to_utc",
     "trading_days_between",
-    "timestamp_to_epoch_ns_str",
+    "validate_execution_confidence_realized_outcomes",
     "verify_pack",
     "verify_pack_hash",
     "verify_xpro_decision_artifact",

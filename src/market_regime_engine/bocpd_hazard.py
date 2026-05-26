@@ -103,9 +103,7 @@ class CovariateBOCPDHazard:
         # contract violation. Raise an explicit ``RuntimeError`` so the
         # failure mode is loud and pinned to the API boundary.
         if self.pipeline is None:
-            raise RuntimeError(
-                "hazard classifier not fitted; call .fit(regime_path, covariates) first"
-            )
+            raise RuntimeError("hazard classifier not fitted; call .fit(regime_path, covariates) first")
         Xp = covariates.reindex(columns=self.feature_columns, fill_value=0.0)
         prob = self.pipeline.predict_proba(Xp.to_numpy(float))[:, 1]
         return pd.Series(np.clip(prob, self.floor, self.ceiling), index=covariates.index, name="hazard_t")

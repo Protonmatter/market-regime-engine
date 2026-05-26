@@ -127,8 +127,7 @@ def normalize_governed_signals(
         out["metadata_json"] = src["metadata_json"].astype(str)
     else:
         out["metadata_json"] = [
-            json.dumps({"adapter_contract": "governed_macro_regime_signal_v1"}, sort_keys=True)
-            for _ in range(len(out))
+            json.dumps({"adapter_contract": "governed_macro_regime_signal_v1"}, sort_keys=True) for _ in range(len(out))
         ]
 
     return out.loc[:, GOVERNED_SIGNAL_COLUMNS].sort_values("date").reset_index(drop=True)

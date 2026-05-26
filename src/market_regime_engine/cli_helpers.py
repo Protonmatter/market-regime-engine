@@ -11,6 +11,7 @@ from market_regime_engine.training_data import TrainingMode
 
 log = get_logger("mre.cli")
 
+
 def _resolve_training_mode(args: argparse.Namespace) -> TrainingMode:
     if getattr(args, "legacy_features", False):
         return TrainingMode.LEGACY
@@ -60,8 +61,6 @@ def _load_training_audit(db_path: str) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
-
-
 
 
 def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
@@ -155,8 +154,6 @@ def _verify_fi_evidence_pack(db: Any, model_run_id: str) -> dict[str, Any]:
             surface="cli_verify_run",
         )
     return out
-
-
 
 
 __all__ = [

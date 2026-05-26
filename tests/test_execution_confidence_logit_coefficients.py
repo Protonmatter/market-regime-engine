@@ -112,9 +112,7 @@ def test_score_execution_confidence_default_coefficients_match_legacy(stub_signa
     request = _request_for()
     warehouse = _StubWarehouse()
     out_default = score_execution_confidence(request, warehouse=warehouse)
-    out_explicit = score_execution_confidence(
-        request, warehouse=warehouse, coefficients=DEFAULT_LOGIT_COEFFICIENTS
-    )
+    out_explicit = score_execution_confidence(request, warehouse=warehouse, coefficients=DEFAULT_LOGIT_COEFFICIENTS)
     assert out_default.confidence_score == pytest.approx(out_explicit.confidence_score, abs=1e-9)
     assert out_default.recommended_action == out_explicit.recommended_action
 

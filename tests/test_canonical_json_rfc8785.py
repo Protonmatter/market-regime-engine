@@ -311,7 +311,7 @@ def test_coerce_recurses_into_nested() -> None:
         ({"x": 1.5}, '{"x":1.5}'),
         ({"x": 0.001}, '{"x":0.001}'),
         # Strings with raw UTF-8 and minimal escapes.
-        ({"k": "a\\b\"c"}, '{"k":"a\\\\b\\"c"}'),
+        ({"k": 'a\\b"c'}, '{"k":"a\\\\b\\"c"}'),
         # Nested structure with sorted keys.
         (
             {"z": 1, "a": [1.0, 2.0, {"y": "x", "a": "b"}]},

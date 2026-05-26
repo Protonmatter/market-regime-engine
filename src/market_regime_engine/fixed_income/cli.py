@@ -1027,9 +1027,7 @@ def _cmd_fi_calibrate_execution_confidence(ns: argparse.Namespace) -> int:
                 fill_ratio_threshold=float(getattr(ns, "fill_ratio_threshold", 0.999)),
                 l2=float(getattr(ns, "l2", 1.0)),
                 fit_slippage=not bool(getattr(ns, "no_slippage", False)),
-                require_prediction_release_gate=not bool(
-                    getattr(ns, "include_unreleased_predictions", False)
-                ),
+                require_prediction_release_gate=not bool(getattr(ns, "include_unreleased_predictions", False)),
                 persist=not bool(getattr(ns, "no_persist", False)),
                 run_id=getattr(ns, "run_id", None),
             )

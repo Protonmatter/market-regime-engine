@@ -1,6 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-from __future__ import annotations
-
 """Backward-compatible CLI facade.
 
 The CLI is decomposed into:
@@ -12,10 +9,13 @@ The CLI is decomposed into:
 This module preserves the historical public import surface.
 """
 
+# SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 import os
 
 from market_regime_engine import __version__ as ENGINE_VERSION
-from market_regime_engine.cli_handlers import *  # noqa: F401,F403
+from market_regime_engine.cli_handlers import *  # noqa: F403
 from market_regime_engine.cli_helpers import _verify_fi_evidence_pack
 from market_regime_engine.cli_parser import parser
 from market_regime_engine.logging_setup import configure_logging
@@ -57,4 +57,9 @@ if __name__ == "__main__":
     main()
 
 
-__all__ = ["main", "parser", "_verify_fi_evidence_pack", *[name for name in globals() if name.endswith("_cmd") or name == "bootstrap_sample"]]
+__all__ = [
+    "main",
+    "parser",
+    "_verify_fi_evidence_pack",
+    *[name for name in globals() if name.endswith("_cmd") or name == "bootstrap_sample"],
+]

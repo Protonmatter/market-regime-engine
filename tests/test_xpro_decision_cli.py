@@ -6,10 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from tests.test_protocol_recommendation import _seed
-
 from market_regime_engine.fixed_income.cli import run as fi_cli
 from market_regime_engine.storage import Warehouse
+from tests.test_protocol_recommendation import _seed
 
 
 def _write_order(tmp_path: Path) -> Path:

@@ -263,9 +263,7 @@ _CONFIDENCE_CEIL: float = 0.95
 _EXPECTED_SLIPPAGE_FLOOR_BPS: float = 1.0
 _EXPECTED_SLIPPAGE_CEIL_BPS: float = 200.0
 
-_SEVERE_OR_CRISIS_LIQUIDITY: frozenset[str] = frozenset(
-    {"Severe Stress", "Crisis Liquidity"}
-)
+_SEVERE_OR_CRISIS_LIQUIDITY: frozenset[str] = frozenset({"Severe Stress", "Crisis Liquidity"})
 
 
 # ---------------------------------------------------------------------------
@@ -380,9 +378,7 @@ def _logit_components(
 ) -> dict[str, float]:
     components: dict[str, float] = {}
     components["base_intercept"] = float(weights["base_intercept"])
-    components["liquidity_penalty"] = float(weights["liquidity_coef"]) * float(
-        liquidity_index
-    )
+    components["liquidity_penalty"] = float(weights["liquidity_coef"]) * float(liquidity_index)
     components["regime_penalty"] = float(weights["regime_coef"]) * float(regime_score)
     notional_log10 = math.log10(max(float(request.notional), 1.0))
     components["notional_penalty"] = float(weights["notional_coef"]) * max(
@@ -410,10 +406,7 @@ def _logit_components(
         components["rating_bonus"] = float(weights["rating_hy"])
     else:
         components["rating_bonus"] = 0.0
-    if (
-        limit_distance_bps is not None
-        and limit_distance_bps > float(limit_distance_bps_threshold)
-    ):
+    if limit_distance_bps is not None and limit_distance_bps > float(limit_distance_bps_threshold):
         components["limit_distance_penalty"] = float(weights["limit_distance_coef"]) * (
             float(limit_distance_bps) - float(limit_distance_bps_threshold)
         )
@@ -452,10 +445,7 @@ def _decision_rule(
     ``(recommended_action, human_review_required)``."""
     if not release_gate:
         return ExecutionRecommendation.MANUAL_REVIEW_REQUIRED, True
-    if (
-        confidence_score >= 0.80
-        and liquidity_label not in _SEVERE_OR_CRISIS_LIQUIDITY
-    ):
+    if confidence_score >= 0.80 and liquidity_label not in _SEVERE_OR_CRISIS_LIQUIDITY:
         return ExecutionRecommendation.AUTO_X_ALLOWED, False
     if confidence_score >= 0.60:
         return ExecutionRecommendation.AUTO_X_CAUTION, False
@@ -561,9 +551,7 @@ def score_execution_confidence(
     )
 
     regime = latest_credit_regime_score(warehouse, asof=decision_ts)
-    liquidity = latest_liquidity_stress_score(
-        warehouse, scope_type="cusip", scope_id=request.cusip, asof=decision_ts
-    )
+    liquidity = latest_liquidity_stress_score(warehouse, scope_type="cusip", scope_id=request.cusip, asof=decision_ts)
     if liquidity is None:
         # Fallback per AGENT.md: cusip scope missing → use market scope.
         liquidity = latest_liquidity_stress_score(warehouse, asof=decision_ts)
@@ -658,9 +646,7 @@ def score_execution_confidence(
 
     logit = sum(components.values())
     raw_confidence_score = max(_CONFIDENCE_FLOOR, min(_CONFIDENCE_CEIL, _sigmoid(logit)))
-    raw_expected_slippage_bps = _expected_slippage_bps(
-        raw_confidence_score, liquidity.liquidity_index
-    )
+    raw_expected_slippage_bps = _expected_slippage_bps(raw_confidence_score, liquidity.liquidity_index)
 
     confidence_score = raw_confidence_score
     expected_slippage_bps = raw_expected_slippage_bps
@@ -680,7 +666,7 @@ def score_execution_confidence(
             )
 
             probability_calibrator = load_execution_probability_calibrator(warehouse)
-            if calibrator_is_usable_asof(probability_calibrator, decision_ts):
+            if probability_calibrator is not None and calibrator_is_usable_asof(probability_calibrator, decision_ts):
                 confidence_score = max(
                     _CONFIDENCE_FLOOR,
                     min(
@@ -696,9 +682,7 @@ def score_execution_confidence(
                         "probability_calibration_target": str(probability_calibrator.get("target")),
                         "probability_calibration_training_cutoff_utc": probability_metadata.get("training_cutoff_utc"),
                         "probability_calibration_artifact_hash": probability_metadata.get("artifact_hash"),
-                        "probability_calibration_observations": int(
-                            probability_calibrator.get("observations") or 0
-                        ),
+                        "probability_calibration_observations": int(probability_calibrator.get("observations") or 0),
                     }
                 )
             elif probability_calibrator is not None:
@@ -707,10 +691,8 @@ def score_execution_confidence(
                 )
 
             slippage_calibrator = load_execution_slippage_calibrator(warehouse)
-            if calibrator_is_usable_asof(slippage_calibrator, decision_ts):
-                calibrated_slippage = apply_slippage_calibration(
-                    raw_expected_slippage_bps, slippage_calibrator
-                )
+            if slippage_calibrator is not None and calibrator_is_usable_asof(slippage_calibrator, decision_ts):
+                calibrated_slippage = apply_slippage_calibration(raw_expected_slippage_bps, slippage_calibrator)
                 if calibrated_slippage is not None:
                     expected_slippage_bps = float(
                         max(
@@ -726,9 +708,7 @@ def score_execution_confidence(
                             "slippage_calibration_target": str(slippage_calibrator.get("target")),
                             "slippage_calibration_training_cutoff_utc": slippage_metadata.get("training_cutoff_utc"),
                             "slippage_calibration_artifact_hash": slippage_metadata.get("artifact_hash"),
-                            "slippage_calibration_observations": int(
-                                slippage_calibrator.get("observations") or 0
-                            ),
+                            "slippage_calibration_observations": int(slippage_calibrator.get("observations") or 0),
                         }
                     )
             elif slippage_calibrator is not None:
@@ -768,9 +748,7 @@ def score_execution_confidence(
         "drivers": list(drivers),
         "logit_components": {k: float(v) for k, v in components.items()},
         "rating_class": rating_class,
-        "limit_distance_bps": (
-            float(limit_distance_bps) if limit_distance_bps is not None else None
-        ),
+        "limit_distance_bps": (float(limit_distance_bps) if limit_distance_bps is not None else None),
         "signal_age_seconds_credit_regime": float(regime_age),
         "signal_age_seconds_liquidity": float(liquidity_age),
         "max_signal_age_seconds": float(max_age),
@@ -783,11 +761,7 @@ def score_execution_confidence(
         "reason": (
             "scored"
             if effective_release_gate
-            else (
-                "release_gate_false"
-                if not release_gate
-                else "upstream_release_gate_false"
-            )
+            else ("release_gate_false" if not release_gate else "upstream_release_gate_false")
         ),
         "weights_used": {k: float(v) for k, v in merged_weights.items()},
         "raw_confidence_score": float(raw_confidence_score),
@@ -851,30 +825,18 @@ def _stale_response(
     ``release_gate=False`` so downstream consumers fail closed. The
     ``signal_age_seconds_*`` keys remain populated (NaN when the
     corresponding signal was absent entirely) for telemetry."""
-    regime_age = _signal_age_seconds(
-        regime.timestamp if regime is not None else None, decision_ts
-    )
-    liquidity_age = _signal_age_seconds(
-        liquidity.timestamp if liquidity is not None else None, decision_ts
-    )
+    regime_age = _signal_age_seconds(regime.timestamp if regime is not None else None, decision_ts)
+    liquidity_age = _signal_age_seconds(liquidity.timestamp if liquidity is not None else None, decision_ts)
     max_age = max(regime_age, liquidity_age)
     metadata: dict[str, Any] = {
         "profile": profile,
         "reason": reason,
         "regime_score": float(regime.regime_score) if regime is not None else None,
         "regime_label": regime.regime_label if regime is not None else None,
-        "liquidity_index": (
-            float(liquidity.liquidity_index) if liquidity is not None else None
-        ),
-        "liquidity_label": (
-            liquidity.liquidity_label if liquidity is not None else None
-        ),
-        "liquidity_scope_type": (
-            liquidity.scope_type if liquidity is not None else None
-        ),
-        "liquidity_scope_id": (
-            liquidity.scope_id if liquidity is not None else None
-        ),
+        "liquidity_index": (float(liquidity.liquidity_index) if liquidity is not None else None),
+        "liquidity_label": (liquidity.liquidity_label if liquidity is not None else None),
+        "liquidity_scope_type": (liquidity.scope_type if liquidity is not None else None),
+        "liquidity_scope_id": (liquidity.scope_id if liquidity is not None else None),
         "drivers": [],
         "logit_components": {},
         "signal_age_seconds_credit_regime": float(regime_age),
@@ -945,19 +907,13 @@ def write_execution_confidence_prediction(
         "protocol": response.protocol,
         "confidence_score": float(response.confidence_score),
         "expected_slippage_bps": (
-            float(response.expected_slippage_bps)
-            if response.expected_slippage_bps is not None
-            else None
+            float(response.expected_slippage_bps) if response.expected_slippage_bps is not None else None
         ),
         "confidence_interval_low": (
-            float(response.confidence_interval_low)
-            if response.confidence_interval_low is not None
-            else None
+            float(response.confidence_interval_low) if response.confidence_interval_low is not None else None
         ),
         "confidence_interval_high": (
-            float(response.confidence_interval_high)
-            if response.confidence_interval_high is not None
-            else None
+            float(response.confidence_interval_high) if response.confidence_interval_high is not None else None
         ),
         "recommended_action": response.recommended_action,
         "human_review_required": 1 if response.human_review_required else 0,
@@ -1004,17 +960,11 @@ def write_execution_outcome(
         "cusip": str(observed.get("cusip", "")),
         "side": str(observed.get("side", "")),
         "notional": float(observed.get("notional", 0.0)),
-        "filled_quantity": (
-            float(observed["filled_quantity"]) if "filled_quantity" in observed else None
-        ),
-        "execution_price": (
-            float(observed["execution_price"]) if "execution_price" in observed else None
-        ),
+        "filled_quantity": (float(observed["filled_quantity"]) if "filled_quantity" in observed else None),
+        "execution_price": (float(observed["execution_price"]) if "execution_price" in observed else None),
         "observed_at": str(observed["observed_at"]),
         "outcome_observation_lag": (
-            float(observed["outcome_observation_lag"])
-            if "outcome_observation_lag" in observed
-            else None
+            float(observed["outcome_observation_lag"]) if "outcome_observation_lag" in observed else None
         ),
         "decision_timestamp": str(observed["decision_timestamp"]),
         "metadata_json": json.dumps(metadata, sort_keys=True, default=str),
@@ -1094,19 +1044,13 @@ def _row_to_execution_response(row: pd.Series) -> ExecutionConfidenceResponse:
         protocol=str(row["protocol"]),
         confidence_score=float(row["confidence_score"]),
         expected_slippage_bps=(
-            float(row["expected_slippage_bps"])
-            if pd.notna(row.get("expected_slippage_bps"))
-            else None
+            float(row["expected_slippage_bps"]) if pd.notna(row.get("expected_slippage_bps")) else None
         ),
         confidence_interval_low=(
-            float(row["confidence_interval_low"])
-            if pd.notna(row.get("confidence_interval_low"))
-            else None
+            float(row["confidence_interval_low"]) if pd.notna(row.get("confidence_interval_low")) else None
         ),
         confidence_interval_high=(
-            float(row["confidence_interval_high"])
-            if pd.notna(row.get("confidence_interval_high"))
-            else None
+            float(row["confidence_interval_high"]) if pd.notna(row.get("confidence_interval_high")) else None
         ),
         recommended_action=str(row["recommended_action"]),
         human_review_required=bool(int(row["human_review_required"])),
@@ -1160,9 +1104,7 @@ def build_execution_features(
         "notional_log10": math.log10(max(float(request.notional), 1.0)),
         "protocol": str(request.protocol),
         "urgency": str(request.urgency or "normal"),
-        "limit_price": (
-            float(request.limit_price) if request.limit_price is not None else None
-        ),
+        "limit_price": (float(request.limit_price) if request.limit_price is not None else None),
         "sector": request.sector,
         "rating": request.rating,
         "rating_class": _rating_class(request.rating),
@@ -1186,13 +1128,9 @@ def build_execution_features(
         out["regime_score"] = float(regime.regime_score)
         out["regime_label"] = regime.regime_label
         out["regime_release_gate"] = bool(regime.release_gate)
-        out["signal_age_seconds_credit_regime"] = _signal_age_seconds(
-            regime.timestamp, decision_ts
-        )
+        out["signal_age_seconds_credit_regime"] = _signal_age_seconds(regime.timestamp, decision_ts)
 
-    liquidity = latest_liquidity_stress_score(
-        warehouse, scope_type="cusip", scope_id=request.cusip, asof=decision_ts
-    )
+    liquidity = latest_liquidity_stress_score(warehouse, scope_type="cusip", scope_id=request.cusip, asof=decision_ts)
     if liquidity is None:
         liquidity = latest_liquidity_stress_score(warehouse, asof=decision_ts)
     if liquidity is not None:
@@ -1207,9 +1145,7 @@ def build_execution_features(
         out["liquidity_scope_type"] = liquidity.scope_type
         out["liquidity_scope_id"] = liquidity.scope_id
         out["liquidity_release_gate"] = bool(liquidity.release_gate)
-        out["signal_age_seconds_liquidity"] = _signal_age_seconds(
-            liquidity.timestamp, decision_ts
-        )
+        out["signal_age_seconds_liquidity"] = _signal_age_seconds(liquidity.timestamp, decision_ts)
 
     # bond_reference asof — best-effort; survivorship-safe via the
     # storage helper.
@@ -1221,24 +1157,14 @@ def build_execution_features(
             sub = ref.loc[ref["cusip"].astype(str) == str(request.cusip)]
             if not sub.empty:
                 row = sub.iloc[0]
-                out["bond_ref_sector"] = (
-                    str(row["sector"]) if pd.notna(row.get("sector")) else None
-                )
-                out["bond_ref_rating"] = (
-                    str(row["rating"]) if pd.notna(row.get("rating")) else None
-                )
-                out["bond_ref_duration"] = (
-                    float(row["duration"]) if pd.notna(row.get("duration")) else None
-                )
+                out["bond_ref_sector"] = str(row["sector"]) if pd.notna(row.get("sector")) else None
+                out["bond_ref_rating"] = str(row["rating"]) if pd.notna(row.get("rating")) else None
+                out["bond_ref_duration"] = float(row["duration"]) if pd.notna(row.get("duration")) else None
                 out["bond_ref_amount_outstanding"] = (
-                    float(row["amount_outstanding"])
-                    if pd.notna(row.get("amount_outstanding"))
-                    else None
+                    float(row["amount_outstanding"]) if pd.notna(row.get("amount_outstanding")) else None
                 )
                 if pd.notna(row.get("amount_outstanding")):
-                    out["amount_outstanding_log10"] = math.log10(
-                        max(float(row["amount_outstanding"]), 1.0)
-                    )
+                    out["amount_outstanding_log10"] = math.log10(max(float(row["amount_outstanding"]), 1.0))
     except Exception as exc:  # pragma: no cover - defensive
         log.debug("bond_reference_asof lookup failed: %s", exc)
 
@@ -1249,31 +1175,22 @@ def build_execution_features(
     # ``_backend.read_sql("SELECT *")`` and filtered in pandas.
     window_start_ts = decision_ts - pd.Timedelta(days=int(lookback_days))
     try:
-        dealer_stats = warehouse.read_dealer_response_stats(
-            window_start=window_start_ts, window_end=decision_ts
-        )
+        dealer_stats = warehouse.read_dealer_response_stats(window_start=window_start_ts, window_end=decision_ts)
     except Exception:
         dealer_stats = None
     if dealer_stats is not None and not dealer_stats.empty:
         dealer_stats = dealer_stats.copy()
-        dealer_stats["window_end_ts"] = pd.to_datetime(
-            dealer_stats["window_end"], utc=True, errors="coerce"
-        )
+        dealer_stats["window_end_ts"] = pd.to_datetime(dealer_stats["window_end"], utc=True, errors="coerce")
         recent = dealer_stats.loc[
-            (dealer_stats["window_end_ts"] >= window_start_ts)
-            & (dealer_stats["window_end_ts"] <= decision_ts)
+            (dealer_stats["window_end_ts"] >= window_start_ts) & (dealer_stats["window_end_ts"] <= decision_ts)
         ]
         if not recent.empty:
             requests_total = float(recent["requests"].fillna(0).sum())
             responses_total = float(recent["responses"].fillna(0).sum())
             out["dealer_response_count"] = responses_total
-            out["dealer_fill_rate"] = (
-                responses_total / requests_total if requests_total > 0 else None
-            )
+            out["dealer_fill_rate"] = responses_total / requests_total if requests_total > 0 else None
             avg_ms = recent["avg_response_ms"].dropna()
-            out["dealer_avg_response_ms"] = (
-                float(avg_ms.mean()) if not avg_ms.empty else None
-            )
+            out["dealer_avg_response_ms"] = float(avg_ms.mean()) if not avg_ms.empty else None
 
     # historical execution_outcomes for this cusip — observed slippage
     # mean / count as a deterministic prior.
@@ -1283,9 +1200,7 @@ def build_execution_features(
         outcomes = None
     if outcomes is not None and not outcomes.empty:
         outcomes = outcomes.copy()
-        outcomes["observed_at_ts"] = pd.to_datetime(
-            outcomes["observed_at"], utc=True, errors="coerce"
-        )
+        outcomes["observed_at_ts"] = pd.to_datetime(outcomes["observed_at"], utc=True, errors="coerce")
         window_start = decision_ts - pd.Timedelta(days=int(lookback_days))
         sub = outcomes.loc[
             (outcomes["cusip"].astype(str) == str(request.cusip))

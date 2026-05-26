@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
 from collections.abc import Callable
 from typing import Any
 
@@ -25,7 +25,6 @@ from market_regime_engine.fixed_income.api_schemas import (
 )
 from market_regime_engine.fixed_income.correlation import log_safe
 from market_regime_engine.fixed_income.credit_spread_regime import (
-    latest_credit_regime_score,
     latest_credit_regime_score_identity,
 )
 from market_regime_engine.fixed_income.liquidity_stress import latest_liquidity_stress_score
@@ -113,7 +112,6 @@ def _close_if_not_pooled(warehouse: Any) -> None:
     if is_pooled_warehouse(warehouse):
         return
     close()
-
 
 
 def build_router(
@@ -362,9 +360,7 @@ def build_router(
                     },
                 ) from exc
             try:
-                api_surface.write_execution_confidence_prediction(
-                    wh, response, request_id=body.request_id
-                )
+                api_surface.write_execution_confidence_prediction(wh, response, request_id=body.request_id)
             except Exception as exc:
                 log.warning(
                     "execution_confidence write failed (request_id=%s): %s",

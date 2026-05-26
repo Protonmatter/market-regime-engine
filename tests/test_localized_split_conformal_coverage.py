@@ -63,9 +63,7 @@ def test_localized_split_conformal_marginal_coverage_bounded_below(alpha: float)
         n_test = len(annotated)
         covered = 0
         for _, row in annotated.iterrows():
-            pred_set = (
-                set(row["conformal_set"].split("|")) if row["conformal_set"] != "empty" else set()
-            )
+            pred_set = set(row["conformal_set"].split("|")) if row["conformal_set"] != "empty" else set()
             if str(int(row["y"])) in pred_set:
                 covered += 1
         coverages.append(covered / n_test)
@@ -121,6 +119,4 @@ def test_threshold_is_monotone_in_alpha() -> None:
     layer_20 = LocalizedSplitConformal(alpha=0.20, bandwidth=1.0, feature_cols=["x1"]).fit(df)
     thr_05 = layer_05._localized_threshold(x_test)
     thr_20 = layer_20._localized_threshold(x_test)
-    assert thr_05 >= thr_20, (
-        f"Threshold non-monotone in alpha: thr(0.05) = {thr_05} < thr(0.20) = {thr_20}"
-    )
+    assert thr_05 >= thr_20, f"Threshold non-monotone in alpha: thr(0.05) = {thr_05} < thr(0.20) = {thr_20}"

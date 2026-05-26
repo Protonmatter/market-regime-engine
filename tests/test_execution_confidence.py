@@ -467,7 +467,6 @@ def test_signal_age_seconds_embedded_in_metadata(wh: Warehouse) -> None:
     assert out.metadata["max_signal_age_seconds"] >= 100
 
 
-
 # ---------------------------------------------------------------------------
 # v1.6.0 PIT regression tests on build_execution_features
 # (REVIEW_DEEP_V1_5_2.md A6 / Finding #15)
@@ -505,6 +504,7 @@ def test_build_execution_features_passes_when_signals_are_pit_safe(wh: Warehouse
     assert "liquidity_index" in row.index
     assert row["signal_age_seconds_credit_regime"] >= 0.0
     assert row["signal_age_seconds_liquidity"] >= 0.0
+
 
 # ---------------------------------------------------------------------------
 # v1.6.0 A5 — limit_distance_bps Decimal arithmetic parity
@@ -550,9 +550,7 @@ def test_limit_distance_bps_decimal_arithmetic_matches_golden_fixture(
     )
     actual_bps = out.metadata["limit_distance_bps"]
     assert actual_bps is not None
-    assert actual_bps == expected_bps, (
-        f"limit_distance_bps drifted: actual={actual_bps!r} vs expected={expected_bps!r}"
-    )
+    assert actual_bps == expected_bps, f"limit_distance_bps drifted: actual={actual_bps!r} vs expected={expected_bps!r}"
 
 
 def test_limit_distance_bps_returns_none_on_zero_mid(wh: Warehouse) -> None:
@@ -568,6 +566,7 @@ def test_limit_distance_bps_returns_none_on_zero_mid(wh: Warehouse) -> None:
     )
     out = score_execution_confidence(request, warehouse=wh, release_gate=True)
     assert out.metadata["limit_distance_bps"] is None
+
 
 # ---------------------------------------------------------------------------
 # v1.6.0 F4 — _signal_age_seconds raises PitViolationError on future delta
@@ -611,4 +610,3 @@ def test_signal_age_seconds_returns_inf_for_none_signal() -> None:
 
     decision_ts = pd.Timestamp("2026-05-01T16:00:00Z")
     assert math.isinf(_signal_age_seconds(None, decision_ts))
-

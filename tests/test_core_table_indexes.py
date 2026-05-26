@@ -57,10 +57,7 @@ def _seed_features(wh: Warehouse, n: int) -> None:
 def test_idx_observations_date_series_exists(wh_sqlite: Warehouse) -> None:
     _seed_observations(wh_sqlite, n=10)
     backend = wh_sqlite._backend
-    rows = backend.read_sql(
-        "SELECT name FROM sqlite_master WHERE type='index' "
-        "AND tbl_name='observations'"
-    )
+    rows = backend.read_sql("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='observations'")
     names = set(rows["name"].astype(str).tolist())
     assert "idx_observations_date_series" in names, names
 
@@ -68,10 +65,7 @@ def test_idx_observations_date_series_exists(wh_sqlite: Warehouse) -> None:
 def test_idx_features_date_name_exists(wh_sqlite: Warehouse) -> None:
     _seed_features(wh_sqlite, n=10)
     backend = wh_sqlite._backend
-    rows = backend.read_sql(
-        "SELECT name FROM sqlite_master WHERE type='index' "
-        "AND tbl_name='features'"
-    )
+    rows = backend.read_sql("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='features'")
     names = set(rows["name"].astype(str).tolist())
     assert "idx_features_date_name" in names, names
 
@@ -93,10 +87,7 @@ def test_idx_model_outputs_date_exists(wh_sqlite: Warehouse) -> None:
         )
     )
     backend = wh_sqlite._backend
-    rows = backend.read_sql(
-        "SELECT name FROM sqlite_master WHERE type='index' "
-        "AND tbl_name='model_outputs'"
-    )
+    rows = backend.read_sql("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='model_outputs'")
     names = set(rows["name"].astype(str).tolist())
     assert "idx_model_outputs_date" in names, names
 
@@ -106,9 +97,6 @@ def test_observations_read_plan_hits_secondary_index(wh_sqlite: Warehouse) -> No
     for the canonical read pattern."""
     _seed_observations(wh_sqlite, n=200)
     backend = wh_sqlite._backend
-    plan = backend.read_sql(
-        "EXPLAIN QUERY PLAN "
-        "SELECT * FROM observations ORDER BY date, series_id"
-    )
+    plan = backend.read_sql("EXPLAIN QUERY PLAN SELECT * FROM observations ORDER BY date, series_id")
     plan_text = " ".join(plan["detail"].astype(str).tolist())
     assert "idx_observations_date_series" in plan_text, plan_text

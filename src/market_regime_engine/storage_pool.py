@@ -114,7 +114,6 @@ def is_pooled_warehouse(warehouse: Warehouse) -> bool:
         return any(warehouse is wh for wh in _POOLED_WAREHOUSES.values())
 
 
-
 __all__ = [
     "close_pooled_warehouses",
     "get_pooled_warehouse",

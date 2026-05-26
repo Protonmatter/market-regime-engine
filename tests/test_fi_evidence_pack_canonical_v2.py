@@ -212,11 +212,7 @@ def test_v2_pack_rejects_nan_in_validation_results(monkeypatch: pytest.MonkeyPat
     # v1 still accepts:
     v1_pack = dataclasses.replace(
         bad_pack,
-        metadata={
-            k: v
-            for k, v in bad_pack.metadata.items()
-            if k != _CANONICAL_VERSION_METADATA_KEY
-        },
+        metadata={k: v for k, v in bad_pack.metadata.items() if k != _CANONICAL_VERSION_METADATA_KEY},
     )
     h = compute_pack_hash(v1_pack)
     assert h.startswith("sha256:")
@@ -230,9 +226,7 @@ def test_v2_pack_rejects_nan_in_validation_results(monkeypatch: pytest.MonkeyPat
 @pytest.fixture
 def hmac_v1_key(monkeypatch: pytest.MonkeyPatch) -> bytes:
     raw = base64.b64encode(b"v1-secret-key-32bytes-for-testing!").decode("ascii")
-    monkeypatch.setenv(
-        "MRE_FI_HMAC_KEY_VERSIONS", f'{{"v1": "{raw}"}}'
-    )
+    monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", f'{{"v1": "{raw}"}}')
     return raw.encode("ascii")
 
 
@@ -248,9 +242,7 @@ def hmac_v1_v2_keys(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     return keys
 
 
-def test_hmac_v1_key_verifies_v1_pack(
-    hmac_v1_key: bytes, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_hmac_v1_key_verifies_v1_pack(hmac_v1_key: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
     """Legacy: v1 HMAC key on a v1 canonical-JSON pack still verifies.
     This is the critical backward-compat contract the deep review
     asked us to preserve."""
@@ -261,9 +253,7 @@ def test_hmac_v1_key_verifies_v1_pack(
     assert verify_pack(signed)
 
 
-def test_hmac_v2_key_verifies_v2_pack(
-    hmac_v1_v2_keys: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_hmac_v2_key_verifies_v2_pack(hmac_v1_v2_keys: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
     """v2 HMAC key on a v2 canonical-JSON pack verifies under the new
     encoder."""
     pack = _make_pack(canonical_version="v2")
@@ -320,9 +310,7 @@ def test_v1_legacy_pack_hash_matches_documented_v1_form() -> None:
     import json as _json
 
     expected_dict = _legacy_pack_dict(pack)
-    expected_bytes = _json.dumps(
-        expected_dict, sort_keys=True, separators=(",", ":"), default=str
-    )
+    expected_bytes = _json.dumps(expected_dict, sort_keys=True, separators=(",", ":"), default=str)
     assert payload_v1 == expected_bytes
     expected_hash = "sha256:" + hashlib.sha256(expected_bytes.encode("utf-8")).hexdigest()
     assert compute_pack_hash(pack) == expected_hash

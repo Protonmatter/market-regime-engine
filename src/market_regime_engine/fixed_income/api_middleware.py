@@ -34,23 +34,23 @@ class _InProcessRateLimiter:
     def _parse_spec(spec: str) -> tuple[int, float]:
         raw = (spec or _DEFAULT_RATE_LIMIT).strip().lower()
         try:
-            count_raw, unit = raw.split('/', 1)
+            count_raw, unit = raw.split("/", 1)
             count = max(1, int(count_raw.strip()))
         except Exception:
             return 100, 1.0
         unit = unit.strip()
-        if unit.startswith('sec') or unit.startswith('s'):
+        if unit.startswith("sec") or unit.startswith("s"):
             return count, 1.0
-        if unit.startswith('min') or unit.startswith('m'):
+        if unit.startswith("min") or unit.startswith("m"):
             return count, 60.0
-        if unit.startswith('hour') or unit.startswith('h'):
+        if unit.startswith("hour") or unit.startswith("h"):
             return count, 3600.0
         return count, 1.0
 
     def _key(self, request: Request | None) -> str:
         if request is None:
-            return 'anonymous'
-        return request.headers.get('X-API-Key') or 'anonymous'
+            return "anonymous"
+        return request.headers.get("X-API-Key") or "anonymous"
 
     def _allow(self, key: str) -> bool:
         now = time.monotonic()
@@ -70,7 +70,7 @@ class _InProcessRateLimiter:
         def _decorator(func: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
             @wraps(func)
             async def _wrapped(*args: Any, **kwargs: Any) -> Any:
-                request = kwargs.get('request')
+                request = kwargs.get("request")
                 if request is None:
                     for arg in args:
                         if isinstance(arg, Request):
@@ -80,9 +80,9 @@ class _InProcessRateLimiter:
                     from fastapi.responses import JSONResponse
 
                     return JSONResponse(
-                        {'detail': f'rate limit exceeded: {self.spec}'},
+                        {"detail": f"rate limit exceeded: {self.spec}"},
                         status_code=429,
-                        headers={'Retry-After': '1'},
+                        headers={"Retry-After": "1"},
                     )
                 return await func(*args, **kwargs)
 
@@ -90,10 +90,12 @@ class _InProcessRateLimiter:
 
         return _decorator
 
+
 _DEFAULT_RATE_LIMIT: str = "100/second"
 _RATE_LIMIT_ENV: str = "MRE_FI_EXEC_CONF_RATE_LIMIT"
 _RATE_LIMIT_ENABLED_ENV: str = "MRE_FI_RATE_LIMIT_ENABLED"
 _BODY_SIZE_CAP_BYTES: int = 32 * 1024
+
 
 def rate_limit_enabled() -> bool:
     """Return True iff the operator opted-in to the slowapi rate limiter.

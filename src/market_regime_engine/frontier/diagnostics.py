@@ -9,7 +9,6 @@ contracts are not demonstrated.
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -62,8 +61,11 @@ def evaluate_bayesian_msvar_diagnostics(
     def _finite(name: str) -> float | None:
         if name not in d:
             return None
+        raw = d.get(name)
+        if raw is None:
+            return None
         try:
-            val = float(d.get(name))
+            val = float(raw)
         except Exception:
             return None
         return val if math.isfinite(val) else None
@@ -133,7 +135,7 @@ def evaluate_online_prefix_safety(
             component="dfm_mq_online_safety",
             passed=False,
             reasons=("insufficient_panel",),
-            metrics={"rows": 0 if full_panel is None else int(len(full_panel))},
+            metrics={"rows": 0 if full_panel is None else len(full_panel)},
             artifact_hash=canonical_sha256(payload),
         )
     try:
@@ -200,9 +202,7 @@ def evaluate_online_prefix_safety(
             violations.append({"idx": int(idx), "date": str(date), "reason": "nonfinite_score"})
             continue
         if not math.isclose(prefix_value, full_value, rel_tol=0.0, abs_tol=float(atol)):
-            violations.append(
-                {"idx": int(idx), "date": str(date), "prefix": prefix_value, "full": full_value}
-            )
+            violations.append({"idx": int(idx), "date": str(date), "prefix": prefix_value, "full": full_value})
     metrics = {"comparisons": comparisons, "violations": violations, "atol": float(atol)}
     reasons = ("prefix_safety_violation",) if violations else ()
     return FrontierDiagnosticReport(

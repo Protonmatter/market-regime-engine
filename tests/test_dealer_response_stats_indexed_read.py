@@ -67,33 +67,23 @@ def test_read_dealer_response_stats_windowed_matches_pandas_filter(
     window_start = pd.Timestamp("2024-06-01T00:00:00Z")
     window_end = pd.Timestamp("2024-12-31T23:59:59Z")
 
-    indexed = wh.read_dealer_response_stats(
-        window_start=window_start, window_end=window_end
-    )
+    indexed = wh.read_dealer_response_stats(window_start=window_start, window_end=window_end)
 
     legacy_full = wh.read_dealer_response_stats()
     legacy_full = legacy_full.copy()
-    legacy_full["window_end_ts"] = pd.to_datetime(
-        legacy_full["window_end"], utc=True, errors="coerce"
-    )
+    legacy_full["window_end_ts"] = pd.to_datetime(legacy_full["window_end"], utc=True, errors="coerce")
     legacy_filtered = legacy_full.loc[
-        (legacy_full["window_end_ts"] >= window_start)
-        & (legacy_full["window_end_ts"] <= window_end)
+        (legacy_full["window_end_ts"] >= window_start) & (legacy_full["window_end_ts"] <= window_end)
     ].drop(columns=["window_end_ts"])
 
-    indexed_sorted = indexed.reset_index(drop=True).sort_values(
-        ["dealer_id", "window_start"]
-    ).reset_index(drop=True)
-    legacy_sorted = legacy_filtered.reset_index(drop=True).sort_values(
-        ["dealer_id", "window_start"]
-    ).reset_index(drop=True)
+    indexed_sorted = indexed.reset_index(drop=True).sort_values(["dealer_id", "window_start"]).reset_index(drop=True)
+    legacy_sorted = (
+        legacy_filtered.reset_index(drop=True).sort_values(["dealer_id", "window_start"]).reset_index(drop=True)
+    )
 
     assert len(indexed_sorted) == len(legacy_sorted)
     assert indexed_sorted["dealer_id"].tolist() == legacy_sorted["dealer_id"].tolist()
-    assert (
-        indexed_sorted["window_end"].tolist()
-        == legacy_sorted["window_end"].tolist()
-    )
+    assert indexed_sorted["window_end"].tolist() == legacy_sorted["window_end"].tolist()
 
 
 def test_read_dealer_response_stats_accepts_string_and_datetime_bounds(

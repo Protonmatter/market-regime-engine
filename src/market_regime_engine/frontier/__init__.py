@@ -26,7 +26,7 @@ were the three v1.5 / v1.6 additions ``hierarchical_liquidity``,
 
 from __future__ import annotations
 
-__all__ = [
+__all__: tuple[str, ...] = (
     "bayesian_msvar",
     "conformal_ts",
     "data_cleaning",
@@ -42,7 +42,7 @@ __all__ = [
     "overfit_control",
     "release_calendars",
     "sequential_testing",
-]
+)
 
 
 EXPERIMENTAL_FRONTIER_COMPONENTS: tuple[str, ...] = (
@@ -55,4 +55,4 @@ EXPERIMENTAL_FRONTIER_COMPONENTS: tuple[str, ...] = (
     "sequential_testing",
 )
 
-__all__ = tuple(sorted(set(globals().get("__all__", ())) | {"EXPERIMENTAL_FRONTIER_COMPONENTS"}))
+__all__ = tuple(sorted(set(__all__) | {"EXPERIMENTAL_FRONTIER_COMPONENTS"}))

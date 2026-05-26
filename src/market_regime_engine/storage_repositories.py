@@ -13,6 +13,7 @@ import pandas as pd
 from market_regime_engine.storage_backends import _Backend, _select_backend
 from market_regime_engine.storage_registry import BackendName, registered_tables
 
+
 def _normalise_asof_for_sql(value: Any) -> str | None:
     """Coerce ``value`` (``None``, ``datetime``, ``pd.Timestamp``, str) → ISO-8601.
 
@@ -60,6 +61,8 @@ def _is_duckdb_backend(backend: Any) -> bool:
     the existing pandas merge_asof.
     """
     return backend.__class__.__name__ == "_DuckDBBackend"
+
+
 @dataclass
 class Warehouse:
     """Storage facade for the Market Regime Engine.
@@ -1254,7 +1257,11 @@ class Warehouse:
             # used rather than post-filtering so a future row for the same
             # CUSIP cannot mask a valid prior row.
             liquidity = _release_gated(self.read_liquidity_stress_scores())
-            if liquidity is not None and not liquidity.empty and {"timestamp", "scope_type", "scope_id"}.issubset(liquidity.columns):
+            if (
+                liquidity is not None
+                and not liquidity.empty
+                and {"timestamp", "scope_type", "scope_id"}.issubset(liquidity.columns)
+            ):
                 liquidity = liquidity.loc[liquidity["scope_type"].astype(str) == "cusip"].copy()
                 liquidity[helper_ts] = pd.to_datetime(liquidity["timestamp"], utc=True, errors="coerce")
                 liquidity = liquidity.dropna(subset=[helper_ts]).rename(columns={"scope_id": "cusip"})
@@ -1389,16 +1396,8 @@ class Warehouse:
             ("confidence_interval_high_ppm", "confidence_interval_high", prob_to_ppm),
         )
         for target, source, fn in spec:
-            existing = (
-                list(out[target])
-                if target in out
-                else [None] * len(out)
-            )
-            source_values = (
-                list(out[source])
-                if source in out
-                else [None] * len(out)
-            )
+            existing = list(out[target]) if target in out else [None] * len(out)
+            source_values = list(out[source]) if source in out else [None] * len(out)
             values: list[int | None] = []
             for current, source_value in zip(existing, source_values, strict=False):
                 try:
@@ -1406,7 +1405,7 @@ class Warehouse:
                 except Exception:
                     current_missing = False
                 if not current_missing:
-                    values.append(int(current))
+                    values.append(int(str(current)))
                     continue
                 try:
                     if source_value is None or pd.isna(source_value):
@@ -1555,9 +1554,7 @@ class Warehouse:
         )
 
     def read_xpro_decision_artifacts(self) -> pd.DataFrame:
-        return self._backend.read_sql(
-            "SELECT * FROM xpro_decision_artifacts ORDER BY timestamp, decision_id"
-        )
+        return self._backend.read_sql("SELECT * FROM xpro_decision_artifacts ORDER BY timestamp, decision_id")
 
     def latest_xpro_decision_artifact(self, decision_id: str) -> pd.DataFrame | None:
         frame = self._backend.read_sql(
@@ -1861,10 +1858,10 @@ def migrate_warehouse(
 
 __all__ = [
     "Warehouse",
+    "_is_duckdb_backend",
+    "_normalise_asof_for_sql",
+    "_read_with_params",
     "migrate_warehouse",
     "read_bond_reference_asof",
     "read_bond_reference_history",
-    "_normalise_asof_for_sql",
-    "_is_duckdb_backend",
-    "_read_with_params",
 ]

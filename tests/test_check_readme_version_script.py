@@ -36,11 +36,11 @@ def _write_pyproject(repo: Path, version: str) -> None:
     table is enough to exercise the parser.
     """
     (repo / "pyproject.toml").write_text(
-        '[build-system]\n'
+        "[build-system]\n"
         'requires = ["setuptools>=68", "wheel"]\n'
         'build-backend = "setuptools.build_meta"\n'
-        '\n'
-        '[project]\n'
+        "\n"
+        "[project]\n"
         'name = "market-regime-engine"\n'
         f'version = "{version}"\n',
         encoding="utf-8",
@@ -50,15 +50,11 @@ def _write_pyproject(repo: Path, version: str) -> None:
 def _write_init(repo: Path, version: str) -> None:
     pkg = repo / "src" / "market_regime_engine"
     pkg.mkdir(parents=True, exist_ok=True)
-    (pkg / "__init__.py").write_text(
-        f'__version__ = "{version}"\n', encoding="utf-8"
-    )
+    (pkg / "__init__.py").write_text(f'__version__ = "{version}"\n', encoding="utf-8")
 
 
 def _write_readme(repo: Path, version: str) -> None:
-    (repo / "README.md").write_text(
-        f"# Market Regime Engine v{version}\n\nbody\n", encoding="utf-8"
-    )
+    (repo / "README.md").write_text(f"# Market Regime Engine v{version}\n\nbody\n", encoding="utf-8")
 
 
 def _copy_script(repo: Path) -> Path:
@@ -106,9 +102,7 @@ def test_check_readme_version_passes_on_current_repo() -> None:
 
 def test_check_readme_version_detects_readme_drift(tmp_path: Path) -> None:
     """If the README banner diverges from the other two, exit non-zero."""
-    repo = _build_fake_repo(
-        tmp_path, pyproject="2.0.0", init="2.0.0", readme="1.5.0"
-    )
+    repo = _build_fake_repo(tmp_path, pyproject="2.0.0", init="2.0.0", readme="1.5.0")
     result = _run_in(repo)
     assert result.returncode == 1
     assert "DRIFT" in result.stderr
@@ -119,9 +113,7 @@ def test_check_readme_version_detects_readme_drift(tmp_path: Path) -> None:
 
 def test_check_readme_version_detects_init_drift(tmp_path: Path) -> None:
     """If ``__version__`` diverges from pyproject + README, exit non-zero."""
-    repo = _build_fake_repo(
-        tmp_path, pyproject="1.6.1", init="1.5.2", readme="1.6.1"
-    )
+    repo = _build_fake_repo(tmp_path, pyproject="1.6.1", init="1.5.2", readme="1.6.1")
     result = _run_in(repo)
     assert result.returncode == 1
     assert "DRIFT" in result.stderr
@@ -136,9 +128,7 @@ def test_check_readme_version_detects_pyproject_drift(tmp_path: Path) -> None:
     This is the case the v1.6.0 release would have caught in CI if the
     guard had also been checking pyproject (it didn't, until v1.6.1).
     """
-    repo = _build_fake_repo(
-        tmp_path, pyproject="1.5.2", init="1.6.1", readme="1.6.1"
-    )
+    repo = _build_fake_repo(tmp_path, pyproject="1.5.2", init="1.6.1", readme="1.6.1")
     result = _run_in(repo)
     assert result.returncode == 1
     assert "DRIFT" in result.stderr
@@ -150,9 +140,7 @@ def test_check_readme_version_detects_pyproject_drift(tmp_path: Path) -> None:
 
 def test_check_readme_version_passes_on_three_way_match(tmp_path: Path) -> None:
     """All three sources at the same version must yield exit code 0."""
-    repo = _build_fake_repo(
-        tmp_path, pyproject="3.1.4", init="3.1.4", readme="3.1.4"
-    )
+    repo = _build_fake_repo(tmp_path, pyproject="3.1.4", init="3.1.4", readme="3.1.4")
     result = _run_in(repo)
     assert result.returncode == 0, (
         f"check_readme_version exited {result.returncode}; stdout={result.stdout!r}; stderr={result.stderr!r}"
@@ -166,9 +154,7 @@ def test_check_readme_version_rejects_old_patch_family_loophole(tmp_path: Path) 
     is gone. A README pinned at ``v1.5.0`` while ``__version__`` /
     pyproject are at ``1.5.1`` must now fail.
     """
-    repo = _build_fake_repo(
-        tmp_path, pyproject="1.5.1", init="1.5.1", readme="1.5.0"
-    )
+    repo = _build_fake_repo(tmp_path, pyproject="1.5.1", init="1.5.1", readme="1.5.0")
     result = _run_in(repo)
     assert result.returncode == 1
     assert "DRIFT" in result.stderr

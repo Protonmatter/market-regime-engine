@@ -49,16 +49,13 @@ def _binary_calibration(n: int = 400, *, seed: int = 0) -> pd.DataFrame:
 
 def test_step_actually_updates_inflation_per_bucket() -> None:
     """Inflation MUST change after .step() — defining property of online ACI."""
-    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(
-        _binary_calibration(n=400)
-    )
+    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(_binary_calibration(n=400))
     before = dict(layer.inflation_per_bucket)
     for _ in range(50):
         layer.step(pred=0.05, y=1, bucket="a")
     after = dict(layer.inflation_per_bucket)
     assert after["a"] != before["a"], (
-        f"inflation for bucket 'a' must update after .step(); got "
-        f"before={before['a']}, after={after['a']}"
+        f"inflation for bucket 'a' must update after .step(); got before={before['a']}, after={after['a']}"
     )
 
 
@@ -66,9 +63,7 @@ def test_step_follows_aci_update_rule_exactly() -> None:
     """``inflation_{t+1} = inflation_t + gamma * (err_t - alpha)``."""
     alpha = 0.10
     gamma = 0.05
-    layer = NexCPForecaster(alpha=alpha, window=120, inflation_eta=gamma).fit(
-        _binary_calibration(n=400)
-    )
+    layer = NexCPForecaster(alpha=alpha, window=120, inflation_eta=gamma).fit(_binary_calibration(n=400))
     inflation_t = layer.inflation_per_bucket["a"]
     res = layer.step(pred=0.05, y=1, bucket="a")
     err = res["err"]
@@ -79,9 +74,7 @@ def test_step_follows_aci_update_rule_exactly() -> None:
 
 def test_step_returned_threshold_matches_persisted_threshold() -> None:
     """``self.thresholds[bucket]`` must mirror the step's returned threshold."""
-    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(
-        _binary_calibration(n=400)
-    )
+    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(_binary_calibration(n=400))
     res = layer.step(pred=0.2, y=1, bucket="b")
     assert layer.thresholds["b"] == pytest.approx(res["threshold"], abs=1e-12)
     assert layer.threshold_for("b") == pytest.approx(res["threshold"], abs=1e-12)
@@ -95,27 +88,20 @@ def test_step_returned_threshold_matches_persisted_threshold() -> None:
 def test_persistent_undercoverage_drives_inflation_up() -> None:
     """When the prediction set repeatedly misses the realised label, the ACI
     rule must inflate the threshold above the calibration baseline."""
-    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(
-        _binary_calibration(n=400)
-    )
+    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(_binary_calibration(n=400))
     initial = layer.inflation_per_bucket["a"]
     # Force a long run of under-coverage: predict ~0 but realised label is 1
     # so the prediction set {0} never covers the outcome.
     for _ in range(200):
         layer.step(pred=0.02, y=1, bucket="a")
     final = layer.inflation_per_bucket["a"]
-    assert final > initial, (
-        f"persistent under-coverage must push inflation upward; "
-        f"initial={initial}, final={final}"
-    )
+    assert final > initial, f"persistent under-coverage must push inflation upward; initial={initial}, final={final}"
 
 
 def test_persistent_overcoverage_drives_inflation_down() -> None:
     """When the prediction set repeatedly covers (large), the ACI rule must
     shrink the inflation (toward zero or below)."""
-    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(
-        _binary_calibration(n=400)
-    )
+    layer = NexCPForecaster(alpha=0.10, window=120, inflation_eta=0.05).fit(_binary_calibration(n=400))
     initial = layer.inflation_per_bucket["a"]
     # Force a long run of over-coverage: predict near 0.5 and realise the
     # majority outcome so the prediction set always covers.
@@ -123,8 +109,7 @@ def test_persistent_overcoverage_drives_inflation_down() -> None:
         layer.step(pred=0.5, y=1, bucket="a")
     final = layer.inflation_per_bucket["a"]
     assert final <= initial + 1e-9, (
-        f"persistent over-coverage must not push inflation upward; "
-        f"initial={initial}, final={final}"
+        f"persistent over-coverage must not push inflation upward; initial={initial}, final={final}"
     )
 
 
@@ -157,9 +142,7 @@ def test_step_handles_unseen_bucket_via_fallback() -> None:
 
 def test_step_threshold_is_clipped_to_unit_interval() -> None:
     """Binary scores live in [0, 1]; the persisted threshold must too."""
-    layer = NexCPForecaster(alpha=0.10, inflation_eta=10.0).fit(
-        _binary_calibration(n=400)
-    )
+    layer = NexCPForecaster(alpha=0.10, inflation_eta=10.0).fit(_binary_calibration(n=400))
     # Even with a large step size, the threshold cannot escape [0, 1].
     for _ in range(50):
         layer.step(pred=0.5, y=1, bucket="a")

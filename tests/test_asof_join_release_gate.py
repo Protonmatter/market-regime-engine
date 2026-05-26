@@ -28,12 +28,8 @@ def test_asof_join_sql_filters_on_release_gate() -> None:
     ``l.release_gate = 1`` predicates are present in the ASOF JOIN
     SQL — independent of which backend executes the join."""
     src = inspect.getsource(Warehouse.enrich_execution_requests_asof)
-    assert "c.release_gate = 1" in src, (
-        "ASOF LEFT JOIN credit_regime_scores is missing the release_gate filter"
-    )
-    assert "l.release_gate = 1" in src, (
-        "ASOF LEFT JOIN liquidity_stress_scores is missing the release_gate filter"
-    )
+    assert "c.release_gate = 1" in src, "ASOF LEFT JOIN credit_regime_scores is missing the release_gate filter"
+    assert "l.release_gate = 1" in src, "ASOF LEFT JOIN liquidity_stress_scores is missing the release_gate filter"
 
 
 @pytest.fixture
@@ -88,9 +84,7 @@ def _seed_liquidity(wh: Warehouse, rows: list[dict]) -> None:
 
 
 def _exec_request(timestamp: str, cusip: str) -> pd.DataFrame:
-    return pd.DataFrame(
-        [{"request_id": "r1", "timestamp": timestamp, "cusip": cusip}]
-    )
+    return pd.DataFrame([{"request_id": "r1", "timestamp": timestamp, "cusip": cusip}])
 
 
 def test_asof_join_excludes_release_gate_false_credit_row(
@@ -127,9 +121,7 @@ def test_asof_join_excludes_release_gate_false_credit_row(
         ],
     )
 
-    out = wh.enrich_execution_requests_asof(
-        _exec_request("2026-05-01T16:00:00Z", "CUSIP1")
-    )
+    out = wh.enrich_execution_requests_asof(_exec_request("2026-05-01T16:00:00Z", "CUSIP1"))
     assert len(out) == 1
     assert out.iloc[0]["regime_label"] == "GATED_OLDER"
 
@@ -166,9 +158,7 @@ def test_asof_join_excludes_release_gate_false_liquidity_row(
             },
         ],
     )
-    out = wh.enrich_execution_requests_asof(
-        _exec_request("2026-05-01T16:00:00Z", "CUSIP1")
-    )
+    out = wh.enrich_execution_requests_asof(_exec_request("2026-05-01T16:00:00Z", "CUSIP1"))
     assert len(out) == 1
     assert out.iloc[0]["liquidity_label"] == "GATED_OLDER"
 
@@ -201,9 +191,7 @@ def test_asof_join_returns_null_when_no_gated_row_exists(
             }
         ],
     )
-    out = wh.enrich_execution_requests_asof(
-        _exec_request("2026-05-01T16:00:00Z", "CUSIP1")
-    )
+    out = wh.enrich_execution_requests_asof(_exec_request("2026-05-01T16:00:00Z", "CUSIP1"))
     assert len(out) == 1
     assert pd.isna(out.iloc[0]["regime_label"])
     assert pd.isna(out.iloc[0]["liquidity_label"])
