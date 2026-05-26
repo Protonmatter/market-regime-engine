@@ -1,61 +1,30 @@
-# v1.6.0 frontier math hardening
+# V1.6 Frontier Math Hardening
 
-This build implements the first concrete pass from the deep-research roadmap for pushing Market Regime Engine toward frontier-grade validation and algorithmic rigor.
+## Current build state
 
-## Implemented
+The build now distinguishes production-safe filtered paths from retrospective/experimental paths, implements Bayesian MS-VAR(p), adds weak-regime covariance shrinkage, and supports a native D/W/M mixed-frequency state-space backend.
 
-### Adapter correctness
+## Production-safe defaults
 
-- Strict boolean parsing replaces Python truthiness for release-gate fields.
-- `"False"`, `"false"`, `"0"`, `0`, and `False` now remain false.
-- LEAN custom-data stub uses `csv.reader` so quoted metadata with commas does not corrupt columns.
-- vectorbt adapter exposes `entry_score` to preserve uncertainty rather than only using hard labels.
-- PyPortfolioOpt adapter now returns `allocation_allowed` and `block_reason` instead of hiding governance blocks inside expected-return vectors.
+- Classical MS-VAR uses EM with covariance ridge, weak-regime shrinkage, label pinning, and companion-matrix stability diagnostics.
+- Bayesian MS-VAR supports `p >= 1` with a true lag-stack likelihood.
+- DFM-MQ nowcasting uses filtered factors by default.
+- Release gates default to the production profile and MCS promotion.
+- Giacomini-White uses a vector HAC sandwich covariance for conditional predictive ability.
 
-### Evidence-pack hardening
+## Retrospective-only / experimental paths
 
-Evidence packs now include:
+The following require `MRE_ENABLE_EXPERIMENTAL_FRONTIER=1`:
 
-- engine version
-- git SHA and dirty state
-- Python/platform metadata
-- command line
-- lockfile hashes
-- redacted source map by default
-- optional required HMAC signature
-- unsafe `force=True` deletion guardrails
+1. smoothed DFM-MQ factor extraction (`filtered=False`);
+2. e-value release-gate promotion (`promotion_method="e_values"`).
 
-### Anti-overfit controls
+The flag is intentionally coarse-grained. It prevents operators from accidentally running research-oriented paths in real-time decisioning.
 
-New module: `market_regime_engine.frontier.overfit_control`.
+## Mathematical limitations still present
 
-Implemented:
-
-- Deflated Sharpe Ratio approximation
-- Probability of Backtest Overfitting via CSCV-style fold tournaments
-- Minimum Track Record Length approximation
-- Pre-registered model tournament manifest writer
-
-### Online conformal primitives
-
-New module: `market_regime_engine.frontier.online_conformal`.
-
-Implemented:
-
-- EnbPI-style residual interval wrapper
-- Strongly adaptive ACI controller with expert gammas
-- AgACI-style wrapper over adaptive ACI experts
-
-## What this does not claim
-
-This does not yet make the engine a fully validated frontier model. It adds the controls needed to make future frontier-model claims harder to fake.
-
-## Next required work
-
-1. Rebase the branch onto current `main`.
-2. Restore the full operational README and update it to v1.6.0.
-3. Add CI gates for the new v1.6 tests.
-4. Add synthetic regime-recovery and change-point benchmark suites.
-5. Add signed evidence-pack enforcement to release gates.
-6. Add IMM/GPB regime filters and switching-covariance SVAR.
-7. Add foundation-model challenger adapters behind PIT-safe release gates.
+- The native D/W/M custom backend is a single-factor Gaussian linear state-space model. It is not yet a multi-factor, stochastic-volatility, or nonlinear release-calendar model.
+- Weekly aggregation is trailing seven calendar days. If the economic series is business-week or release-calendar-specific, the caller must align the index accordingly before fitting.
+- Monthly aggregation is month-to-date capped at 31 daily lags. It does not yet implement true flow-vs-stock transformations per series.
+- MS-VAR covariance shrinkage is a guardrail, not a full posterior over covariance uncertainty.
+- Bayesian MS-VAR uses ordered intercept anchoring for label-switching mitigation; symmetric regimes can still require domain-specific identification constraints.

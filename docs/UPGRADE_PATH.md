@@ -99,7 +99,7 @@ floor and the 2026-2027 frontier modeling layer in one release:
 - **`market_regime_engine.frontier.*` package** with five time-series-
   native conformal predictors (block / NexCP / Gibbs-Cherian-Candès
   conditional / Lin-Trivedi-Sun localized / Vovk-Wang sequential
-  e-conformal), Bańbura-Modugno mixed-frequency DFM-MQ +
+  e-conformal), Bańbura-Modugno M/Q DFM-MQ + native D/W/M state-space +
   Almon-polynomial MIDAS, three distributional heads (NGBoost /
   Henzi-Ziegel-Gneiting IDR / Karl-Soelch DVBF deep state-space), a
   CPU-friendly PatchTST baseline, sequential e-value safe-testing

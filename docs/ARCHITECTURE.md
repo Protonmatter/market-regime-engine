@@ -197,7 +197,7 @@ pre-v1.2.1 frame (modulo float rounding within `1e-9`); see
   horizon survival (`DiscreteTimeHazardModel.horizon_probability_path`).
 - Cross-sectional: factor returns (Fama-French + extensions), sector
   dispersion, curve level / slope / curvature — all regime-conditioned.
-- Mixed-frequency nowcast factors per domain (Bańbura-Modugno DFM-MQ).
+- Mixed-frequency nowcast factors per domain: Bańbura-Modugno-style M/Q DFM-MQ when statsmodels is available, plus a native D/W/M Kalman state-space backend for daily/weekly/monthly ragged panels.
 
 ## Composite forecast distribution
 
@@ -268,3 +268,8 @@ PSI drift, calibration error above the configured ceiling, conformal
 coverage drift below the configured floor, missing promoted challenger,
 and (when configured) lack of MCS membership / failing e-value all block
 the gate. This is the design.
+
+
+## v1.6 module-boundary refactor
+
+The storage, CLI, and fixed-income API surfaces now use compatibility facades over smaller modules. The stable-core and experimental-frontier release boundaries are documented in `docs/ARCHITECTURE_REFACTOR_BOUNDARY.md`; mathematical assumptions and production status are centralized in `docs/MATH_METHODS.md`.

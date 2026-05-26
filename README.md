@@ -144,7 +144,7 @@ Fixed-Income RCIE / X-Pro Auto-X adapter**.
 >
 > v1.2 lands the math-correctness floor and the SOTA frontier modeling
 > package: five time-series-native conformal predictors, Bańbura-Modugno
-> mixed-frequency DFM-MQ + Almon-polynomial MIDAS, three distributional
+> mixed-frequency DFM-MQ / native D/W/M state-space nowcasting + Almon-polynomial MIDAS, three distributional
 > heads (NGBoost / IDR / DVBF deep state-space), CPU-friendly PatchTST,
 > sequential e-value safe-testing, CRPS-DM, and Saatçi-Turner-Rasmussen
 > GP-BOCPD. [`docs/V1_2_FRONTIER.md`](docs/V1_2_FRONTIER.md).
@@ -164,15 +164,14 @@ This build estimates and stores:
   conditional / localized / e-conformal intervals
 - distributional forecasts via NGBoost, IDR, DVBF deep state-space, and
   PatchTST heads
-- mixed-frequency nowcast factors (Bańbura-Modugno DFM-MQ)
+- mixed-frequency nowcast factors (Bańbura-Modugno M/Q DFM-MQ plus native D/W/M Kalman state-space backend)
 - NBER recession labels (FRED USREC by default with explicit staleness)
 - historical analogs (regime-weighted)
 - domain / feature driver attribution + counterfactual deltas
 - calibrated probabilities (Platt) and online Bayesian-averaged
   ensembles
 - model confidence, invalidation triggers, drift, release-gate, alert
-  routing, promotion workflow (MCS *and* sequential e-value safe-testing
-  variants), and full point-in-time vintage / as-of feature lineage
+  routing, promotion workflow (production MCS by default; sequential e-value safe-testing is fenced behind `MRE_ENABLE_EXPERIMENTAL_FRONTIER=1`), and full point-in-time vintage / as-of feature lineage
 - DuckDB / Parquet / CSV analytical warehouse exports (DuckDB is the
   default warehouse backend in v1.4)
 - immutable model runs with a full reproducibility envelope (git SHA,
@@ -735,3 +734,23 @@ The S&P will be exactly X.
 ```
 
 That is spreadsheet astrology wearing a blazer.
+
+### Architecture and mathematics map
+
+The implementation is now split around explicit review boundaries. See [`docs/ARCHITECTURE_REFACTOR_BOUNDARY.md`](docs/ARCHITECTURE_REFACTOR_BOUNDARY.md) for the module decomposition and stable-core/frontier split. See [`docs/MATH_METHODS.md`](docs/MATH_METHODS.md) for the mathematical method inventory, assumptions, production status, and retrospective-only fences.
+
+
+## v1.7 certification hardening
+
+The repository now includes an explicit certification layer for the stable core:
+
+- `mre release-gate --profile certification` / `evaluate_release_gate(profile="certification")` fail closed when validation artifacts are missing.
+- Fixed-income execution confidence has a realized-outcome validation path that reports Brier/log-loss/ECE, regime calibration, confidence-decile lift, and positive-direction TCA lift by regime.
+- Experimental frontier diagnostics remain behind the `experimental_frontier` boundary and `MRE_ENABLE_EXPERIMENTAL_FRONTIER=1`.
+- Method cards under `docs/method_cards/` document equations, assumptions, diagnostics, release-gate requirements, tests, and limitations for each major method.
+
+For CI-grade local validation of the certification additions:
+
+```bash
+pytest -q tests/test_certification_release_and_execution_validation.py   tests/test_certification_frontier_diagnostics.py   tests/test_certification_import_boundary.py   tests/test_method_cards_docs_audit.py
+```

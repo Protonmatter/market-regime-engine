@@ -381,10 +381,15 @@ def tag_trade_with_regime_context(
     """
     trade_ts = _coerce_utc(trade.timestamp)
 
-    regime = latest_credit_regime_score(warehouse)
-    liquidity = latest_liquidity_stress_score(warehouse, scope_type="cusip", scope_id=trade.cusip)
+    regime = latest_credit_regime_score(warehouse, asof=trade_ts)
+    liquidity = latest_liquidity_stress_score(
+        warehouse,
+        scope_type="cusip",
+        scope_id=trade.cusip,
+        asof=trade_ts,
+    )
     if liquidity is None:
-        liquidity = latest_liquidity_stress_score(warehouse)
+        liquidity = latest_liquidity_stress_score(warehouse, asof=trade_ts)
 
     if regime is not None:
         assert_pit_safe(
@@ -420,7 +425,11 @@ def tag_trade_with_regime_context(
     liquidity_label_str = liquidity.liquidity_label if liquidity is not None else "unknown"
     liquidity_index = float(liquidity.liquidity_index) if liquidity is not None else 50.0
 
-    exec_pred = latest_execution_confidence_prediction(warehouse, cusip=trade.cusip)
+    exec_pred = latest_execution_confidence_prediction(
+        warehouse,
+        cusip=trade.cusip,
+        asof=trade_ts,
+    )
     if exec_pred is not None:
         try:
             pred_ts = _coerce_utc(exec_pred.timestamp)

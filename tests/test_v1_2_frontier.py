@@ -179,7 +179,8 @@ class _FakeResults:
             self.smoothed_state_cov = smoothed_state_cov
 
 
-def test_mq_dfm_extract_factor_series_filtered_vs_smoothed() -> None:
+def test_mq_dfm_extract_factor_series_filtered_vs_smoothed(monkeypatch) -> None:
+    monkeypatch.setenv("MRE_ENABLE_EXPERIMENTAL_FRONTIER", "1")
     filt = np.array([[1.0], [2.0], [3.0]])
     smooth = np.array([[10.0], [20.0], [30.0]])
     fake = _FakeResults(factors=_FakeFactorContainer(filtered=filt, smoothed=smooth))
@@ -622,7 +623,8 @@ def test_storage_round_trip_conditional_coverage(tmp_path) -> None:
         db.close()
 
 
-def test_release_gate_e_value_path_blocks_when_e_low_passes_when_high() -> None:
+def test_release_gate_e_value_path_blocks_when_e_low_passes_when_high(monkeypatch) -> None:
+    monkeypatch.setenv("MRE_ENABLE_EXPERIMENTAL_FRONTIER", "1")
     from market_regime_engine.release_gates import evaluate_release_gate
 
     confidence = pd.DataFrame([{"date": "2026-05-01", "confidence": 0.7, "grade": "B"}])

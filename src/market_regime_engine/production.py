@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -10,6 +12,74 @@ from pathlib import Path
 
 _PRODUCTION_VALUES = {"prod", "production"}
 _DEV_VALUES = {"", "dev", "development", "local", "test", "staging"}
+_MIN_PRODUCTION_HMAC_KEY_BYTES = 32
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _decode_hmac_key_material(value: str) -> bytes:
+    raw = value.strip()
+    if not raw:
+        return b""
+    try:
+        return base64.b64decode(raw, validate=True)
+    except Exception:
+        pass
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        return base64.b64decode(padded, validate=True)
+    except Exception:
+        return raw.encode("utf-8")
+
+
+def _parse_hmac_key_versions(raw: str) -> dict[str, str]:
+    """Parse production HMAC key env in JSON or legacy ``v1=...`` form."""
+    text = raw.strip()
+    if not text:
+        return {}
+    if text.startswith("{"):
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("MRE_FI_HMAC_KEY_VERSIONS must decode to an object")
+        return {str(k): str(v) for k, v in parsed.items()}
+
+    out: dict[str, str] = {}
+    for part in text.replace(";", ",").split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "=" not in item:
+            raise ValueError("legacy HMAC key version entries must use version=value")
+        version, value = item.split("=", 1)
+        version = version.strip()
+        if not version:
+            raise ValueError("HMAC key version must be non-empty")
+        out[version] = value.strip()
+    return out
+
+
+def _hmac_key_strength_errors(values: Mapping[str, str]) -> list[str]:
+    errors: list[str] = []
+    versions_raw = values.get("MRE_FI_HMAC_KEY_VERSIONS", "").strip()
+    singleton_raw = values.get("MRE_FI_HMAC_KEY", "").strip()
+    try:
+        key_values = _parse_hmac_key_versions(versions_raw) if versions_raw else {}
+    except Exception as exc:
+        return [f"MRE_FI_HMAC_KEY_VERSIONS is invalid: {exc}"]
+
+    if not key_values and singleton_raw:
+        key_values = {"v1": singleton_raw}
+
+    for version, key_value in key_values.items():
+        decoded = _decode_hmac_key_material(key_value)
+        if len(decoded) < _MIN_PRODUCTION_HMAC_KEY_BYTES:
+            errors.append(
+                f"HMAC key {version!r} decodes to {len(decoded)} bytes; "
+                f"production requires at least {_MIN_PRODUCTION_HMAC_KEY_BYTES} bytes"
+            )
+    return errors
 
 
 @dataclass(frozen=True)
@@ -78,6 +148,8 @@ def validate_production_settings(env: Mapping[str, str] | None = None) -> Produc
             "MRE_REDIS_URL", ""
         ).strip():
             errors.append("MRE_REDIS_URL is required when MRE_CACHE_BACKEND=redis in production")
+        if _truthy(values.get("MRE_CACHE_ALLOW_PICKLE")):
+            errors.append("MRE_CACHE_ALLOW_PICKLE is forbidden in production")
         # v1.6.0 (REVIEW_DEEP_V1_5_2.md §3.2 / Finding §3.14):
         # production MUST require an HMAC key for the FI evidence
         # pack path. ``sign_pack`` cannot fall back to "unsigned"
@@ -96,6 +168,8 @@ def validate_production_settings(env: Mapping[str, str] | None = None) -> Produc
                 "MRE_FI_HMAC_KEY_VERSIONS (or legacy MRE_FI_HMAC_KEY) "
                 "is required in production for FI evidence-pack signing"
             )
+        else:
+            errors.extend(_hmac_key_strength_errors(values))
         # v1.6.0 (Finding §3.14): production must rate-limit the
         # FI endpoint AND the slowapi backend must be importable.
         # The FastAPI startup guard already raises when the env

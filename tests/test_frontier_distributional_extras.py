@@ -50,6 +50,14 @@ def test_ngboost_head_soft_degrade_marginal_normal():
         assert "loc" in row and "scale" in row
 
 
+def test_ngboost_one_row_fallback_scale_is_finite():
+    head = NGBoostHead().fit(np.array([[1.0]]), np.array([2.0]))
+    dist = head.predict_distribution(np.array([[1.0]]))
+    assert len(dist) == 1
+    assert np.isfinite(dist[0]["scale"])
+    assert dist[0]["scale"] >= 1e-6
+
+
 def test_isotonic_marginal_regressor_smoke():
     X, y = _toy_xy()
     head = IsotonicMarginalRegressor().fit(X, y)
@@ -70,6 +78,14 @@ def test_variational_encoder_head_smoke():
     assert head.fitted is True
     preds = head.predict(X)
     assert preds.shape == (len(X),)
+
+
+def test_variational_encoder_prediction_is_deterministic_after_fit():
+    X, y = _toy_xy(n=20, seed=42)
+    head = VariationalEncoderHead(n_epochs=2, random_state=7).fit(X, y)
+    first = head.predict(X[:5])
+    second = head.predict(X[:5])
+    assert np.allclose(first, second)
 
 
 def test_v15_aliases_resolve_to_new_classes():

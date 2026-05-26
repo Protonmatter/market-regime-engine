@@ -116,7 +116,7 @@ nowcast  = ["statsmodels>=0.14", "scipy>=1.10"]   # already existed, unchanged
 | Table | Purpose | Primary key |
 |---|---|---|
 | `e_value_log` | Per-(date, target, horizon, challenger) sequential e-value test outcome (champion, e_value, level, decision, n) | `(date, target, horizon, challenger)` |
-| `nowcast_factors` | Mixed-frequency DFM-MQ factor estimates per (as_of_date, domain) including factor SE, frequency mix, and backend (statsmodels vs. fallback) | `(as_of_date, domain)` |
+| `nowcast_factors` | Mixed-frequency DFM-MQ factor estimates per (as_of_date, domain) including factor SE, frequency mix, and backend (statsmodels vs. custom_state_space vs. fallback) | `(as_of_date, domain)` |
 | `conditional_coverage_report` | Per-group conformal coverage diagnostics (group, coverage, n, alpha, method, worst_violation) | `(as_of_date, target, horizon, group, method)` |
 
 `Warehouse` exposes matching `write_*` and `read_*` methods. The `group`
@@ -139,8 +139,9 @@ under `mre --help`.
 
 Three new pipeline steps land between the existing conformal coverage gate
 and the immutable model-run snapshot. They are gated by
-`enable_frontier=True` (default on) and degrade silently if the soft
-dependency stack is missing:
+`enable_frontier=True` (default on) and degrade safely if the soft
+dependency stack is missing. Retrospective-only paths require
+`MRE_ENABLE_EXPERIMENTAL_FRONTIER=1`:
 
 1. `frontier_nowcast` → writes `nowcast_factors`; summary key
    `summary["nowcast_factors"]: dict[domain, factor]`.
@@ -177,7 +178,7 @@ into its existing `dict[str, float]` predictions interface.
   anytime-valid). This is the same trio of guarantees major practitioners
   (Romano, Candès, Vovk, Ramdas, Gibbs-Cherian-Candès) cite as the
   state-of-the-practice for production prediction sets at this writing.
-- **Mixed-frequency nowcasting**: Bańbura-Modugno DFM-MQ is the production
+- **Mixed-frequency nowcasting**: Bańbura-Modugno M/Q DFM-MQ remains the monthly/quarterly production
   architecture at the New York Fed and the ECB. We wrap statsmodels'
   reference implementation with a graceful fallback to the v1.0 single-
   frequency DFM, so the engine has the strongest mainstream nowcast layer
@@ -232,7 +233,7 @@ exercise live when an operator installs `pip install -e ".[frontier]"`.
 > cleanup) and adds a new `market_regime_engine.frontier.*` package with
 > five time-series-native conformal predictors (block / NexCP / conditional
 > Gibbs-Cherian-Candès / localized Lin-Trivedi-Sun / sequential e-value
-> Vovk-Wang), Bańbura-Modugno mixed-frequency DFM-MQ + Almon-polynomial
+> Vovk-Wang), Bańbura-Modugno M/Q DFM-MQ + native D/W/M state-space + Almon-polynomial
 > MIDAS, three distributional heads (NGBoost / Henzi-Ziegel-Gneiting IDR /
 > deep state-space DVBF), a CPU-friendly PatchTST baseline, sequential
 > e-value safe-testing (Howard-Ramdas + Grünwald-de Heide-Koolen) wired

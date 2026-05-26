@@ -101,7 +101,7 @@ per-module table. Headline:
   Hansen MCS T_SQ statistic, Knüppel autocorrelation moments, DM
   5%-direction, dead-line cleanup, etc.).
 - **`market_regime_engine.frontier.*` package**: five time-series-native
-  conformal predictors, mixed-frequency DFM-MQ + MIDAS, three
+  conformal predictors, M/Q DFM-MQ plus native D/W/M mixed-frequency state-space nowcasting + MIDAS, three
   distributional heads (NGBoost / IDR / DVBF deep state-space), the
   PatchTST neural sequence baseline, sequential e-value safe-testing
   wired into the release gate, CRPS-DM, and GP-BOCPD.
@@ -183,3 +183,23 @@ The open items, ordered by leverage:
   `nowcast_factors` table records the fallback explicitly.
 - **Parity test `test_bocpd_diag_update_parity`** skips if
   `mre_rust_ext` is not built. That's the gate, not a failure.
+
+
+## v1.6 refactor handoff
+
+Use the compatibility facades (`storage.py`, `cli.py`, `fixed_income/api.py`) for public imports. Use the focused implementation modules for code review and profiling. Release-gate evidence should state whether the target is `stable_core` or `experimental_frontier`; the latter requires `MRE_ENABLE_EXPERIMENTAL_FRONTIER=1` and is not production-eligible by default. See `docs/MATH_METHODS.md` before changing mathematical assumptions.
+
+## v1.7 certification pack handoff
+
+Next reviewers should use the certification pack as the stable-core sign-off target:
+
+```bash
+pytest -q tests/test_certification_release_and_execution_validation.py \
+  tests/test_certification_frontier_diagnostics.py \
+  tests/test_certification_import_boundary.py \
+  tests/test_method_cards_docs_audit.py
+```
+
+For release gates, use `profile="certification"` when producing audit-grade evidence. The profile expects method cards, validation artifact hashes, evidence-pack HMACs, PIT/walk-forward flags, calibration metrics, positive-direction TCA lift payloads, and regime sample-size support. Missing artifacts are intended to block release.
+
+Execution-confidence realized-outcome validation lives in `fixed_income.execution_validation`; posterior/frontier diagnostics live in `frontier.diagnostics`; method documentation lives in `docs/method_cards/`.

@@ -10,11 +10,11 @@ the likelihood. Production decision pipelines need posterior credible
 intervals on the per-state probabilities so the release-gate / e-value
 machinery can refuse to act on an over-confident point estimate.
 
-This module fits the same Hamilton-Kim MS-VAR via NumPyro:
+This module fits a Hamilton-Kim MS-VAR(p) via NumPyro:
 
 - Dirichlet prior on the rows of the transition matrix
   (``concentration=1.0`` ≡ uniform).
-- Per-state VAR coefficient prior ``Normal(0, sigma_beta**2 * I)``.
+- Per-state lag-stack VAR coefficient prior ``Normal(0, sigma_beta**2 * I)`` for ``p >= 1``.
 - Per-state innovation covariance via half-Cauchy scales + LKJ
   correlation.
 - Categorical mixture marginalised in closed form per timestep so HMC
@@ -148,6 +148,12 @@ class BayesianMSVAR:
     last_diagnostics: dict[str, Any] = field(default_factory=dict)
     fitted: bool = False
 
+    def __post_init__(self) -> None:
+        """Validate the public model contract."""
+        self.p = int(self.p)
+        if self.p < 1:
+            raise ValueError(f"BayesianMSVAR requires p >= 1; received p={self.p}")
+
     # ------------------------------------------------------------------
     # NumPyro model
     # ------------------------------------------------------------------
@@ -168,7 +174,7 @@ class BayesianMSVAR:
 
         def model(Y: jnp.ndarray) -> None:  # type: ignore[name-defined]
             T = Y.shape[0]
-            # Per-state intercept + AR(1) coefficient matrix.
+            # Per-state intercept + AR(p) coefficient lag stack.
             # We enforce label ordering by sampling the first-domain
             # intercept under an *ordered* transform (so state 0's
             # first-domain intercept is strictly < state 1's, etc).
@@ -195,8 +201,8 @@ class BayesianMSVAR:
                 jnp.concatenate([ordered_first[:, None], other_intercepts], axis=1),
             )
             ar = numpyro.sample(
-                "ar1",
-                dist.Normal(0.0, sigma_beta).expand([K, d, d]).to_event(3),
+                "ar",
+                dist.Normal(0.0, sigma_beta).expand([K, int(self.p), d, d]).to_event(4),
             )
             # Per-state innovation covariance: scale * LKJCorrCholesky.
             scales = numpyro.sample(
@@ -219,33 +225,40 @@ class BayesianMSVAR:
             # sequence. Walking ``T`` steps is fine because ``T`` is at
             # most ~750 for a 60-year monthly panel; the JIT compile
             # amortises across chains.
-            def forward_step(log_alpha, t_idx):
+            def _lag_matrix(t_idx):
+                return jnp.stack([Y[t_idx - lag - 1] for lag in range(int(self.p))], axis=0)
+
+            def _emit_at(t_idx):
                 y_t = Y[t_idx]
-                y_prev = Y[t_idx - 1]
+                y_lags = _lag_matrix(t_idx)
                 emit_logps = []
                 for k in range(K):
-                    mu_k = intercept[k] + ar[k] @ y_prev
+                    mu_k = intercept[k] + jnp.sum(jnp.einsum("pij,pj->pi", ar[k], y_lags), axis=0)
                     emit_logps.append(dist.MultivariateNormal(mu_k, scale_tril=cov_chol[k]).log_prob(y_t))
-                emit = jnp.stack(emit_logps)
+                return jnp.stack(emit_logps)
+
+            def forward_step(log_alpha, t_idx):
+                emit = _emit_at(t_idx)
                 # forward update: log_alpha[t] = log( sum_i alpha[t-1, i] * A[i, j] ) + emit[j]
                 trans_log = jnp.log(transition + 1e-12)
                 new_log_alpha = jax_logsumexp(log_alpha[:, None] + trans_log, axis=0) + emit
                 return new_log_alpha, new_log_alpha
 
-            # Initial log-alpha = log_prior + emit_0
-            mu_init = jnp.stack([intercept[k] for k in range(K)])
-            init_emits = jnp.stack(
-                [dist.MultivariateNormal(mu_init[k], scale_tril=cov_chol[k]).log_prob(Y[0]) for k in range(K)]
-            )
-            log_alpha0 = jnp.log(prior + 1e-12) + init_emits
+            # Initial log-alpha at the first row with a complete AR(p) lag stack.
+            log_prior = jnp.log(prior + 1e-12)
+            log_prior = log_prior - jax_logsumexp(log_prior, axis=-1)
+            init_emits = _emit_at(int(self.p))
+            log_alpha0 = log_prior + init_emits
 
-            log_alpha, log_alphas = _jax.lax.scan(forward_step, log_alpha0, jnp.arange(1, T))
+            log_alpha, log_alphas = _jax.lax.scan(forward_step, log_alpha0, jnp.arange(int(self.p) + 1, T))
             log_lik = jax_logsumexp(log_alpha, axis=-1)
             numpyro.factor("forward_loglik", log_lik)
 
             # Deterministic site so ``Predictive`` can recover per-step
-            # posterior probabilities without a second pass.
-            full_log_alphas = jnp.concatenate([log_alpha0[None, :], log_alphas], axis=0)
+            # posterior probabilities without a second pass. The first p rows
+            # have no complete lag stack, so expose the normalized prior there.
+            prefix = jnp.tile(log_prior[None, :], (int(self.p), 1))
+            full_log_alphas = jnp.concatenate([prefix, log_alpha0[None, :], log_alphas], axis=0)
             log_norm = jax_logsumexp(full_log_alphas, axis=-1, keepdims=True)
             numpyro.deterministic("state_log_probs", full_log_alphas - log_norm)
 
@@ -372,7 +385,9 @@ class BayesianMSVAR:
 
     def _extract_posterior_means(self, samples: dict[str, Any]) -> None:
         intercepts = np.asarray(samples["intercept"])
-        ar = np.asarray(samples["ar1"])
+        ar = np.asarray(samples.get("ar", samples.get("ar1")))
+        if ar.ndim == 4:  # backward-compatible AR(1) sample shape: (S, K, d, d)
+            ar = ar[:, :, None, :, :]
         scales = np.asarray(samples["scales"])
         corr_chol = np.asarray(samples["corr_chol"])
         prior = np.asarray(samples["prior"])
@@ -391,16 +406,49 @@ class BayesianMSVAR:
         if "state_log_probs" in samples:
             log_probs = np.asarray(samples["state_log_probs"])
             self._posterior_state_probs = np.exp(log_probs)
+        self._update_stability_diagnostics()
 
     # ------------------------------------------------------------------
     # filtered scoring (re-running the Hamilton filter at posterior means)
     # ------------------------------------------------------------------
 
-    def _emission_logpdf(self, y_t: np.ndarray, y_prev: np.ndarray) -> np.ndarray:
+    def _companion_radius(self, coeffs: np.ndarray) -> float:
+        """Return the VAR companion-matrix spectral radius for one posterior regime."""
+        coeffs = np.asarray(coeffs, dtype=float)
+        if coeffs.ndim != 3:
+            return float("inf")
+        p, d, _ = coeffs.shape
+        if p == 1:
+            companion = coeffs[0]
+        else:
+            companion = np.zeros((p * d, p * d), dtype=float)
+            companion[:d, : p * d] = np.concatenate([coeffs[j] for j in range(p)], axis=1)
+            companion[d:, :-d] = np.eye((p - 1) * d)
+        try:
+            eigvals = np.linalg.eigvals(companion)
+        except np.linalg.LinAlgError:
+            return float("inf")
+        return float(np.max(np.abs(eigvals))) if eigvals.size else 0.0
+
+    def _update_stability_diagnostics(self) -> None:
+        if self._posterior_coefficients.size == 0:
+            return
+        radii = [self._companion_radius(self._posterior_coefficients[k]) for k in range(len(self.states))]
+        self.last_diagnostics["companion_radius_by_regime"] = {
+            self.states[k]: float(radii[k]) for k in range(len(radii))
+        }
+        self.last_diagnostics["max_companion_radius"] = float(np.nanmax(radii)) if radii else float("nan")
+        self.last_diagnostics["stationary"] = bool(
+            all(np.isfinite(r) and r < 1.0 for r in radii)
+        )
+
+    def _emission_logpdf(self, y_t: np.ndarray, y_lags: np.ndarray) -> np.ndarray:
         K = len(self.states)
         out = np.empty(K)
         for k in range(K):
-            mu = self._posterior_intercepts[k] + self._posterior_coefficients[k] @ y_prev
+            mu = self._posterior_intercepts[k].copy()
+            for j in range(self.p):
+                mu = mu + self._posterior_coefficients[k, j] @ y_lags[j]
             cov = self._posterior_covariances[k] + 1e-6 * np.eye(len(self.domains))
             try:
                 L = np.linalg.cholesky(cov)
@@ -419,10 +467,13 @@ class BayesianMSVAR:
         log_pi = np.log(np.maximum(self._posterior_prior, 1e-12))
         log_A = np.log(np.maximum(self._posterior_transition, 1e-12))
         for t in range(n):
+            if t < self.p:
+                log_alpha[t] = log_pi
+                continue
             y_t = Y[t]
-            y_prev = Y[t - 1] if t > 0 else np.zeros(len(self.domains))
-            log_b = self._emission_logpdf(y_t, y_prev)
-            if t == 0:
+            y_lags = np.array([Y[t - j - 1] for j in range(self.p)])
+            log_b = self._emission_logpdf(y_t, y_lags)
+            if t == self.p:
                 log_alpha[t] = log_pi + log_b
             else:
                 log_alpha[t] = log_b + _logsumexp(log_alpha[t - 1][:, None] + log_A, axis=0)

@@ -722,8 +722,18 @@ def write_credit_regime_score(warehouse: Any, output: CreditRegimeOutput) -> int
     return int(warehouse.write_credit_regime_score(pd.DataFrame([row])))
 
 
-def latest_credit_regime_score(warehouse: Any) -> CreditRegimeOutput | None:
+def latest_credit_regime_score(
+    warehouse: Any,
+    *,
+    asof: pd.Timestamp | str | None = None,
+) -> CreditRegimeOutput | None:
     """Read the most recent ``credit_regime_scores`` row → :class:`CreditRegimeOutput`.
+
+    When ``asof`` is supplied, the selected row is the latest score with
+    ``timestamp <= asof``. This is the high-level fixed-income point-in-time
+    contract: callers must not first select the newest warehouse row and then
+    merely reject it if it is post-decision, because that discards a valid
+    prior row and corrupts replay / TCA joins.
 
     Returns ``None`` when the table is empty (caller decides whether to
     surface 503 / fail-closed).
@@ -738,9 +748,18 @@ def latest_credit_regime_score(warehouse: Any) -> CreditRegimeOutput | None:
     """
     latest_fast = getattr(warehouse, "latest_credit_regime_score", None)
     if callable(latest_fast):
+        used_legacy_fast = False
         try:
+            fast_df = latest_fast(asof=asof)
+        except TypeError:  # pragma: no cover - legacy external test double
             fast_df = latest_fast()
+            used_legacy_fast = True
         except Exception:  # pragma: no cover - fall back on backend miss
+            fast_df = None
+        if used_legacy_fast and asof is not None:
+            # A legacy fast path that ignored ``asof`` may have returned a
+            # post-decision row. Force the table-scan fallback so a valid
+            # prior row can still be selected.
             fast_df = None
         if fast_df is not None and not fast_df.empty:
             return _row_to_output(fast_df.iloc[0])
@@ -749,6 +768,13 @@ def latest_credit_regime_score(warehouse: Any) -> CreditRegimeOutput | None:
     df = warehouse.read_credit_regime_scores()
     if df is None or df.empty:
         return None
+    if asof is not None:
+        asof_ts = to_utc(asof)
+        timestamps = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        df = df.loc[timestamps <= asof_ts]
+        if df.empty:
+            return None
+    df = df.sort_values(["timestamp", "model_run_id"])
     row = df.iloc[-1]
     return _row_to_output(row)
 

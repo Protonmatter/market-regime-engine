@@ -221,12 +221,12 @@ jobs:
       - name: Install
         run: |
           pip install -e ".[dev,analytics]"
-          pip install pytest-xdist hypothesis
+          pip install pytest-xdist hypothesis pytest-timeout pytest-randomly
       - name: Test (with junit + coverage XML)
         shell: bash
         run: |
           mkdir -p .ci-artifacts
-          pytest tests/ -q -n auto --maxfail=5 --durations=10 \
+          pytest tests/ -q -n auto --maxfail=1 --durations=25 --timeout=90 \
             -m "not slow" \
             --junitxml=.ci-artifacts/test-results.xml \
             --cov=src/market_regime_engine \
@@ -248,6 +248,22 @@ jobs:
           path: .ci-artifacts/coverage.xml
           retention-days: 14
 
+  security-test:
+    name: Security extras tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install security extras
+        run: |
+          pip install -e ".[dev,security]"
+      - name: Run security-focused tests
+        shell: bash
+        run: |
+          pytest -q             tests/test_body_size_middleware.py             tests/test_api_v1_pydantic_validation.py             tests/test_api_v1_redis_cache_no_pickle.py             tests/test_canonical_json_rfc8785.py             tests/test_fixed_income_evidence_pack_hmac.py             tests/test_api_v1_rate_limit.py
+
   mypy:
     name: Mypy (governance + structural)
     runs-on: ubuntu-latest
@@ -258,17 +274,14 @@ jobs:
           python-version: "3.11"
       - name: Install
         run: pip install -e ".[dev]"
-      - name: Run mypy (text + JSON)
+      - name: Run mypy (hard fail + captured artifact)
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p .ci-artifacts
-          # mypy supports --output json on >= 1.11; tolerate older builds
-          # by falling back to text capture. ``|| true`` so the type-error
-          # count itself does not fail the workflow — the artifact is the
-          # signal, not the exit code.
-          mypy src/market_regime_engine --output json \
-            > .ci-artifacts/mypy-results.json 2> .ci-artifacts/mypy-results.txt \
-            || cp .ci-artifacts/mypy-results.txt .ci-artifacts/mypy-results.json
+          mypy src/market_regime_engine --show-error-codes --pretty \
+            | tee .ci-artifacts/mypy-results.txt
+          cp .ci-artifacts/mypy-results.txt .ci-artifacts/mypy-results.json
       - name: Upload mypy results
         if: always()
         uses: actions/upload-artifact@v4
@@ -584,7 +597,7 @@ jobs:
     name: Release artifacts (wheel + sdist + audit zip)
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-    needs: [version-sanity, lockfile-sanity, lint, test, package-sanity]
+    needs: [version-sanity, lockfile-sanity, lint, test, security-test, package-sanity]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -607,7 +620,7 @@ jobs:
   refresh-build-status:
     name: Refresh README build-status block
     runs-on: ubuntu-latest
-    needs: [test, lint, mypy, bench]
+    needs: [test, security-test, lint, mypy, bench]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write

@@ -32,6 +32,7 @@ __all__ = [
     "data_cleaning",
     "deep_kernel",
     "dfm_mq",
+    "diagnostics",
     "distributional",
     "gp_cpd",
     "hierarchical_liquidity",
@@ -42,3 +43,16 @@ __all__ = [
     "release_calendars",
     "sequential_testing",
 ]
+
+
+EXPERIMENTAL_FRONTIER_COMPONENTS: tuple[str, ...] = (
+    "bayesian_msvar",
+    "dfm_mq",
+    "diagnostics",
+    "deep_kernel",
+    "gp_cpd",
+    "neural_seq",
+    "sequential_testing",
+)
+
+__all__ = tuple(sorted(set(globals().get("__all__", ())) | {"EXPERIMENTAL_FRONTIER_COMPONENTS"}))

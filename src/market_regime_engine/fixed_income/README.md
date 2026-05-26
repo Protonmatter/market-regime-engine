@@ -65,3 +65,11 @@ Acceptance command:
 ```
 python -m pytest tests/test_fixed_income_*.py
 ```
+
+## v1.7 certification additions
+
+| Module | Purpose |
+|---|---|
+| `execution_validation.py` | Joins decision-time execution-confidence predictions to later realized outcomes and emits Brier/log-loss/ECE, regime calibration, decile lift, TCA lift, and certification artifact hashes. |
+
+The scoring path remains decision-time only. `execution_validation.py` is post-outcome validation and should be used to generate release-gate evidence, not to influence live request scoring.

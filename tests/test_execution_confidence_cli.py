@@ -32,7 +32,20 @@ def _seed(wh: Warehouse, ts: pd.Timestamp) -> None:
     ]
     features = pd.DataFrame(rows)
     features.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
-    write_credit_regime_score(wh, score_credit_regime(features, asof=ts, release_gate=True))
+    credit_out = score_credit_regime(features, asof=ts, release_gate=True)
+    credit_out = type(credit_out)(
+        timestamp=credit_out.timestamp,
+        regime_score=credit_out.regime_score,
+        regime_label=credit_out.regime_label,
+        confidence=credit_out.confidence,
+        drivers=credit_out.drivers,
+        component_scores=credit_out.component_scores,
+        model_run_id=credit_out.model_run_id,
+        release_gate=True,
+        artifact_hash=credit_out.artifact_hash,
+        metadata=dict(credit_out.metadata),
+    )
+    write_credit_regime_score(wh, credit_out)
 
     rows = [
         {
@@ -46,16 +59,27 @@ def _seed(wh: Warehouse, ts: pd.Timestamp) -> None:
     ]
     features = pd.DataFrame(rows)
     features.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
-    write_liquidity_stress_score(
-        wh,
-        score_liquidity_stress(
-            features,
-            scope_type="cusip",
-            scope_id="00206RGB6",
-            asof=ts,
-            release_gate=True,
-        ),
+    liquidity_out = score_liquidity_stress(
+        features,
+        scope_type="cusip",
+        scope_id="00206RGB6",
+        asof=ts,
+        release_gate=True,
     )
+    liquidity_out = type(liquidity_out)(
+        timestamp=liquidity_out.timestamp,
+        scope_type=liquidity_out.scope_type,
+        scope_id=liquidity_out.scope_id,
+        liquidity_index=liquidity_out.liquidity_index,
+        liquidity_label=liquidity_out.liquidity_label,
+        confidence=liquidity_out.confidence,
+        drivers=liquidity_out.drivers,
+        model_run_id=liquidity_out.model_run_id,
+        release_gate=True,
+        artifact_hash=liquidity_out.artifact_hash,
+        metadata=dict(liquidity_out.metadata),
+    )
+    write_liquidity_stress_score(wh, liquidity_out)
 
 
 def _write_order(tmp_path: Path, request_id: str = "req-cli-1") -> Path:

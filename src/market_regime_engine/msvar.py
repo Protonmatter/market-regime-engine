@@ -31,7 +31,7 @@ from typing import overload
 import numpy as np
 import pandas as pd
 
-from market_regime_engine.hmm import DOMAIN_COLUMNS, REGIME_STATES
+from market_regime_engine.hmm import DOMAIN_COLUMNS, REGIME_STATES, _optimal_assignment
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:
@@ -90,6 +90,11 @@ class MarkovSwitchingVAR:
     tol: float = 1e-4
     cov_ridge: float = 1e-3
     transition_pseudocount: float = 1.0
+    enforce_stability: bool = True
+    stability_radius: float = 0.995
+    covariance_shrinkage: float = 0.10
+    weak_regime_min_effective_n: float | None = None
+    covariance_condition_threshold: float = 1e8
 
     # Learned parameters (per regime)
     intercepts: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -149,6 +154,68 @@ class MarkovSwitchingVAR:
             log_gamma[t] -= _logsumexp(log_gamma[t])
         return log_gamma
 
+    def _companion_radius(self, coeffs: np.ndarray) -> float:
+        """Return the VAR companion-matrix spectral radius for one regime."""
+        coeffs = np.asarray(coeffs, dtype=float)
+        if coeffs.ndim != 3:
+            return float("inf")
+        p, d, _ = coeffs.shape
+        if p == 1:
+            companion = coeffs[0]
+        else:
+            companion = np.zeros((p * d, p * d), dtype=float)
+            companion[:d, : p * d] = np.concatenate([coeffs[j] for j in range(p)], axis=1)
+            if p > 1:
+                companion[d:, :-d] = np.eye((p - 1) * d)
+        try:
+            eigvals = np.linalg.eigvals(companion)
+        except np.linalg.LinAlgError:
+            return float("inf")
+        return float(np.max(np.abs(eigvals))) if eigvals.size else 0.0
+
+    def _stabilize_coefficients(self, coeffs: np.ndarray) -> tuple[np.ndarray, float, bool]:
+        """Shrink VAR coefficients if the companion radius is nonstationary.
+
+        This is a conservative fail-safe for EM updates. It does not pretend
+        to solve constrained maximum likelihood; it prevents an explosive
+        M-step from being silently promoted into score-time filtering.
+        """
+        radius = self._companion_radius(coeffs)
+        if not self.enforce_stability or not np.isfinite(radius) or radius <= self.stability_radius:
+            return coeffs, radius, False
+        scale = float(self.stability_radius / max(radius, 1e-12))
+        return coeffs * scale, radius, True
+
+    def _shrink_covariance(self, cov: np.ndarray, *, effective_n: float) -> tuple[np.ndarray, float, float]:
+        """Shrink weak-regime innovation covariance toward a spherical target.
+
+        EM can allocate very little posterior mass to a regime. The naive
+        weighted covariance is then weakly identified and often nearly singular,
+        especially under collinearity. This routine applies a conservative
+        Ledoit-style shrinkage target ``avg_variance * I`` with intensity raised
+        when effective sample size is small or the covariance condition number is
+        unstable. Returns ``(cov_shrunk, intensity, condition_number)``.
+        """
+        cov = np.asarray(cov, dtype=float)
+        d = cov.shape[0]
+        cov = (cov + cov.T) / 2.0
+        avg_var = float(np.trace(cov) / max(d, 1))
+        if not np.isfinite(avg_var) or avg_var <= 0:
+            avg_var = float(self.cov_ridge)
+        target = avg_var * np.eye(d)
+        try:
+            cond = float(np.linalg.cond(cov + self.cov_ridge * np.eye(d)))
+        except np.linalg.LinAlgError:
+            cond = float("inf")
+        threshold_n = float(self.weak_regime_min_effective_n or max(10.0, 3.0 * d))
+        weak_intensity = max(0.0, (threshold_n - float(effective_n)) / max(threshold_n, 1e-12))
+        ill_conditioned = (not np.isfinite(cond)) or cond > float(self.covariance_condition_threshold)
+        intensity = max(float(self.covariance_shrinkage), weak_intensity, 0.50 if ill_conditioned else 0.0)
+        intensity = float(np.clip(intensity, 0.0, 0.95))
+        shrunk = (1.0 - intensity) * cov + intensity * target
+        shrunk = (shrunk + shrunk.T) / 2.0 + self.cov_ridge * np.eye(d)
+        return shrunk, intensity, cond
+
     # ------------------------------------------------------------------
     # EM
     # ------------------------------------------------------------------
@@ -188,6 +255,10 @@ class MarkovSwitchingVAR:
         # state-0 happens to be — classical MS-VAR label-switching).
         self._prior_emission_means = self.intercepts.copy()
         prev_ll = -np.inf
+        stabilized_updates_total = 0
+        shrinkage_events_total = 0
+        max_cov_condition = 0.0
+        max_shrinkage_intensity = 0.0
         for it in range(self.max_iter):
             log_alpha, ll = self._hamilton_filter(Y)
             log_gamma = self._kim_smoother(log_alpha)
@@ -201,7 +272,12 @@ class MarkovSwitchingVAR:
                 if w.sum() < d + 2:
                     new_intercepts[k] = self.intercepts[k]
                     new_coefficients[k] = self.coefficients[k]
-                    new_covariances[k] = self.covariances[k]
+                    cov_shrunk, intensity, cond = self._shrink_covariance(self.covariances[k], effective_n=float(w.sum()))
+                    new_covariances[k] = cov_shrunk
+                    max_cov_condition = max(max_cov_condition, cond if np.isfinite(cond) else float("inf"))
+                    max_shrinkage_intensity = max(max_shrinkage_intensity, intensity)
+                    if intensity > float(self.covariance_shrinkage) + 1e-12:
+                        shrinkage_events_total += 1
                     continue
                 # Build regression: y_t = c + A_1 y_{t-1} + ... weighted by w
                 X = np.ones((n - self.p, 1 + self.p * d))
@@ -218,8 +294,23 @@ class MarkovSwitchingVAR:
                 new_intercepts[k] = beta[0]
                 for j in range(self.p):
                     new_coefficients[k, j] = beta[1 + j * d : 1 + (j + 1) * d].T
-                resid = Yreg - X @ beta
-                new_covariances[k] = (resid.T * w) @ resid / max(w.sum(), 1e-9) + self.cov_ridge * np.eye(d)
+                stabilized_coeffs, _radius, was_stabilized = self._stabilize_coefficients(new_coefficients[k])
+                if was_stabilized:
+                    stabilized_updates_total += 1
+                    new_coefficients[k] = stabilized_coeffs
+                    beta_stable = beta.copy()
+                    for j in range(self.p):
+                        beta_stable[1 + j * d : 1 + (j + 1) * d] = new_coefficients[k, j].T
+                    resid = Yreg - X @ beta_stable
+                else:
+                    resid = Yreg - X @ beta
+                raw_cov = (resid.T * w) @ resid / max(w.sum(), 1e-9)
+                cov_shrunk, intensity, cond = self._shrink_covariance(raw_cov, effective_n=float(w.sum()))
+                new_covariances[k] = cov_shrunk
+                max_cov_condition = max(max_cov_condition, cond if np.isfinite(cond) else float("inf"))
+                max_shrinkage_intensity = max(max_shrinkage_intensity, intensity)
+                if intensity > float(self.covariance_shrinkage) + 1e-12:
+                    shrinkage_events_total += 1
             # Transition update
             xi_sum = np.zeros((K, K))
             log_A = np.log(np.maximum(self.transition, 1e-12))
@@ -237,13 +328,37 @@ class MarkovSwitchingVAR:
             self.intercepts = new_intercepts
             self.coefficients = new_coefficients
             self.covariances = new_covariances
+            radii = [self._companion_radius(self.coefficients[k]) for k in range(K)]
+            max_radius = float(np.nanmax(radii)) if radii else float("nan")
 
             if abs(ll - prev_ll) < self.tol * max(abs(prev_ll), 1.0):
-                self.fit_log = {"log_likelihood": ll, "iterations": it + 1, "converged": True}
+                self.fit_log = {
+                    "log_likelihood": ll,
+                    "iterations": it + 1,
+                    "converged": True,
+                    "max_companion_radius": max_radius,
+                    "companion_radius_by_regime": {self.states[i]: float(radii[i]) for i in range(len(radii))},
+                    "stabilized_updates": float(stabilized_updates_total),
+                    "covariance_shrinkage_events": float(shrinkage_events_total),
+                    "max_covariance_condition": float(max_cov_condition),
+                    "max_covariance_shrinkage_intensity": float(max_shrinkage_intensity),
+                }
                 self.fitted = True
                 return self
             prev_ll = ll
-        self.fit_log = {"log_likelihood": prev_ll, "iterations": self.max_iter, "converged": False}
+        radii = [self._companion_radius(self.coefficients[k]) for k in range(K)] if self.coefficients.size else []
+        max_radius = float(np.nanmax(radii)) if radii else float("nan")
+        self.fit_log = {
+            "log_likelihood": prev_ll,
+            "iterations": self.max_iter,
+            "converged": False,
+            "max_companion_radius": max_radius,
+            "companion_radius_by_regime": {self.states[i]: float(radii[i]) for i in range(len(radii))},
+            "stabilized_updates": float(stabilized_updates_total),
+            "covariance_shrinkage_events": float(shrinkage_events_total),
+            "max_covariance_condition": float(max_cov_condition),
+            "max_covariance_shrinkage_intensity": float(max_shrinkage_intensity),
+        }
         self.fitted = True
         return self
 
@@ -252,8 +367,7 @@ class MarkovSwitchingVAR:
     # ------------------------------------------------------------------
 
     def _pin_to_prior_labels(self) -> list[int]:
-        """Greedy Hungarian-style assignment of EM-converged regimes to
-        the prior emission-mean order.
+        """Optimal assignment of EM-converged regimes to the prior emission-mean order.
 
         v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.5): mirrors
         ``HMMRegimePosterior._pin_to_handprior_labels``. Without this
@@ -280,30 +394,7 @@ class MarkovSwitchingVAR:
             for prior_j in range(K):
                 diff = self.intercepts[em_k] - self._prior_emission_means[prior_j]
                 cost[em_k, prior_j] = float(np.sum(diff * diff))
-        # Greedy assignment (O(K^2) — sufficient for K <= 9).
-        perm = [-1] * K
-        used_priors: set[int] = set()
-        for em_k in np.argsort([cost[k].min() for k in range(K)]):
-            best_prior = -1
-            best_cost = float("inf")
-            for prior_j in range(K):
-                if prior_j in used_priors:
-                    continue
-                if cost[em_k, prior_j] < best_cost:
-                    best_cost = cost[em_k, prior_j]
-                    best_prior = prior_j
-            if best_prior >= 0:
-                perm[em_k] = best_prior
-                used_priors.add(best_prior)
-        # Any unfilled slot defaults to identity.
-        for k in range(K):
-            if perm[k] == -1:
-                for j in range(K):
-                    if j not in used_priors:
-                        perm[k] = j
-                        used_priors.add(j)
-                        break
-        return perm
+        return _optimal_assignment(cost)
 
     # ------------------------------------------------------------------
     # online filtering

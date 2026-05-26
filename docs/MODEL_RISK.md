@@ -142,11 +142,12 @@ pipeline encodes them as fail-closed CLI commands.
 
 11. **Mixed-frequency nowcast cross-check**
     - When the `[frontier]` or `[nowcast]` extra is installed,
-      `frontier.dfm_mq.MQDynamicFactorModel` (Bańbura-Modugno 2014) is
-      run nightly and its per-domain factor estimates are persisted in
-      the `nowcast_factors` warehouse table. Operators may add a
-      sanity-check rule that flags large divergences between the DFM-MQ
-      factor and the engine's domain stress score.
+      `frontier.dfm_mq.MQDynamicFactorModel` is run nightly and its
+      per-domain factor estimates are persisted in the `nowcast_factors`
+      warehouse table. M/Q inputs use the Bańbura-Modugno-style
+      statsmodels backend when available; D/W/M inputs use the native
+      filtered Kalman state-space backend. Smoothed factor extraction is
+      retrospective-only and requires `MRE_ENABLE_EXPERIMENTAL_FRONTIER=1`.
 
 ## Validation artifacts
 

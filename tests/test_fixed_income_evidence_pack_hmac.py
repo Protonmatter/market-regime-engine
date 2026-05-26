@@ -184,6 +184,19 @@ def test_multiple_key_versions_resolve_correctly(monkeypatch):
     assert verify_pack(signed_v1) is True
 
 
+def test_hmac_version_natural_sort_orders_v10_after_v9(monkeypatch):
+    keys = {"v9": _b64key(), "v10": _b64key()}
+    monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", json.dumps(keys))
+    assert latest_hmac_version() == "v10"
+
+
+def test_production_hmac_rejects_weak_key(monkeypatch):
+    monkeypatch.setenv("MRE_ENV", "production")
+    monkeypatch.setenv("MRE_FI_HMAC_KEY", "x")
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        get_hmac_keys()
+
+
 def test_singleton_env_registers_as_v1(monkeypatch):
     raw = _b64key()
     monkeypatch.setenv("MRE_FI_HMAC_KEY", raw)

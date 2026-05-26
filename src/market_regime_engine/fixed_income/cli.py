@@ -38,6 +38,10 @@ CLI_COMMANDS: tuple[str, ...] = (
     "fi-score-credit-regime",
     "fi-score-liquidity",
     "fi-score-execution-confidence",
+    "fi-calibrate-execution-confidence",
+    "fi-recommend-execution-protocol",
+    "fi-verify-xpro-decision",
+    "fi-validate-execution-confidence",
     "fi-tca-segment",
     "fi-evidence-pack",
     "fi-report",
@@ -51,6 +55,10 @@ _LIVE_COMMANDS: frozenset[str] = frozenset(
         "fi-score-credit-regime",
         "fi-score-liquidity",
         "fi-score-execution-confidence",
+        "fi-calibrate-execution-confidence",
+        "fi-recommend-execution-protocol",
+        "fi-verify-xpro-decision",
+        "fi-validate-execution-confidence",
         "fi-tca-segment",
         "fi-evidence-pack",
         "fi-report",
@@ -237,6 +245,98 @@ def _build_fi_score_execution_confidence(sub: argparse._SubParsersAction) -> Non
     )
 
 
+def _build_fi_recommend_execution_protocol(sub: argparse._SubParsersAction) -> None:
+    parser = sub.add_parser(
+        "fi-recommend-execution-protocol",
+        help="Build and persist a fixed-point XPro protocol decision artifact.",
+    )
+    parser.add_argument("--db", help="DuckDB warehouse path.", default="data/mre.duckdb")
+    parser.add_argument("--input", help="Path to the XPro decision JSON payload.", required=True)
+    parser.add_argument("--output-json", help="Optional path to write the artifact JSON.", dest="output_json")
+    parser.add_argument("--out-json", help=argparse.SUPPRESS, dest="out_json_legacy")
+    parser.add_argument("--request-id", help="Override/inject request id.", dest="request_id")
+    parser.add_argument("--decision-id", help="Explicit decision id.", dest="decision_id")
+    parser.add_argument("--model-run-id", help="Base model_run_id for counterfactual candidates.", dest="model_run_id")
+    parser.add_argument("--profile", help="Operating profile.", default="production")
+
+
+def _build_fi_verify_xpro_decision(sub: argparse._SubParsersAction) -> None:
+    parser = sub.add_parser(
+        "fi-verify-xpro-decision",
+        help="Verify a persisted XPro decision artifact by decision id.",
+    )
+    parser.add_argument("--db", help="DuckDB warehouse path.", default="data/mre.duckdb")
+    parser.add_argument("--decision-id", help="Decision id to verify.", required=True)
+    parser.add_argument(
+        "--require-hmac",
+        help="Fail verification when the artifact has no HMAC signature.",
+        action="store_true",
+        dest="require_hmac",
+    )
+
+
+def _build_fi_validate_execution_confidence(sub: argparse._SubParsersAction) -> None:
+    parser = sub.add_parser(
+        "fi-validate-execution-confidence",
+        help="Validate realized execution outcomes and persist certification confidence metadata.",
+    )
+    parser.add_argument("--db", help="DuckDB warehouse path.", default="data/mre.duckdb")
+    parser.add_argument("--asof", help="ISO-8601 validation cutoff.")
+    parser.add_argument("--out-json", help="Output JSON report path.", dest="out_json")
+    parser.add_argument("--output-json", help=argparse.SUPPRESS, dest="output_json")
+    parser.add_argument("--dsr", type=float, default=None, help="Deflated Sharpe ratio to store.")
+    parser.add_argument("--pbo", type=float, default=None, help="Probability of backtest overfit to store.")
+    parser.add_argument(
+        "--evidence-pack-hmac",
+        default=None,
+        help="Evidence-pack HMAC reference to store in the certification row.",
+    )
+    parser.add_argument(
+        "--model-card-path",
+        default="docs/method_cards/execution_confidence.md",
+        help="Method/model card path to store in the certification row.",
+    )
+
+
+def _build_fi_calibrate_execution_confidence(sub: argparse._SubParsersAction) -> None:
+    parser = sub.add_parser(
+        "fi-calibrate-execution-confidence",
+        help="Fit empirical execution-confidence calibrators from observed outcomes.",
+    )
+    parser.add_argument("--db", help="DuckDB warehouse path.", default="data/mre.duckdb")
+    parser.add_argument("--asof", help="ISO-8601 calibration cutoff; defaults to now UTC.")
+    parser.add_argument(
+        "--min-observations",
+        type=int,
+        default=30,
+        help="Minimum joined prediction/outcome rows required to fit each calibrator.",
+    )
+    parser.add_argument(
+        "--fill-ratio-threshold",
+        type=float,
+        default=0.999,
+        help="Filled_quantity / notional threshold for fill_success when metadata lacks an explicit label.",
+    )
+    parser.add_argument("--l2", type=float, default=1.0, help="L2 regularisation strength.")
+    parser.add_argument(
+        "--no-slippage",
+        action="store_true",
+        help="Fit only fill-success probability calibration; skip slippage correction.",
+    )
+    parser.add_argument(
+        "--include-unreleased-predictions",
+        action="store_true",
+        help="Include predictions where release_gate is false. Default is release-gated training only.",
+    )
+    parser.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="Dry-run fit without writing calibration_models/model_runs rows.",
+    )
+    parser.add_argument("--run-id", help="Explicit calibration model_run_id.")
+    parser.add_argument("--output-json", help="Optional path to write calibration summary JSON.", dest="output_json")
+
+
 def _build_fi_tca_segment(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser(
         "fi-tca-segment",
@@ -397,6 +497,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _build_fi_score_credit_regime(sub)
     _build_fi_score_liquidity(sub)
     _build_fi_score_execution_confidence(sub)
+    _build_fi_calibrate_execution_confidence(sub)
+    _build_fi_recommend_execution_protocol(sub)
+    _build_fi_verify_xpro_decision(sub)
+    _build_fi_validate_execution_confidence(sub)
     _build_fi_tca_segment(sub)
     _build_fi_evidence_pack(sub)
     _build_fi_report(sub)
@@ -594,7 +698,12 @@ def _cmd_fi_score_liquidity(ns: argparse.Namespace) -> int:
     prev_label: LiquidityLabel | None = None
     try:
         if prev_from_wh:
-            prev = latest_liquidity_stress_score(wh, scope_type=scope_type, scope_id=scope_id)
+            prev = latest_liquidity_stress_score(
+                wh,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                asof=asof_ts,
+            )
             if prev is not None and prev.liquidity_label:
                 try:
                     prev_label = next(lbl for lbl in LiquidityLabel if lbl.label == prev.liquidity_label)
@@ -773,6 +882,167 @@ def _cmd_fi_score_execution_confidence(ns: argparse.Namespace) -> int:
     envelope["request_id"] = body.request_id
     print(json.dumps(envelope, sort_keys=True, default=str))
     output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
+    if output_path:
+        _write_optional_json(output_path, envelope)
+    return 0
+
+
+def _cmd_fi_recommend_execution_protocol(ns: argparse.Namespace) -> int:
+    import uuid as _uuid
+
+    from market_regime_engine.fixed_income.api import XProDecisionRequestModel
+    from market_regime_engine.fixed_income.pit_guard import PitViolationError
+    from market_regime_engine.fixed_income.xpro_decision import build_xpro_decision_artifact
+    from market_regime_engine.storage import Warehouse
+
+    try:
+        payload = json.loads(Path(ns.input).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
+        return 2
+    request_id = getattr(ns, "request_id", None) or payload.get("request_id") or _uuid.uuid4().hex
+    payload["request_id"] = request_id
+    if getattr(ns, "decision_id", None):
+        payload["decision_id"] = ns.decision_id
+    try:
+        body = XProDecisionRequestModel(**payload)
+    except Exception as exc:
+        print(json.dumps({"status": "validation_error", "detail": str(exc)}, sort_keys=True))
+        return 2
+
+    wh = Warehouse(ns.db)
+    try:
+        try:
+            artifact = build_xpro_decision_artifact(
+                body.to_dataclass(),
+                warehouse=wh,
+                request_id=body.request_id,
+                decision_id=body.decision_id,
+                candidate_protocols=tuple(body.candidate_protocols),
+                model_run_id=getattr(ns, "model_run_id", None),
+                profile=getattr(ns, "profile", "production"),
+            )
+        except PitViolationError as exc:
+            print(json.dumps({"status": "pit_violation", "detail": str(exc)}, sort_keys=True))
+            return 2
+        wh.write_xpro_decision_artifact(artifact)
+    finally:
+        wh.close()
+
+    print(json.dumps(artifact, sort_keys=True))
+    output_path = getattr(ns, "output_json", None) or getattr(ns, "out_json_legacy", None)
+    if output_path:
+        _write_optional_json(output_path, artifact)
+    return 0
+
+
+def _cmd_fi_verify_xpro_decision(ns: argparse.Namespace) -> int:
+    from market_regime_engine.fixed_income.xpro_decision import verify_xpro_decision_artifact
+    from market_regime_engine.storage import Warehouse
+
+    wh = Warehouse(ns.db)
+    try:
+        latest = wh.latest_xpro_decision_artifact(ns.decision_id)
+    finally:
+        wh.close()
+    if latest is None or latest.empty:
+        print(json.dumps({"verified": False, "reasons": ["decision_not_found"]}, sort_keys=True))
+        return 2
+    artifact = json.loads(str(latest.iloc[0]["payload_json"]))
+    result = verify_xpro_decision_artifact(
+        artifact,
+        require_hmac=True if getattr(ns, "require_hmac", False) else None,
+    )
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result.get("verified") else 2
+
+
+def _cmd_fi_validate_execution_confidence(ns: argparse.Namespace) -> int:
+    from market_regime_engine.fixed_income.execution_validation import (
+        certification_confidence_row,
+        validate_execution_confidence_realized_outcomes,
+    )
+    from market_regime_engine.storage import Warehouse
+
+    wh = Warehouse(ns.db)
+    try:
+        try:
+            report = validate_execution_confidence_realized_outcomes(
+                wh,
+                asof=getattr(ns, "asof", None),
+            )
+        except ValueError as exc:
+            print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
+            return 2
+        row = certification_confidence_row(
+            report,
+            date=getattr(ns, "asof", None),
+            dsr=getattr(ns, "dsr", None),
+            pbo=getattr(ns, "pbo", None),
+            model_card_path=getattr(ns, "model_card_path", "docs/method_cards/execution_confidence.md"),
+            evidence_pack_hmac=getattr(ns, "evidence_pack_hmac", None),
+        )
+        row_payload = row.iloc[0].to_dict()
+        metadata = json.loads(str(row_payload.get("metadata_json") or "{}"))
+        for key, value in row_payload.items():
+            if key in {"date", "confidence", "grade", "metadata_json"}:
+                continue
+            metadata[key] = value
+        row.loc[:, "metadata_json"] = json.dumps(metadata, sort_keys=True, default=str)
+        wh.write_confidence_scores(row)
+    finally:
+        wh.close()
+
+    payload = {
+        "execution_confidence": report.to_dict(),
+        "certification_confidence": {
+            "date": row_payload.get("date"),
+            "confidence": row_payload.get("confidence"),
+            "grade": row_payload.get("grade"),
+        },
+    }
+    print(json.dumps(payload, sort_keys=True, default=str))
+    output_path = getattr(ns, "out_json", None) or getattr(ns, "output_json", None)
+    if output_path:
+        _write_optional_json(output_path, payload)
+    return 0
+
+
+def _cmd_fi_calibrate_execution_confidence(ns: argparse.Namespace) -> int:
+    """Fit and optionally persist empirical execution-confidence calibrators."""
+
+    from market_regime_engine.fixed_income.execution_calibration import (
+        calibrate_execution_confidence_from_outcomes,
+        calibration_summary_payload,
+    )
+    from market_regime_engine.storage import Warehouse
+
+    wh = Warehouse(ns.db)
+    try:
+        try:
+            results = calibrate_execution_confidence_from_outcomes(
+                wh,
+                asof=getattr(ns, "asof", None),
+                min_observations=int(getattr(ns, "min_observations", 30)),
+                fill_ratio_threshold=float(getattr(ns, "fill_ratio_threshold", 0.999)),
+                l2=float(getattr(ns, "l2", 1.0)),
+                fit_slippage=not bool(getattr(ns, "no_slippage", False)),
+                require_prediction_release_gate=not bool(
+                    getattr(ns, "include_unreleased_predictions", False)
+                ),
+                persist=not bool(getattr(ns, "no_persist", False)),
+                run_id=getattr(ns, "run_id", None),
+            )
+        except ValueError as exc:
+            print(json.dumps({"status": "error", "detail": str(exc)}, sort_keys=True))
+            return 2
+    finally:
+        wh.close()
+
+    envelope = calibration_summary_payload(results)
+    envelope["persisted"] = not bool(getattr(ns, "no_persist", False))
+    print(json.dumps(envelope, sort_keys=True, default=str))
+    output_path = getattr(ns, "output_json", None)
     if output_path:
         _write_optional_json(output_path, envelope)
     return 0
@@ -1294,6 +1564,14 @@ def run(args: Sequence[str]) -> int:
         return _cmd_fi_score_liquidity(ns)
     if command == "fi-score-execution-confidence":
         return _cmd_fi_score_execution_confidence(ns)
+    if command == "fi-calibrate-execution-confidence":
+        return _cmd_fi_calibrate_execution_confidence(ns)
+    if command == "fi-recommend-execution-protocol":
+        return _cmd_fi_recommend_execution_protocol(ns)
+    if command == "fi-verify-xpro-decision":
+        return _cmd_fi_verify_xpro_decision(ns)
+    if command == "fi-validate-execution-confidence":
+        return _cmd_fi_validate_execution_confidence(ns)
     if command == "fi-tca-segment":
         return _cmd_fi_tca_segment(ns)
     if command == "fi-evidence-pack":
