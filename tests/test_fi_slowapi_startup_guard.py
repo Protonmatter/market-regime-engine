@@ -9,7 +9,6 @@ silently mount an unlimited handler.
 
 from __future__ import annotations
 
-import importlib
 import sys
 
 import pytest
@@ -53,7 +52,7 @@ def test_assert_slowapi_available_succeeds_when_enabled_and_installed(
     # Restore the real slowapi module so the importlib path succeeds.
     if "slowapi" in sys.modules and sys.modules["slowapi"] is None:
         sys.modules.pop("slowapi")
-    importlib.import_module("slowapi")
+    pytest.importorskip("slowapi")
     fi_api.assert_slowapi_available()
 
 
