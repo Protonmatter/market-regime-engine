@@ -83,10 +83,11 @@ def _make_credit_regime_output(*, asof: pd.Timestamp, regime_score: float):
     target."""
     rows = []
     base = _coerce_utc(asof)
-    # 100 days of CDX history; the latest is the *target* percentile.
+    # 100 days of complete component history; the latest is the *target* percentile.
+    credit_feature_names = ("cdx_ig_5y", "cdx_hy_5y")
     for i in range(100):
         ts = base - pd.Timedelta(days=100 - i)
-        for fname in ("cdx_ig_5y", "cdx_hy_5y"):
+        for fname in credit_feature_names:
             rows.append(
                 {
                     "date": ts,
@@ -97,11 +98,26 @@ def _make_credit_regime_output(*, asof: pd.Timestamp, regime_score: float):
                 }
             )
     # Override the last values to target the requested regime_score.
-    for r in rows[-2:]:
+    for r in rows[-len(credit_feature_names) :]:
         r["value"] = float(regime_score - 1)  # roughly that percentile
     features = pd.DataFrame(rows)
     features.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
-    return score_credit_regime(features, asof=base, release_gate=True, profile="test")
+    out = score_credit_regime(features, asof=base, release_gate=True, profile="test")
+    # These tests exercise the execution-confidence scorer, not the upstream
+    # FI model completeness rails. Force the fixture signal through the
+    # governance gate; dedicated tests below verify upstream gate propagation.
+    return type(out)(
+        timestamp=out.timestamp,
+        regime_score=out.regime_score,
+        regime_label=out.regime_label,
+        confidence=out.confidence,
+        drivers=out.drivers,
+        component_scores=out.component_scores,
+        model_run_id=out.model_run_id,
+        release_gate=True,
+        artifact_hash=out.artifact_hash,
+        metadata=dict(out.metadata),
+    )
 
 
 def _make_liquidity_output(
@@ -118,9 +134,10 @@ def _make_liquidity_output(
     the v1.6.0 A11 fix will reset the liquidity_index to neutral 50."""
     base = _coerce_utc(asof)
     rows = []
+    liquidity_feature_names = ("bid_ask_width", "quotes_received")
     for i in range(100):
         ts = base - pd.Timedelta(days=100 - i)
-        for fname in ("bid_ask_width", "quotes_received"):
+        for fname in liquidity_feature_names:
             rows.append(
                 {
                     "date": ts,
@@ -130,7 +147,7 @@ def _make_liquidity_output(
                     "vintage_date": None,
                 }
             )
-    for r in rows[-2:]:
+    for r in rows[-len(liquidity_feature_names) :]:
         r["value"] = float(liquidity_index)
     features = pd.DataFrame(rows)
     features.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
@@ -158,7 +175,19 @@ def _make_liquidity_output(
             artifact_hash=out.artifact_hash,
             metadata=out.metadata,
         )
-    return out
+    return type(out)(
+        timestamp=out.timestamp,
+        scope_type=out.scope_type,
+        scope_id=out.scope_id,
+        liquidity_index=out.liquidity_index,
+        liquidity_label=out.liquidity_label,
+        confidence=out.confidence,
+        drivers=out.drivers,
+        model_run_id=out.model_run_id,
+        release_gate=True,
+        artifact_hash=out.artifact_hash,
+        metadata=dict(out.metadata),
+    )
 
 
 def _request(
@@ -336,13 +365,73 @@ def test_artifact_hash_is_stable_across_runs(wh: Warehouse) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scorer_raises_on_post_decision_signal(wh: Warehouse) -> None:
+def test_scorer_does_not_select_post_decision_signal(wh: Warehouse) -> None:
     asof = pd.Timestamp("2026-05-01T16:00:00Z")
-    # Seed at *later* timestamp than the request → PIT violation.
+    # Seed at *later* timestamp than the request. The scorer must not
+    # select this row and then raise/null post hoc; it should perform an
+    # as-of read and fail closed as missing context.
     _seed_signals(wh, asof=asof + pd.Timedelta(hours=1))
     request = _request(timestamp=asof)
-    with pytest.raises(PitViolationError):
-        score_execution_confidence(request, warehouse=wh, release_gate=True)
+    out = score_execution_confidence(request, warehouse=wh, release_gate=True)
+    assert out.recommended_action == "Unavailable — stale signal"
+    assert out.release_gate is False
+    assert out.metadata["reason"] == "missing_signal"
+
+
+def test_scorer_selects_prior_row_when_future_row_exists(wh: Warehouse) -> None:
+    """P0 adversarial PIT regression: a future latest row must not block a
+    valid historical row that existed at decision time."""
+    t1 = pd.Timestamp("2026-05-01T15:59:30Z")
+    t2 = pd.Timestamp("2026-05-01T16:00:00Z")
+    t3 = pd.Timestamp("2026-05-01T17:00:00Z")
+    _seed_signals(wh, asof=t1, regime_score=20.0, liquidity_index=15.0)
+    _seed_signals(wh, asof=t3, regime_score=95.0, liquidity_index=95.0)
+
+    request = _request(timestamp=t2)
+    out = score_execution_confidence(request, warehouse=wh, release_gate=True)
+
+    assert out.release_gate is True
+    assert out.metadata["reason"] == "scored"
+    assert out.metadata["signal_age_seconds_credit_regime"] == pytest.approx(30.0)
+    assert out.metadata["signal_age_seconds_liquidity"] == pytest.approx(30.0)
+
+
+def test_scorer_blocks_when_upstream_release_gate_false(wh: Warehouse) -> None:
+    """P1 governance regression: caller-level release_gate=True cannot
+    override an unreleased upstream regime/liquidity signal."""
+    asof = pd.Timestamp("2026-05-01T16:00:00Z")
+    credit = _make_credit_regime_output(asof=asof, regime_score=10.0)
+    credit = type(credit)(
+        timestamp=credit.timestamp,
+        regime_score=credit.regime_score,
+        regime_label=credit.regime_label,
+        confidence=credit.confidence,
+        drivers=credit.drivers,
+        component_scores=credit.component_scores,
+        model_run_id=credit.model_run_id,
+        release_gate=False,
+        artifact_hash=credit.artifact_hash,
+        metadata=dict(credit.metadata),
+    )
+    write_credit_regime_score(wh, credit)
+    write_liquidity_stress_score(
+        wh,
+        _make_liquidity_output(
+            asof=asof,
+            cusip="00206RGB6",
+            liquidity_index=10.0,
+            label=None,
+        ),
+    )
+
+    request = _request(timestamp=asof + pd.Timedelta(seconds=30))
+    out = score_execution_confidence(request, warehouse=wh, release_gate=True)
+
+    assert out.release_gate is False
+    assert out.recommended_action == "Manual review required"
+    assert out.human_review_required is True
+    assert out.metadata["reason"] == "upstream_release_gate_false"
+    assert out.metadata["blocked_by_upstream_release_gate"] is True
 
 
 def test_scorer_soft_fails_on_stale_signal(wh: Warehouse, monkeypatch) -> None:
@@ -385,7 +474,7 @@ def test_signal_age_seconds_embedded_in_metadata(wh: Warehouse) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_execution_features_raises_on_post_decision_regime(wh: Warehouse) -> None:
+def test_build_execution_features_does_not_select_post_decision_regime(wh: Warehouse) -> None:
     """REVIEW_DEEP_V1_5_2.md A6: the CLI / batch ``build_execution_features``
     path must mirror the hot-path PIT enforcement so future-dated regime
     rows cannot leak into offline training data."""
@@ -395,8 +484,10 @@ def test_build_execution_features_raises_on_post_decision_regime(wh: Warehouse) 
     # Seed signals at asof + 1 hour (FUTURE relative to the request).
     _seed_signals(wh, asof=asof + pd.Timedelta(hours=1))
     request = _request(timestamp=asof)
-    with pytest.raises(PitViolationError):
-        build_execution_features(wh, request)
+    frame = build_execution_features(wh, request)
+    assert len(frame) == 1
+    assert "regime_score" not in frame.columns
+    assert "liquidity_index" not in frame.columns
 
 
 def test_build_execution_features_passes_when_signals_are_pit_safe(wh: Warehouse) -> None:

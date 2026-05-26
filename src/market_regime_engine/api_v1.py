@@ -206,7 +206,10 @@ _PICKLE_OPT_IN_ENV = "MRE_CACHE_ALLOW_PICKLE"
 
 
 def _pickle_opt_in() -> bool:
-    return os.getenv(_PICKLE_OPT_IN_ENV) == "1"
+    enabled = os.getenv(_PICKLE_OPT_IN_ENV) == "1"
+    if enabled and is_production_env():
+        raise RuntimeError(f"{_PICKLE_OPT_IN_ENV}=1 is forbidden in production")
+    return enabled
 
 
 def _serialize_cache_value(value: Any) -> bytes:
@@ -490,7 +493,7 @@ def _mount_fixed_income_router() -> None:
         )
 
         limiter = _build_rate_limiter()
-        if limiter is not None:
+        if limiter is not None and getattr(limiter, "uses_slowapi", True):
             # slowapi requires the limiter to be attached to ``app.state``
             # and its ``RateLimitExceeded`` exception handler to be
             # registered before the routes use it. PR-5 also enforces the

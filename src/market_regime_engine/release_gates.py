@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import pandas as pd
+
+from market_regime_engine.frontier.experimental import require_frontier_experimental
+from market_regime_engine.package_boundary import BoundaryName, resolve_boundary
 
 # v1.4.1 (item F): the release-gate profile defaults flipped from
 # permissive (v1.2.1 baseline) to production. Sentinel objects below
@@ -77,6 +82,26 @@ def production_profile() -> dict[str, Any]:
     }
 
 
+def certification_profile() -> dict[str, Any]:
+    """Audit/certification release-gate kwargs.
+
+    This profile is stricter than ``production``: validation artifacts are
+    mandatory rather than opportunistic. It is intended for external review,
+    model-risk sign-off, and stable-core promotion packs.
+    """
+    out = production_profile()
+    out.update(
+        {
+            "require_validation_artifacts": True,
+            "require_model_card": True,
+            "require_evidence_hmac": True,
+            "min_regime_sample_size": 30,
+            "min_tca_lift_n": 30,
+        }
+    )
+    return out
+
+
 def default_profile() -> dict[str, Any]:
     """v1.2.1-baseline release-gate kwargs (the looser defaults).
 
@@ -111,28 +136,102 @@ def default_profile() -> dict[str, Any]:
 
 _PROFILE_FACTORIES: dict[str, Any] = {
     "production": production_profile,
+    "certification": certification_profile,
     "default": default_profile,
 }
+
+
+def _finite_float(value: Any) -> float | None:
+    """Return a finite float or ``None`` without raising on bad payloads."""
+
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if math.isfinite(out) else None
+
+
+def _expand_confidence_metadata(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+    if frame is None or frame.empty or "metadata_json" not in frame.columns:
+        return frame
+    out = frame.copy()
+    metadata_rows: list[dict[str, Any]] = []
+    keys: set[str] = set()
+    for raw in out["metadata_json"].tolist():
+        payload: dict[str, Any] = {}
+        if isinstance(raw, Mapping):
+            payload = dict(raw)
+        else:
+            try:
+                if raw is not None and not pd.isna(raw):
+                    parsed = json.loads(str(raw))
+                    if isinstance(parsed, Mapping):
+                        payload = dict(parsed)
+            except Exception:
+                payload = {}
+        metadata_rows.append(payload)
+        keys.update(str(k) for k in payload)
+    for key in sorted(keys):
+        if key not in out.columns:
+            out[key] = [payload.get(key) for payload in metadata_rows]
+    return out
 
 
 def _coerce_tca_lift_payload(value: Any) -> dict[str, dict[str, float]]:
     """Decode a ``tca_lift`` confidence-frame cell to the canonical dict.
 
-    v1.5.1 (PR-9 FIX 4c): the ``confidence`` frame is allowed to carry
-    the per-regime lift dict either as a Python dict (in-process call)
-    or a JSON string (warehouse round-trip). Anything else maps to an
-    empty dict so the rail fails closed.
+    The release gate must fail closed on malformed TCA evidence. Older code
+    accepted ``dict(v)`` directly, which could raise on non-mapping nested
+    values and turn a gate decision into an unhandled exception. This helper
+    now drops invalid regime rows and only returns rows with finite ``p_value``,
+    finite ``effect_size``, and finite ``n`` values. An empty return value is
+    interpreted by the caller as missing/invalid TCA evidence.
     """
-    if isinstance(value, dict):
-        return {str(k): dict(v) for k, v in value.items()}
+
+    parsed: Any = value
     if isinstance(value, str) and value.strip():
         try:
             parsed = json.loads(value)
         except json.JSONDecodeError:
             return {}
-        if isinstance(parsed, dict):
-            return {str(k): dict(v) for k, v in parsed.items()}
-    return {}
+    if not isinstance(parsed, dict):
+        return {}
+
+    out: dict[str, dict[str, float]] = {}
+    for regime, row in parsed.items():
+        if not isinstance(row, dict):
+            continue
+        p_value = _finite_float(row.get("p_value"))
+        effect_size = _finite_float(row.get("effect_size"))
+        n_value = _finite_float(row.get("n"))
+        if p_value is None or effect_size is None or n_value is None:
+            continue
+        out[str(regime)] = {
+            "p_value": p_value,
+            "effect_size": effect_size,
+            "n": n_value,
+            **{str(k): v for k, v in row.items() if k not in {"p_value", "effect_size", "n"}},
+        }
+    return out
+
+
+def _latest_row(frame: pd.DataFrame, *, date_col: str = "date") -> pd.Series:
+    """Return the latest row by date when available, otherwise final row.
+
+    Release-gate callers sometimes pass single-row synthetic frames without a
+    date column. Certification hardening should not turn those frames into a
+    KeyError; it should evaluate the available evidence deterministically.
+    """
+
+    if frame is None or frame.empty:
+        raise ValueError("_latest_row requires a non-empty frame")
+    if date_col not in frame.columns:
+        return frame.iloc[-1]
+    tmp = frame.copy()
+    parsed = pd.to_datetime(tmp[date_col], utc=True, errors="coerce")
+    if parsed.notna().any():
+        return tmp.loc[parsed.sort_values(kind="mergesort").index].iloc[-1]
+    return tmp.sort_values(date_col, kind="mergesort").iloc[-1]
 
 
 def _resolve_profile(profile: str | None) -> str:
@@ -177,13 +276,19 @@ def evaluate_release_gate(
     promotion_method: Any = _UNSET,
     e_value_log: pd.DataFrame | None = None,
     e_value_alpha: float = 0.05,
-    profile: Literal["default", "production"] | None = None,
+    profile: Literal["default", "production", "certification"] | None = None,
+    gate_boundary: BoundaryName = "stable_core",
     min_dsr: Any = _UNSET,
     max_pbo: Any = _UNSET,
     max_brier: Any = _UNSET,
     max_ece: Any = _UNSET,
     max_tca_p: Any = _UNSET,
     min_tca_effect: Any = _UNSET,
+    require_validation_artifacts: Any = _UNSET,
+    require_model_card: Any = _UNSET,
+    require_evidence_hmac: Any = _UNSET,
+    min_regime_sample_size: Any = _UNSET,
+    min_tca_lift_n: Any = _UNSET,
 ) -> pd.DataFrame:
     """Evaluate the release gate.
 
@@ -227,8 +332,22 @@ def evaluate_release_gate(
     callers in the same configuration get the production profile.
     Use ``profile="default"`` or ``MRE_ENV=dev`` to opt back into the
     looser thresholds.
+
+    ``gate_boundary`` separates the production-certifiable stable core
+    from explicit-opt-in frontier research. The stable core defaults to
+    the production profile; ``experimental_frontier`` requires
+    ``MRE_ENABLE_EXPERIMENTAL_FRONTIER=1`` and records a non-production
+    boundary marker in ``metadata_json``.
     """
-    resolved_profile = _resolve_profile(profile)
+    boundary = resolve_boundary(gate_boundary)
+    if boundary.requires_experimental_flag:
+        require_frontier_experimental(
+            f"release gate boundary {boundary.name!r} is experimental and not production-eligible"
+        )
+    profile_for_resolution = profile
+    if profile_for_resolution is None and boundary.name == "experimental_frontier":
+        profile_for_resolution = boundary.default_gate_profile
+    resolved_profile = _resolve_profile(profile_for_resolution)
     try:
         factory = _PROFILE_FACTORIES[resolved_profile]
     except KeyError as exc:
@@ -305,6 +424,28 @@ def evaluate_release_gate(
         min_tca_effect = float(prof_tca_eff) if prof_tca_eff is not None else None
     else:
         min_tca_effect = float(min_tca_effect) if min_tca_effect is not None else None
+    if require_validation_artifacts is _UNSET:
+        require_validation_artifacts = bool(prof_kwargs.get("require_validation_artifacts", False))
+    else:
+        require_validation_artifacts = bool(require_validation_artifacts)
+    if require_model_card is _UNSET:
+        require_model_card = bool(prof_kwargs.get("require_model_card", False))
+    else:
+        require_model_card = bool(require_model_card)
+    if require_evidence_hmac is _UNSET:
+        require_evidence_hmac = bool(prof_kwargs.get("require_evidence_hmac", False))
+    else:
+        require_evidence_hmac = bool(require_evidence_hmac)
+    if min_regime_sample_size is _UNSET:
+        prof_regime_n = prof_kwargs.get("min_regime_sample_size")
+        min_regime_sample_size = int(prof_regime_n) if prof_regime_n is not None else None
+    else:
+        min_regime_sample_size = int(min_regime_sample_size) if min_regime_sample_size is not None else None
+    if min_tca_lift_n is _UNSET:
+        prof_tca_n = prof_kwargs.get("min_tca_lift_n")
+        min_tca_lift_n = int(prof_tca_n) if prof_tca_n is not None else None
+    else:
+        min_tca_lift_n = int(min_tca_lift_n) if min_tca_lift_n is not None else None
     conf_val = 0.0
     conf_grade = "F"
     date = None
@@ -313,8 +454,10 @@ def evaluate_release_gate(
     brier_val: float | None = None
     ece_val: float | None = None
     tca_lift_raw: Any = None
+    certification_fields: dict[str, Any] = {}
+    confidence = _expand_confidence_metadata(confidence)
     if confidence is not None and not confidence.empty:
-        latest = confidence.sort_values("date").iloc[-1]
+        latest = _latest_row(confidence)
         conf_val = float(latest.get("confidence", 0.0))
         conf_grade = str(latest.get("grade", "unknown"))
         date = latest.get("date")
@@ -339,6 +482,7 @@ def evaluate_release_gate(
         # JSON string for back-compat with warehouse round-trips.
         if "tca_lift" in confidence.columns:
             tca_lift_raw = latest.get("tca_lift")
+        certification_fields = {str(k): latest.get(k) for k in confidence.columns}
     severe_drift = 0
     major_drift = 0
     max_psi = 0.0
@@ -403,6 +547,26 @@ def evaluate_release_gate(
         # — treat as missing data so the rail fires.
         coverage_missing = True
 
+    def _field_truthy(name: str) -> bool:
+        raw = certification_fields.get(name)
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return False
+        if isinstance(raw, bool):
+            return raw
+        text = str(raw).strip().lower()
+        return text in {"1", "true", "yes", "y", "pass", "passed", "ok"}
+
+    def _field_present(name: str) -> bool:
+        raw = certification_fields.get(name)
+        if raw is None:
+            return False
+        try:
+            if pd.isna(raw):
+                return False
+        except Exception:
+            pass
+        return str(raw).strip() != ""
+
     reasons = []
     if conf_val < min_confidence:
         reasons.append(f"confidence_below_{min_confidence:.2f}")
@@ -418,6 +582,9 @@ def evaluate_release_gate(
         if require_mcs_membership and mcs_evidence != "in_set":
             reasons.append(f"mcs_evidence_{mcs_evidence}")
     elif promotion_method == "e_values":
+        require_frontier_experimental(
+            "promotion_method='e_values' is an experimental frontier promotion path; production defaults use MCS"
+        )
         # v1.2 SafeTestPromotion gate. Require at least one row in
         # ``e_value_log`` whose ``e_value >= 1/alpha`` AND ``decision``
         # signals "promote". Anything else blocks the gate.
@@ -468,6 +635,7 @@ def evaluate_release_gate(
     # rail with a missing-or-invalid payload must FAIL the gate; only a
     # well-formed payload with no significant segment may emit the
     # ``tca_lift_no_significant_segment`` rejection reason.
+    lift: dict[str, dict[str, float]] = {}
     if (
         max_tca_p is not None
         and min_tca_effect is not None
@@ -477,13 +645,61 @@ def evaluate_release_gate(
         if not lift:
             reasons.append("tca_lift_missing_or_invalid")
         else:
+            # Positive lift is required: high-confidence executions must have
+            # lower observed slippage than low-confidence executions. A large
+            # negative effect is adverse evidence, not a reason to certify.
             best_passes = any(
-                row.get("p_value", float("nan")) <= max_tca_p
-                and abs(float(row.get("effect_size", 0.0))) >= min_tca_effect
+                float(row["p_value"]) <= max_tca_p
+                and float(row["effect_size"]) >= min_tca_effect
                 for row in lift.values()
             )
             if not best_passes:
                 reasons.append("tca_lift_no_significant_segment")
+                reasons.append("tca_lift_no_positive_significant_segment")
+            if min_tca_lift_n is not None:
+                underpowered = [
+                    name
+                    for name, row in lift.items()
+                    if int(float(row.get("n", 0.0))) < min_tca_lift_n
+                ]
+                if underpowered:
+                    reasons.append("tca_lift_underpowered_segments")
+
+    if require_validation_artifacts:
+        required_numeric = {
+            "dsr": dsr_val,
+            "pbo": pbo_val,
+            "brier": brier_val,
+            "ece": ece_val,
+        }
+        for name, value in required_numeric.items():
+            if value is None or not pd.notna(value) or not math.isfinite(float(value)):
+                # Preserve the original missing-artifact reason for downstream
+                # dashboards while adding the stricter non-finite reason.
+                reasons.append(f"certification_missing_{name}")
+                reasons.append(f"certification_missing_or_nonfinite_{name}")
+        for flag in ("pit_leakage_passed", "walk_forward_passed"):
+            if not _field_truthy(flag):
+                reasons.append(f"certification_{flag}_false_or_missing")
+        for artifact in ("validation_artifact_hash",):
+            if not _field_present(artifact):
+                reasons.append(f"certification_missing_{artifact}")
+        if min_regime_sample_size is not None:
+            raw_n = certification_fields.get("min_regime_sample_size")
+            if raw_n is None:
+                raw_n = certification_fields.get("min_regime_n")
+            try:
+                regime_n = int(raw_n)
+            except Exception:
+                regime_n = 0
+            if regime_n < min_regime_sample_size:
+                reasons.append("certification_regime_sample_size_below_floor")
+        if tca_lift_raw is None:
+            reasons.append("certification_missing_tca_lift")
+    if require_model_card and not _field_present("model_card_path"):
+        reasons.append("certification_missing_model_card")
+    if require_evidence_hmac and not _field_present("evidence_pack_hmac"):
+        reasons.append("certification_missing_evidence_pack_hmac")
     approved = len(reasons) == 0
     return pd.DataFrame(
         [
@@ -499,7 +715,22 @@ def evaluate_release_gate(
                 "high_invalidation_triggers": high_triggers,
                 "active_trigger_names": ",".join(trigger_names),
                 "reasons": ",".join(reasons) if reasons else "passed",
-                "metadata_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "package_boundary": boundary.name,
+                        "production_eligible": boundary.production_eligible,
+                        "requires_experimental_flag": boundary.requires_experimental_flag,
+                        "certification_profile": resolved_profile == "certification",
+                        "validation_artifacts_required": bool(require_validation_artifacts),
+                        "min_regime_sample_size": min_regime_sample_size,
+                        "min_tca_lift_n": min_tca_lift_n,
+                        "max_brier": max_brier,
+                        "max_ece": max_ece,
+                        "max_tca_p": max_tca_p,
+                        "min_tca_effect": min_tca_effect,
+                    },
+                    sort_keys=True,
+                ),
                 "mcs_evidence": mcs_evidence,
                 "worst_coverage": worst_coverage if worst_coverage is not None else float("nan"),
                 # v1.5 (PR-1 ASK-7 / P2): surface which profile drove
@@ -512,6 +743,8 @@ def evaluate_release_gate(
                 # safe for callers that have not migrated yet.
                 "dsr": dsr_val if dsr_val is not None else float("nan"),
                 "pbo": pbo_val if pbo_val is not None else float("nan"),
+                "brier": brier_val if brier_val is not None else float("nan"),
+                "ece": ece_val if ece_val is not None else float("nan"),
             }
         ]
     )

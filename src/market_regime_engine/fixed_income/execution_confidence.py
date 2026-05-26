@@ -3,9 +3,10 @@
 
 Per ``MRE_FIXED_INCOME_AGENT.md §"PR 5"`` and
 ``MRE_FIXED_INCOME_INSTRUCTIONS.md §6.3``: ship the explainable
-deterministic baseline first; model-based scorers (calibrated logistic
-on historical execution_outcomes, gradient-boosted alternatives) land in
-v1.5.1 behind validation. Every output carries the v1.5 governance triple
+deterministic baseline first, then apply a persisted empirical calibrator
+from ``calibration_models`` when real ``execution_outcomes`` have been
+joined and validated by :mod:`fixed_income.execution_calibration`. Every
+output carries the v1.5 governance triple
 (``model_run_id``, ``release_gate``, ``artifact_hash``) and embeds
 ``signal_age_seconds`` for the credit-regime + liquidity signals so
 operators can detect stale-signal degradation.
@@ -44,8 +45,8 @@ Expected slippage::
     floor 1 bps, ceiling 200 bps
 
 CI: ``[confidence_score - 0.10, confidence_score + 0.10]`` clipped to
-``[0, 1]``. v1.5.1 will swap this heuristic interval for calibrated
-quantile output.
+``[0, 1]``. Probability calibration changes the centre score; empirical
+quantile interval calibration remains a future extension.
 
 Stale-signal policy: when either credit-regime or liquidity feed is older
 than ``MRE_FI_MAX_SIGNAL_STALENESS_SEC`` (default 900 = 15 minutes), the
@@ -138,8 +139,11 @@ class LogitCoefficients:
     (the v1.5 ``Mapping[str, float]`` overlay path keeps working);
     Phase 5.4 introduces the typed surface alongside it.
 
-    TODO(v1.7.0): fit empirically from ``execution_outcomes`` per
-    RS-4917 once we have ~10k joined (request, outcome) rows.
+    v1.7.0 adds empirical Platt/logistic calibration from joined
+    ``execution_confidence_predictions`` and ``execution_outcomes`` via
+    :mod:`market_regime_engine.fixed_income.execution_calibration`. These
+    coefficients remain the deterministic fallback when no PIT-usable
+    empirical calibrator exists.
 
     Attributes
     ----------
@@ -472,6 +476,7 @@ def score_execution_confidence(
     profile: str = "production",
     weights: Mapping[str, float] | None = None,
     coefficients: LogitCoefficients | None = None,
+    use_empirical_calibration: bool = True,
 ) -> ExecutionConfidenceResponse:
     """Score a single execution-confidence request.
 
@@ -513,6 +518,12 @@ def score_execution_confidence(
         ``weights`` mapping (the explicit named-field surface beats the
         legacy ``Mapping[str, float]``). When ``None`` (default), the
         module-level :data:`DEFAULT_LOGIT_COEFFICIENTS` is used.
+    use_empirical_calibration:
+        When ``True`` (default), apply a persisted empirical
+        execution-confidence calibrator from ``calibration_models`` if one
+        exists and its training cutoff is not after ``request.timestamp``.
+        Missing or future-dated calibrators are ignored and the deterministic
+        baseline is preserved.
 
     Returns
     -------
@@ -549,13 +560,13 @@ def score_execution_confidence(
         else f"execution_confidence-{profile}-{uuid.uuid4().hex[:12]}"
     )
 
-    regime = latest_credit_regime_score(warehouse)
+    regime = latest_credit_regime_score(warehouse, asof=decision_ts)
     liquidity = latest_liquidity_stress_score(
-        warehouse, scope_type="cusip", scope_id=request.cusip
+        warehouse, scope_type="cusip", scope_id=request.cusip, asof=decision_ts
     )
     if liquidity is None:
         # Fallback per AGENT.md: cusip scope missing → use market scope.
-        liquidity = latest_liquidity_stress_score(warehouse)
+        liquidity = latest_liquidity_stress_score(warehouse, asof=decision_ts)
 
     max_staleness = _resolve_max_staleness()
 
@@ -646,18 +657,104 @@ def score_execution_confidence(
     )
 
     logit = sum(components.values())
-    confidence_score = max(_CONFIDENCE_FLOOR, min(_CONFIDENCE_CEIL, _sigmoid(logit)))
-    expected_slippage_bps = _expected_slippage_bps(
-        confidence_score, liquidity.liquidity_index
+    raw_confidence_score = max(_CONFIDENCE_FLOOR, min(_CONFIDENCE_CEIL, _sigmoid(logit)))
+    raw_expected_slippage_bps = _expected_slippage_bps(
+        raw_confidence_score, liquidity.liquidity_index
     )
+
+    confidence_score = raw_confidence_score
+    expected_slippage_bps = raw_expected_slippage_bps
+    calibration_metadata: dict[str, Any] = {
+        "empirical_calibration_enabled": bool(use_empirical_calibration),
+        "probability_calibration_applied": False,
+        "slippage_calibration_applied": False,
+    }
+    if use_empirical_calibration:
+        try:
+            from market_regime_engine.fixed_income.execution_calibration import (
+                apply_probability_calibration,
+                apply_slippage_calibration,
+                calibrator_is_usable_asof,
+                load_execution_probability_calibrator,
+                load_execution_slippage_calibrator,
+            )
+
+            probability_calibrator = load_execution_probability_calibrator(warehouse)
+            if calibrator_is_usable_asof(probability_calibrator, decision_ts):
+                confidence_score = max(
+                    _CONFIDENCE_FLOOR,
+                    min(
+                        _CONFIDENCE_CEIL,
+                        apply_probability_calibration(raw_confidence_score, probability_calibrator),
+                    ),
+                )
+                probability_metadata = dict(probability_calibrator.get("metadata") or {})
+                calibration_metadata.update(
+                    {
+                        "probability_calibration_applied": True,
+                        "probability_calibration_method": str(probability_calibrator.get("method")),
+                        "probability_calibration_target": str(probability_calibrator.get("target")),
+                        "probability_calibration_training_cutoff_utc": probability_metadata.get("training_cutoff_utc"),
+                        "probability_calibration_artifact_hash": probability_metadata.get("artifact_hash"),
+                        "probability_calibration_observations": int(
+                            probability_calibrator.get("observations") or 0
+                        ),
+                    }
+                )
+            elif probability_calibrator is not None:
+                calibration_metadata["probability_calibration_skip_reason"] = (
+                    "calibrator_not_pit_usable_for_decision_timestamp"
+                )
+
+            slippage_calibrator = load_execution_slippage_calibrator(warehouse)
+            if calibrator_is_usable_asof(slippage_calibrator, decision_ts):
+                calibrated_slippage = apply_slippage_calibration(
+                    raw_expected_slippage_bps, slippage_calibrator
+                )
+                if calibrated_slippage is not None:
+                    expected_slippage_bps = float(
+                        max(
+                            _EXPECTED_SLIPPAGE_FLOOR_BPS,
+                            min(_EXPECTED_SLIPPAGE_CEIL_BPS, calibrated_slippage),
+                        )
+                    )
+                    slippage_metadata = dict(slippage_calibrator.get("metadata") or {})
+                    calibration_metadata.update(
+                        {
+                            "slippage_calibration_applied": True,
+                            "slippage_calibration_method": str(slippage_calibrator.get("method")),
+                            "slippage_calibration_target": str(slippage_calibrator.get("target")),
+                            "slippage_calibration_training_cutoff_utc": slippage_metadata.get("training_cutoff_utc"),
+                            "slippage_calibration_artifact_hash": slippage_metadata.get("artifact_hash"),
+                            "slippage_calibration_observations": int(
+                                slippage_calibrator.get("observations") or 0
+                            ),
+                        }
+                    )
+            elif slippage_calibrator is not None:
+                calibration_metadata["slippage_calibration_skip_reason"] = (
+                    "calibrator_not_pit_usable_for_decision_timestamp"
+                )
+        except Exception as exc:  # pragma: no cover - defensive hot-path fallback
+            calibration_metadata.update(
+                {
+                    "probability_calibration_applied": False,
+                    "slippage_calibration_applied": False,
+                    "empirical_calibration_error": str(exc),
+                }
+            )
+
     ci_low, ci_high = _confidence_interval(confidence_score)
 
     drivers = _drivers_from_components(components)
 
+    effective_release_gate = bool(release_gate) and bool(regime.release_gate) and bool(liquidity.release_gate)
+    blocked_by_upstream_gate = bool(release_gate) and not effective_release_gate
+
     recommended, human_review = _decision_rule(
         confidence_score=confidence_score,
         liquidity_label=liquidity.liquidity_label,
-        release_gate=release_gate,
+        release_gate=effective_release_gate,
     )
 
     metadata: dict[str, Any] = {
@@ -679,8 +776,23 @@ def score_execution_confidence(
         "max_signal_age_seconds": float(max_age),
         "max_signal_staleness_threshold_seconds": float(max_staleness),
         "release_gate_input": bool(release_gate),
-        "reason": "scored" if release_gate else "release_gate_false",
+        "regime_release_gate": bool(regime.release_gate),
+        "liquidity_release_gate": bool(liquidity.release_gate),
+        "release_gate_effective": bool(effective_release_gate),
+        "blocked_by_upstream_release_gate": bool(blocked_by_upstream_gate),
+        "reason": (
+            "scored"
+            if effective_release_gate
+            else (
+                "release_gate_false"
+                if not release_gate
+                else "upstream_release_gate_false"
+            )
+        ),
         "weights_used": {k: float(v) for k, v in merged_weights.items()},
+        "raw_confidence_score": float(raw_confidence_score),
+        "raw_expected_slippage_bps": float(raw_expected_slippage_bps),
+        **calibration_metadata,
     }
 
     artifact_payload = {
@@ -691,8 +803,10 @@ def score_execution_confidence(
         "protocol": request.protocol,
         "confidence_score": float(confidence_score),
         "expected_slippage_bps": float(expected_slippage_bps),
+        "raw_confidence_score": float(raw_confidence_score),
+        "raw_expected_slippage_bps": float(raw_expected_slippage_bps),
         "recommended_action": recommended.value,
-        "release_gate": bool(release_gate),
+        "release_gate": bool(effective_release_gate),
         "regime_score": float(regime.regime_score),
         "liquidity_index": float(liquidity.liquidity_index),
         "drivers": list(drivers),
@@ -712,7 +826,7 @@ def score_execution_confidence(
         recommended_action=recommended.label,
         human_review_required=bool(human_review),
         model_run_id=resolved_run_id,
-        release_gate=bool(release_gate),
+        release_gate=bool(effective_release_gate),
         artifact_hash=artifact_hash,
         metadata=metadata,
     )
@@ -819,6 +933,8 @@ def write_execution_confidence_prediction(
     """
     if not request_id:
         raise ValueError("request_id must be non-empty")
+    metadata = dict(response.metadata) if isinstance(response.metadata, Mapping) else {}
+    metadata.setdefault("request_id", str(request_id))
     row = {
         "request_id": str(request_id),
         "timestamp": response.timestamp,
@@ -847,7 +963,7 @@ def write_execution_confidence_prediction(
         "human_review_required": 1 if response.human_review_required else 0,
         "release_gate": 1 if response.release_gate else 0,
         "artifact_hash": response.artifact_hash,
-        "metadata_json": json.dumps(response.metadata, sort_keys=True, default=str),
+        "metadata_json": json.dumps(metadata, sort_keys=True, default=str),
     }
     return int(warehouse.write_execution_confidence_prediction(pd.DataFrame([row])))
 
@@ -910,24 +1026,66 @@ def latest_execution_confidence_prediction(
     warehouse: Any,
     *,
     cusip: str | None = None,
+    request_id: str | None = None,
+    asof: pd.Timestamp | str | None = None,
 ) -> ExecutionConfidenceResponse | None:
     """Return the most recent ``execution_confidence_predictions`` row.
 
     Optionally filtered by cusip; without a filter the most recent row
-    across every cusip is returned. The ordering mirrors the table's
-    natural sort (``timestamp, request_id``).
+    across every cusip is returned. When ``asof`` is supplied, the read is
+    bounded by ``timestamp <= asof`` so callers get the latest valid prior
+    prediction instead of selecting a future row and nulling it out.
     """
+    latest_fast = getattr(warehouse, "latest_execution_confidence_prediction", None)
+    if callable(latest_fast):
+        used_legacy_fast = False
+        try:
+            fast_df = latest_fast(cusip=cusip, request_id=request_id, asof=asof)
+        except TypeError:  # pragma: no cover - legacy warehouse signature
+            try:
+                fast_df = latest_fast(request_id=request_id, asof=asof)
+                used_legacy_fast = True
+            except TypeError:
+                fast_df = None
+        except Exception:  # pragma: no cover - fall back to table scan
+            fast_df = None
+        if used_legacy_fast and cusip is not None:
+            # Older warehouse fast paths did not support cusip filtering; use
+            # the table-scan fallback so a valid prior row for this CUSIP is
+            # not hidden by a newer row for another bond.
+            fast_df = None
+        if fast_df is not None and not fast_df.empty:
+            return _row_to_execution_response(fast_df.iloc[0])
+        if fast_df is not None and fast_df.empty:
+            return None
+
     df = warehouse.read_execution_confidence_predictions()
     if df is None or df.empty:
         return None
+    if request_id is not None:
+        df = df.loc[df["request_id"].astype(str) == str(request_id)]
+        if df.empty:
+            return None
     if cusip is not None:
         df = df.loc[df["cusip"].astype(str) == str(cusip)]
         if df.empty:
             return None
+    if asof is not None:
+        asof_ts = to_utc(asof)
+        timestamps = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        df = df.loc[timestamps <= asof_ts]
+        if df.empty:
+            return None
     df = df.sort_values("timestamp")
     row = df.iloc[-1]
+    return _row_to_execution_response(row)
+
+
+def _row_to_execution_response(row: pd.Series) -> ExecutionConfidenceResponse:
+    """Hydrate an ``execution_confidence_predictions`` row."""
     metadata_json = row.get("metadata_json")
     metadata = json.loads(metadata_json) if metadata_json else {}
+    metadata.setdefault("request_id", str(row.get("request_id")))
     return ExecutionConfidenceResponse(
         timestamp=str(row["timestamp"]),
         cusip=str(row["cusip"]),
@@ -1014,7 +1172,7 @@ def build_execution_features(
         "day_of_week": int(decision_ts.day_of_week),
     }
 
-    regime = latest_credit_regime_score(warehouse)
+    regime = latest_credit_regime_score(warehouse, asof=decision_ts)
     if regime is not None:
         # v1.6.0 PIT rail (REVIEW_DEEP_V1_5_2.md A6 / Finding #15): the
         # CLI / batch builder now mirrors the hot-path PIT enforcement in
@@ -1033,10 +1191,10 @@ def build_execution_features(
         )
 
     liquidity = latest_liquidity_stress_score(
-        warehouse, scope_type="cusip", scope_id=request.cusip
+        warehouse, scope_type="cusip", scope_id=request.cusip, asof=decision_ts
     )
     if liquidity is None:
-        liquidity = latest_liquidity_stress_score(warehouse)
+        liquidity = latest_liquidity_stress_score(warehouse, asof=decision_ts)
     if liquidity is not None:
         # v1.6.0 PIT rail (REVIEW_DEEP_V1_5_2.md A6 / Finding #15).
         assert_pit_safe(

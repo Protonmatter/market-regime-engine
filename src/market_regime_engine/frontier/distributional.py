@@ -115,7 +115,11 @@ class NGBoostHead:
                 pass
         # Fallback: marginal Normal.
         self._fallback_mean = float(np.mean(ya))
-        self._fallback_std = float(max(np.std(ya, ddof=1), 1e-6))
+        if ya.size < 2:
+            fallback_std = 0.0
+        else:
+            fallback_std = float(np.nan_to_num(np.std(ya, ddof=1), nan=0.0, posinf=0.0, neginf=0.0))
+        self._fallback_std = float(max(fallback_std, 1e-6))
         self.backend = "fallback"
         self.fitted = True
         return self
@@ -334,11 +338,12 @@ class VariationalEncoderHead:
                 self.decoder_log_var = nn.Parameter(torch.zeros(1))
                 self.latent_dim = latent_dim
 
-            def forward(self, x):
+            def forward(self, x, *, sample: bool | None = None):
                 enc = self.encoder(x)
                 mu, logvar = enc.chunk(2, dim=-1)
                 std = torch.exp(0.5 * logvar)
-                z = mu + std * torch.randn_like(std)
+                should_sample = self.training if sample is None else bool(sample)
+                z = mu + std * torch.randn_like(std) if should_sample else mu
                 z = self.transition(z)
                 y_mean = self.decoder_mean(z).squeeze(-1)
                 return y_mean, mu, logvar

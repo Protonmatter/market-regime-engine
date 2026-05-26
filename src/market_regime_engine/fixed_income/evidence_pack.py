@@ -102,8 +102,10 @@ _CANONICAL_VERSION_METADATA_KEY = "_canonical_version"
 # Env vars (per AGENT.md PR-7 + INSTRUCTIONS.md §10 governance rules).
 _HMAC_KEY_VERSIONS_ENV = "MRE_FI_HMAC_KEY_VERSIONS"
 _HMAC_KEY_SINGLETON_ENV = "MRE_FI_HMAC_KEY"
+_HMAC_ACTIVE_VERSION_ENV = "MRE_FI_HMAC_ACTIVE_VERSION"
 _REQUIRE_HMAC_ENV = "MRE_FI_REQUIRE_HMAC"
 _ENV_NAME_ENV = "MRE_ENV"
+_MIN_PRODUCTION_HMAC_KEY_BYTES = 32
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +385,15 @@ def _decode_key_material(value: str) -> bytes:
         return raw.encode("utf-8")
 
 
+def _enforce_hmac_key_strength(version: str, key: bytes) -> None:
+    """Fail closed on weak FI HMAC keys in production-signing mode."""
+    if require_production_hmac() and len(key) < _MIN_PRODUCTION_HMAC_KEY_BYTES:
+        raise RuntimeError(
+            f"HMAC key {version!r} decodes to {len(key)} bytes; "
+            f"production requires at least {_MIN_PRODUCTION_HMAC_KEY_BYTES} bytes"
+        )
+
+
 def get_hmac_keys() -> dict[str, bytes]:
     """Parse ``MRE_FI_HMAC_KEY_VERSIONS`` (JSON env var) into ``{version: bytes}``.
 
@@ -415,26 +426,46 @@ def get_hmac_keys() -> dict[str, bytes]:
                 raise RuntimeError("HMAC key version must be a non-empty string")
             if not isinstance(value, str):
                 raise RuntimeError(f"HMAC key {version!r} value must be a string")
-            out[version] = _decode_key_material(value)
+            decoded = _decode_key_material(value)
+            _enforce_hmac_key_strength(version, decoded)
+            out[version] = decoded
         return out
     singleton = os.environ.get(_HMAC_KEY_SINGLETON_ENV, "").strip()
     if singleton:
-        return {"v1": _decode_key_material(singleton)}
+        decoded = _decode_key_material(singleton)
+        _enforce_hmac_key_strength("v1", decoded)
+        return {"v1": decoded}
     return {}
+
+
+def _hmac_version_sort_key(version: str) -> tuple[int, str, int | str]:
+    """Natural-sort HMAC versions so ``v10`` sorts after ``v9``."""
+    stripped = version.strip()
+    if len(stripped) > 1 and stripped[0].lower() == "v" and stripped[1:].isdigit():
+        return (1, "v", int(stripped[1:]))
+    return (0, stripped, stripped)
 
 
 def latest_hmac_version() -> str | None:
     """Return the most recent key version, or ``None`` if no keys are configured.
 
-    "Most recent" is defined as the lexicographic max of the version
-    strings, which matches the documented ``v1 < v2 < ... < vN``
-    convention. Operators who want a non-lexicographic ordering should
-    prefix versions with a fixed-width number (e.g. ``v01``, ``v02``).
+    The active key can be pinned with ``MRE_FI_HMAC_ACTIVE_VERSION``.
+    Otherwise versions of the conventional form ``v<N>`` are natural-
+    sorted so ``v10`` sorts after ``v9``; arbitrary version strings keep
+    a stable lexical fallback.
     """
     keys = get_hmac_keys()
     if not keys:
         return None
-    return max(keys.keys())
+    active = os.environ.get(_HMAC_ACTIVE_VERSION_ENV, "").strip()
+    if active:
+        if active not in keys:
+            raise RuntimeError(
+                f"{_HMAC_ACTIVE_VERSION_ENV}={active!r} is not present in "
+                f"{_HMAC_KEY_VERSIONS_ENV}; configured versions={sorted(keys)!r}"
+            )
+        return active
+    return max(keys.keys(), key=_hmac_version_sort_key)
 
 
 def require_production_hmac() -> bool:

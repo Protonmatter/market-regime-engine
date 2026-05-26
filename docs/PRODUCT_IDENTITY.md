@@ -1,79 +1,74 @@
-# Product identity: Governed Macro Regime Signal Layer v1.5.0
+# Product identity: XPro 2.0 Execution Intelligence Layer
 
 ## Narrowed identity
 
-Market Regime Engine v1.5.0 is not a broker, backtester, execution engine, or portfolio optimizer.
+Market Regime Engine Track B is an **XPro 2.0 execution intelligence layer** for fixed-income execution workflows.
 
-It is a **governed macro regime signal layer**:
+It is not a broker, OMS, EMS, trading venue, portfolio optimizer, or autonomous order router.
 
 ```text
-point-in-time macro / market data
-        ↓
-regime + change-point + risk probability models
-        ↓
-calibration, coverage, drift, invalidation, release-gate checks
-        ↓
-governed signal contract
-        ↓
-LEAN / vectorbt / PyPortfolioOpt / OpenBB / dashboards / internal APIs
+point-in-time FI signals and order context
+        |
+execution-confidence scorer
+        |
+counterfactual protocol ranking
+        |
+fixed-point XPro decision artifact
+        |
+release gate, HMAC evidence, validation report
+        |
+Auto-X / RFQ / manual execution operators and downstream APIs
 ```
 
-The engine's job is to answer:
+The layer answers:
 
-1. What regime does the evidence support?
-2. How uncertain is that regime estimate?
-3. Is the model output still valid under PIT, drift, coverage, and release-gate controls?
-4. What auditable signal record should downstream systems consume?
+1. Which eligible protocol has the strongest governed execution-confidence evidence?
+2. Did the selected protocol pass upstream release gates and staleness checks?
+3. What fixed-point, HMAC-verifiable decision record should downstream systems consume?
+4. Did realized outcomes validate the execution-confidence model for certification release?
 
-The engine should **not** decide orders by itself. Strategy systems consume the governed signal and remain responsible for portfolio construction, sizing, routing, and execution.
+## Execution decision contract
 
-## Canonical signal contract
+The canonical Track B output is `xpro_decision_artifact_v1`.
 
-Adapters export this column set:
-
-| Column | Meaning |
+| Field | Meaning |
 |---|---|
-| `date` | As-of date for the governed signal |
-| `regime_state` | Decoded or posterior-modal regime |
-| `regime_confidence` | Model confidence in the regime state, 0..1 |
-| `change_point_prob` | Change-point probability, 0..1 |
-| `drawdown_prob` | Drawdown risk probability, 0..1 |
-| `recession_prob` | Recession probability, 0..1 |
-| `confidence_score` | Governance confidence score, 0..1 |
-| `release_gate_decision` | `release`, `hold`, `unknown`, etc. |
-| `release_gate_approved` | Boolean gate state |
-| `model_run_id` | Immutable model run ID when available |
-| `artifact_hash` | Reproducibility envelope hash when available |
-| `metadata_json` | Adapter/run metadata |
+| `decision_id` | Immutable XPro decision identifier |
+| `request_id` | Client/order request replay token |
+| `asof_epoch_ns` | UTC decision timestamp as an epoch-nanosecond string |
+| `numeric_policy` | Fixed-point scaling and canonical JSON policy |
+| `input` | Quantized order context and metadata hash |
+| `candidate_protocol_scores` | Counterfactual scores for candidate protocols |
+| `decision.recommended_protocol` | Selected protocol: `Auto-X`, `RFQ`, or `Manual` |
+| `decision.release_gate` | Final release-gate state |
+| `auto_x_gate` | Whether Auto-X is selected and permitted |
+| `lineage` | Selected and candidate scorer artifact hashes |
+| `evidence.artifact_hash` | RFC8785/JCS SHA-256 hash |
+| `evidence.hmac` | Optional FI HMAC signature |
 
 ## Adapter posture
 
-Adapters are intentionally conservative:
+Track B surfaces recommendations and evidence, not venue-side execution.
 
-- LEAN adapter emits custom-data CSV + a BaseData stub, not orders.
-- vectorbt adapter emits entry/exit boolean series derived from governed states, not a full strategy.
-- PyPortfolioOpt adapter adjusts expected-return inputs transparently and refuses risk-on tilt when release gates fail.
-- OpenBB adapter emits JSON/OBBject-like records for provider-extension or dashboard consumption.
+- Auto-X consumers must still enforce venue permissions, credit limits, and human-supervision policy.
+- RFQ consumers receive a ranked recommendation plus reason codes, not a dealer allocation.
+- Manual fallback is fail-closed when every candidate fails governance or staleness.
+- Legacy `/v1/execution_confidence` remains available for compatibility; strict fixed-point output applies to the XPro surfaces.
 
 ## Production-mode contract
 
 When `MRE_ENV=production`:
 
-- `MRE_API_KEY` is required.
-- `MRE_DB_PATH` is required.
-- unauthenticated legacy API is blocked unless explicitly overridden.
-- Redis cache misconfiguration fails closed instead of falling back silently.
-
-Local and dev mode remain ergonomic. Production mode is deliberately irritating because markets are already doing enough damage without software helping.
+- API authentication remains mandatory unless explicitly overridden.
+- FI HMAC signing follows the existing production HMAC requirements.
+- Redis/API cache misconfiguration fails closed where configured.
+- XPro artifacts must be persisted with lineage hashes and release-gate state.
 
 ## Evidence-pack contract
 
-Empirical validation packs are built as immutable-ish evidence bundles:
+XPro decisions use the same audit posture as FI evidence packs:
 
-- selected validation artifacts are copied into `artifacts/`
-- every file receives SHA-256 hash + size metadata
-- canonical `manifest.json` is written
-- `manifest.sha256` hashes the manifest
-- optional `manifest.hmac.sha256` signs the manifest using `MRE_EVIDENCE_HMAC_KEY`
-
-This does not prove a model is good. It proves the evidence pack was not quietly edited after the fact.
+- canonical JSON uses the project RFC8785/JCS v2 encoder;
+- decision hashes are SHA-256 values with the `sha256:` prefix;
+- optional HMAC signatures bind the full artifact hash payload;
+- realized-outcome validation emits certification metadata consumed by `evaluate_release_gate(profile="certification")`.

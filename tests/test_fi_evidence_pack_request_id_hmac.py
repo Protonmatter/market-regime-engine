@@ -43,8 +43,8 @@ from market_regime_engine.fixed_income.schemas import FixedIncomeEvidencePack
 @pytest.fixture
 def hmac_keys(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Configure v1 + v2 HMAC keys for the test session."""
-    v1_key = base64.b64encode(b"legacy-v1-secret-key-32-bytes!!").decode()
-    v2_key = base64.b64encode(b"new-v2-request-id-binding-32!!!").decode()
+    v1_key = base64.b64encode(b"legacy-v1-secret-key-32-bytes!!!").decode()
+    v2_key = base64.b64encode(b"new-v2-request-id-binding-32!!!!").decode()
     monkeypatch.setenv(
         "MRE_FI_HMAC_KEY_VERSIONS",
         json.dumps({"v1": v1_key, "v2": v2_key}),

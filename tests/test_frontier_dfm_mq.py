@@ -38,14 +38,14 @@ def test_build_synthetic_panel_shape_and_persistence():
     assert rho > 0.5, f"AR(1) autocorr {rho:.2f} too low for persistence=0.7"
 
 
-def test_mq_dynamic_factor_model_fit_uses_fallback_without_statsmodels():
+def test_mq_dynamic_factor_model_fit_uses_supported_backend():
     panel, _ = build_synthetic_panel(n_months=60, seed=1, n_series=4)
     model = MQDynamicFactorModel().fit(panel)
     # statsmodels is optional; on a dev box without it the wrapper must
     # transparently fall back to the v1.0 DFMDomainModel and still report
     # ``fitted=True`` so downstream consumers don't error.
     assert model.fitted is True
-    assert model.backend in {"statsmodels", "fallback"}
+    assert model.backend in {"statsmodels", "custom_state_space", "fallback"}
 
 
 def test_mq_dynamic_factor_model_extract_factor_se_strict_raises_on_missing_cov():

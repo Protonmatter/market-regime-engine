@@ -35,11 +35,11 @@ be judged against different targets:
 | Online change-point detection | rolling detector | BOCPD / Student-t multivariate core | **done** — `bocpd.MultivariateNIWBOCPD` + `bocpd_muse.BOCPDMuse` + `bocpd_hazard.CovariateBOCPDHazard` + v1.2 `frontier.gp_cpd.GPBOCPD` |
 | WFST regime grammar | path smoother | formal constrained decoder | **done** — `wfst.RegimeWFST` with prior arcs, learnable empirical re-costing, event-bonus grid search |
 | Stress testing | manual | scenario library + adversarial tests | **done** — `scenarios.SCENARIOS` covers 1973 oil → 2022 inflation; per-scenario pass/fail |
-| Model registry | added in v0.2 | release-gated governance workflow | **done** — `release_gates`, `alerts`, `promotion_workflow`, immutable `model_runs` with reproducibility envelope; v1.2 supports both Hansen MCS and sequential e-value safe-testing |
+| Model registry | added in v0.2 | release-gated governance workflow | **done** — `release_gates`, `alerts`, `promotion_workflow`, immutable `model_runs` with reproducibility envelope; v1.2 supports both Hansen MCS and sequential e-value safe-testing (experimental flag required for release-gate promotion) |
 | Explainability | basic | local attribution + analog evidence | **done** — z-score (`attribution`) + counterfactual (`counterfactual.counterfactual_delta`) + permutation Owen-style + optional SHAP + regime-weighted analogs |
 | Forecast comparison | naive deltas | DM / GW / Hansen MCS / PIT / Christoffersen / Murphy / CRPS-DM | **done** — `forecast_compare` with HLN, T_R + T_SQ, autocorrelation moments, and v1.2 `crps_diks_panchenko` |
 | Latent regime model | hand-prior HMM | Baum-Welch + MS-VAR | **done** — `hmm.HMMRegimePosterior.fit` (Baum-Welch + label pinning) and `msvar.MarkovSwitchingVAR` (Hamilton-Kim) |
-| Domain factor model | hand-tuned linear | learned DFM | **done (v1.2)** — `dfm.DFMDomainModel` (Watson-Engle EM Kalman + RTS smoother with v1.2 *true marginal* likelihood) plus `frontier.dfm_mq.MQDynamicFactorModel` (Bańbura-Modugno mixed-frequency) |
+| Domain factor model | hand-tuned linear | learned DFM | **done (v1.2)** — `dfm.DFMDomainModel` (Watson-Engle EM Kalman + RTS smoother with v1.2 *true marginal* likelihood) plus `frontier.dfm_mq.MQDynamicFactorModel` (M/Q Bańbura-Modugno wrapper plus native D/W/M Kalman state-space backend) |
 | Nowcasting | none | mixed-frequency / ragged-edge | **done (v1.2)** — `MQDynamicFactorModel` + `frontier.midas.MIDASRegressor` Almon-polynomial; `mre nowcast` writes `nowcast_factors` |
 | Distributional regression | per-quantile HGBR | parametric + non-parametric + neural | **done (v1.2)** — `frontier.distributional`: NGBoost / Henzi-Ziegel-Gneiting IDR / Karl-Soelch DVBF deep state-space |
 | Neural sequence baseline | none | transformer / state-space | **done (v1.2)** — `frontier.neural_seq.PatchTSTHead` with CPU-friendly defaults and torch soft-degrade |
@@ -133,7 +133,7 @@ v1.2 closes the gap from "post-v1.1 institutionally defensible" to
 1. **Time-series-native conformal**. The marginal-coverage guarantee no
    longer leans on exchangeability; six backends cover every modern
    finite-sample relaxation.
-2. **Mixed-frequency DFM-MQ + MIDAS**. Bańbura-Modugno is the production
+2. **Mixed-frequency DFM-MQ + MIDAS**. Bańbura-Modugno M/Q is the production
    architecture at the New York Fed and the ECB.
 3. **Distributional regression heads**. NGBoost (parametric SOTA), IDR
    (non-parametric calibration gold-standard), and a small DVBF-style

@@ -31,6 +31,7 @@ def test_evalues_missing_decision_column_raises_value_error(
 ) -> None:
     """``promotion_method="e_values"`` + log without ``decision`` raises."""
     monkeypatch.delenv("MRE_ENV", raising=False)
+    monkeypatch.setenv("MRE_ENABLE_EXPERIMENTAL_FRONTIER", "1")
     inputs = _e_value_inputs()
     log_without_decision = pd.DataFrame(
         [
@@ -51,6 +52,7 @@ def test_evalues_missing_decision_column_raises_value_error(
 def test_evalues_with_decision_column_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
     """Correct log with ``decision`` column does not raise."""
     monkeypatch.delenv("MRE_ENV", raising=False)
+    monkeypatch.setenv("MRE_ENABLE_EXPERIMENTAL_FRONTIER", "1")
     inputs = _e_value_inputs()
     log = pd.DataFrame(
         [

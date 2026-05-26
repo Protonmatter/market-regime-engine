@@ -373,11 +373,16 @@ _EXECUTION_CONFIDENCE_PREDICTIONS_DUCKDB = """
         cusip TEXT NOT NULL,
         side TEXT NOT NULL,
         notional DECIMAL(18,2) NOT NULL,
+        notional_cents BIGINT,
         protocol TEXT NOT NULL,
         confidence_score DECIMAL(8,6) NOT NULL,
+        confidence_score_ppm BIGINT,
         expected_slippage_bps DECIMAL(18,4),
+        expected_slippage_bps_q4 BIGINT,
         confidence_interval_low DECIMAL(8,6),
+        confidence_interval_low_ppm BIGINT,
         confidence_interval_high DECIMAL(8,6),
+        confidence_interval_high_ppm BIGINT,
         recommended_action TEXT NOT NULL,
         human_review_required INTEGER NOT NULL,
         release_gate INTEGER NOT NULL,
@@ -395,11 +400,16 @@ _EXECUTION_CONFIDENCE_PREDICTIONS_SQLITE = """
         cusip TEXT NOT NULL,
         side TEXT NOT NULL,
         notional REAL NOT NULL,
+        notional_cents INTEGER,
         protocol TEXT NOT NULL,
         confidence_score REAL NOT NULL,
+        confidence_score_ppm INTEGER,
         expected_slippage_bps REAL,
+        expected_slippage_bps_q4 INTEGER,
         confidence_interval_low REAL,
+        confidence_interval_low_ppm INTEGER,
         confidence_interval_high REAL,
+        confidence_interval_high_ppm INTEGER,
         recommended_action TEXT NOT NULL,
         human_review_required INTEGER NOT NULL,
         release_gate INTEGER NOT NULL,
@@ -443,6 +453,40 @@ _EXECUTION_OUTCOMES_SQLITE = """
         decision_timestamp TEXT NOT NULL,
         metadata_json TEXT DEFAULT '{}',
         PRIMARY KEY(request_id)
+    )
+    """
+
+
+# ----- xpro_decision_artifacts -----
+_XPRO_DECISION_ARTIFACTS_DUCKDB = """
+    CREATE TABLE IF NOT EXISTS xpro_decision_artifacts (
+        decision_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        timestamp TIMESTAMP NOT NULL,
+        model_run_id TEXT NOT NULL,
+        recommended_protocol TEXT NOT NULL,
+        release_gate INTEGER NOT NULL,
+        artifact_hash TEXT NOT NULL,
+        hmac_signature TEXT,
+        payload_json JSON NOT NULL,
+        metadata_json JSON,
+        PRIMARY KEY(decision_id)
+    )
+    """
+
+_XPRO_DECISION_ARTIFACTS_SQLITE = """
+    CREATE TABLE IF NOT EXISTS xpro_decision_artifacts (
+        decision_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        model_run_id TEXT NOT NULL,
+        recommended_protocol TEXT NOT NULL,
+        release_gate INTEGER NOT NULL,
+        artifact_hash TEXT NOT NULL,
+        hmac_signature TEXT,
+        payload_json TEXT NOT NULL,
+        metadata_json TEXT DEFAULT '{}',
+        PRIMARY KEY(decision_id)
     )
     """
 
@@ -669,6 +713,16 @@ _FI_TABLES: tuple[TableSpec, ...] = (
         index_sql=(),
     ),
     TableSpec(
+        name="xpro_decision_artifacts",
+        create_sql=_XPRO_DECISION_ARTIFACTS_DUCKDB,
+        sqlite_create_sql=_XPRO_DECISION_ARTIFACTS_SQLITE,
+        primary_key=("decision_id",),
+        index_sql=(
+            "CREATE INDEX IF NOT EXISTS idx_xpro_decisions_request_ts "
+            "ON xpro_decision_artifacts(request_id, timestamp DESC)",
+        ),
+    ),
+    TableSpec(
         name="tca_regime_segments",
         create_sql=_TCA_REGIME_SEGMENTS_DUCKDB,
         sqlite_create_sql=_TCA_REGIME_SEGMENTS_SQLITE,
@@ -703,7 +757,7 @@ FI_TABLE_NAMES: tuple[str, ...] = tuple(spec.name for spec in _FI_TABLES)
 
 
 def register() -> None:
-    """Idempotently register the 13 FI tables with the warehouse.
+    """Idempotently register the FI tables with the warehouse.
 
     Called once by :mod:`market_regime_engine.fixed_income`'s
     ``__init__.py`` so any consumer that imports the FI package picks

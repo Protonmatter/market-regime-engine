@@ -57,6 +57,22 @@ def test_production_requires_hmac_key() -> None:
     assert any("HMAC" in e for e in report.errors)
 
 
+def test_production_rejects_weak_hmac_key() -> None:
+    env = _full_production_env()
+    env["MRE_FI_HMAC_KEY_VERSIONS"] = "v1=x"
+    report = validate_production_settings(env)
+    assert report.ok is False
+    assert any("at least 32 bytes" in e for e in report.errors)
+
+
+def test_production_forbids_pickle_cache_opt_in() -> None:
+    env = _full_production_env()
+    env["MRE_CACHE_ALLOW_PICKLE"] = "1"
+    report = validate_production_settings(env)
+    assert report.ok is False
+    assert "MRE_CACHE_ALLOW_PICKLE is forbidden in production" in report.errors
+
+
 def test_production_accepts_legacy_hmac_single_key() -> None:
     """v1.6.0 §3.14: the legacy MRE_FI_HMAC_KEY single-version env var
     is still accepted (back-compat with v1.5.x deployments that have

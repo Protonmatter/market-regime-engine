@@ -77,9 +77,10 @@ def _seed_signal_features(
     fail-closed override (which resets score to neutral 50) does not fire.
     """
     rows = []
+    credit_feature_names = ("cdx_ig_5y", "cdx_hy_5y")
     for i in range(100):
         ts = asof - pd.Timedelta(days=100 - i)
-        for fname in ("cdx_ig_5y", "cdx_hy_5y"):
+        for fname in credit_feature_names:
             rows.append(
                 {
                     "date": ts,
@@ -89,16 +90,30 @@ def _seed_signal_features(
                     "vintage_date": None,
                 }
             )
-    for r in rows[-2:]:
+    for r in rows[-len(credit_feature_names) :]:
         r["value"] = float(regime_score_target - 1)
     feats = pd.DataFrame(rows)
     feats.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
-    write_credit_regime_score(wh, score_credit_regime(feats, asof=asof, release_gate=True))
+    credit_out = score_credit_regime(feats, asof=asof, release_gate=True)
+    credit_out = type(credit_out)(
+        timestamp=credit_out.timestamp,
+        regime_score=credit_out.regime_score,
+        regime_label=credit_out.regime_label,
+        confidence=credit_out.confidence,
+        drivers=credit_out.drivers,
+        component_scores=credit_out.component_scores,
+        model_run_id=credit_out.model_run_id,
+        release_gate=True,
+        artifact_hash=credit_out.artifact_hash,
+        metadata=dict(credit_out.metadata),
+    )
+    write_credit_regime_score(wh, credit_out)
 
     rows = []
+    liquidity_feature_names = ("bid_ask_width", "quotes_received")
     for i in range(100):
         ts = asof - pd.Timedelta(days=100 - i)
-        for fname in ("bid_ask_width", "quotes_received"):
+        for fname in liquidity_feature_names:
             rows.append(
                 {
                     "date": ts,
@@ -108,20 +123,31 @@ def _seed_signal_features(
                     "vintage_date": None,
                 }
             )
-    for r in rows[-2:]:
+    for r in rows[-len(liquidity_feature_names) :]:
         r["value"] = float(liquidity_score_target)
     feats = pd.DataFrame(rows)
     feats.attrs["nan_policy"] = "NAN_TO_LAST_VALID"
-    write_liquidity_stress_score(
-        wh,
-        score_liquidity_stress(
-            feats,
-            scope_type="cusip",
-            scope_id=cusip,
-            asof=asof,
-            release_gate=True,
-        ),
+    liquidity_out = score_liquidity_stress(
+        feats,
+        scope_type="cusip",
+        scope_id=cusip,
+        asof=asof,
+        release_gate=True,
     )
+    liquidity_out = type(liquidity_out)(
+        timestamp=liquidity_out.timestamp,
+        scope_type=liquidity_out.scope_type,
+        scope_id=liquidity_out.scope_id,
+        liquidity_index=liquidity_out.liquidity_index,
+        liquidity_label=liquidity_out.liquidity_label,
+        confidence=liquidity_out.confidence,
+        drivers=liquidity_out.drivers,
+        model_run_id=liquidity_out.model_run_id,
+        release_gate=True,
+        artifact_hash=liquidity_out.artifact_hash,
+        metadata=dict(liquidity_out.metadata),
+    )
+    write_liquidity_stress_score(wh, liquidity_out)
 
 
 def _trade(
@@ -217,6 +243,41 @@ def test_tag_trade_attaches_execution_confidence_bucket(wh: Warehouse) -> None:
     trade = _trade(timestamp=asof + pd.Timedelta(seconds=30))
     tagged = tag_trade_with_regime_context(trade, warehouse=wh)
     assert tagged.execution_confidence_bucket in {"high", "medium", "low", "unavailable"}
+
+
+def test_tag_trade_uses_prior_prediction_when_future_prediction_exists(
+    wh: Warehouse,
+) -> None:
+    """P0 adversarial PIT regression: a future latest prediction must not
+    hide a valid prior prediction for the same CUSIP."""
+    asof = pd.Timestamp("2026-05-01T16:00:00Z")
+    _seed_signal_features(wh, asof=asof)
+
+    prior_request = ExecutionConfidenceRequest(
+        timestamp=(asof + pd.Timedelta(seconds=10)).isoformat(),
+        cusip="00206RGB6",
+        side="buy",
+        notional=1_000_000.0,
+        protocol="Auto-X",
+    )
+    prior_response = score_execution_confidence(prior_request, warehouse=wh, release_gate=True)
+    write_execution_confidence_prediction(wh, prior_response, request_id="req-prior")
+
+    future_request = ExecutionConfidenceRequest(
+        timestamp=(asof + pd.Timedelta(hours=1)).isoformat(),
+        cusip="00206RGB6",
+        side="buy",
+        notional=1_000_000.0,
+        protocol="Auto-X",
+    )
+    future_response = score_execution_confidence(future_request, warehouse=wh, release_gate=True)
+    write_execution_confidence_prediction(wh, future_response, request_id="req-future")
+
+    trade = _trade(timestamp=asof + pd.Timedelta(seconds=30))
+    tagged = tag_trade_with_regime_context(trade, warehouse=wh)
+
+    assert tagged.metadata["execution_confidence_source_request_id"] == "req-prior"
+    assert tagged.execution_confidence_score == pytest.approx(prior_response.confidence_score)
 
 
 def test_tag_trade_soft_regime_weights_sum_to_one(wh: Warehouse) -> None:

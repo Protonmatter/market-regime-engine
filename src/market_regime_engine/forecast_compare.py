@@ -51,6 +51,28 @@ def _newey_west_var(d: np.ndarray, max_lag: int) -> float:
     return max(s, 1e-12)
 
 
+def _newey_west_sandwich(moments: np.ndarray, max_lag: int) -> np.ndarray:
+    """HAC covariance matrix for vector-valued moment conditions.
+
+    ``moments[t]`` is a row vector such as ``z_t * residual_t``. The result is
+    the long-run covariance ``S`` used in a sandwich estimator.
+    """
+    M = np.asarray(moments, dtype=float)
+    if M.ndim == 1:
+        M = M[:, None]
+    n = M.shape[0]
+    if n == 0:
+        return np.full((M.shape[1], M.shape[1]), float("nan"))
+    M = M - M.mean(axis=0, keepdims=True)
+    S = (M.T @ M) / n
+    for lag in range(1, min(max_lag, n - 1) + 1):
+        weight = 1.0 - lag / (max_lag + 1.0)
+        Gamma = (M[:-lag].T @ M[lag:]) / n
+        S += weight * (Gamma + Gamma.T)
+    S = (S + S.T) / 2.0
+    return S + 1e-12 * np.eye(S.shape[0])
+
+
 def _normal_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
@@ -178,16 +200,28 @@ def giacomini_white(
         beta = np.linalg.lstsq(Z, d, rcond=None)[0]
     resid = d - Z @ beta
     lag = max(0, h - 1)
-    # Long-run variance of the loss differential. With Z = ones, the Wald
-    # statistic on beta is n * beta^2 / s. With Z = [1, X], cov(beta) = s/n *
-    # (Z'Z/n)^{-1} = s * (Z'Z)^{-1}.
-    s = _newey_west_var(resid, lag)
-    cov = s * np.linalg.pinv(XtX)
+    # Full HAC sandwich estimator for the conditional predictive ability
+    # regression. The older scalar-HAC shortcut was acceptable for Z=1 but
+    # understated the covariance structure when conditioning variables were
+    # nontrivial.
+    Q = XtX / n
+    S = _newey_west_sandwich(Z * resid[:, None], lag)
+    Q_inv = np.linalg.pinv(Q)
+    cov = (Q_inv @ S @ Q_inv) / n
     cov = (cov + cov.T) / 2.0 + 1e-12 * np.eye(cov.shape[0])
     stat = float(beta @ np.linalg.pinv(cov) @ beta)
     df = beta.shape[0]
     p = _chi2_sf(stat, df)
-    return {"n": n, "statistic": stat, "pvalue": p, "df": df, "beta": beta.tolist()}
+    return {
+        "n": n,
+        "statistic": stat,
+        "pvalue": p,
+        "df": df,
+        "beta": beta.tolist(),
+        "covariance": cov.tolist(),
+        "covariance_estimator": "hac_sandwich",
+        "lag": lag,
+    }
 
 
 # ---------------------------------------------------------------------------

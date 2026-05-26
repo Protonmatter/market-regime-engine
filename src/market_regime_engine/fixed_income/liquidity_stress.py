@@ -706,12 +706,14 @@ def latest_liquidity_stress_score(
     *,
     scope_type: str | None = None,
     scope_id: str | None = None,
+    asof: pd.Timestamp | str | None = None,
 ) -> LiquidityStressOutput | None:
     """Read the most recent ``liquidity_stress_scores`` row.
 
     When ``scope_type`` and ``scope_id`` are both provided, the result
     is filtered to that scope; otherwise the most recent row across
-    every scope is returned.
+    every scope is returned. When ``asof`` is supplied, the selected row
+    is bounded by ``timestamp <= asof`` before the latest row is chosen.
 
     v1.5.1 (PR-9 FIX 2): prefer the indexed SQL fast path that hits
     ``idx_liquidity_scope_ts`` when ``scope_type`` / ``scope_id`` are
@@ -721,9 +723,17 @@ def latest_liquidity_stress_score(
     """
     latest_fast = getattr(warehouse, "latest_liquidity_stress_score", None)
     if callable(latest_fast):
+        used_legacy_fast = False
         try:
+            fast_df = latest_fast(scope_type=scope_type, scope_id=scope_id, asof=asof)
+        except TypeError:  # pragma: no cover - legacy external test double
             fast_df = latest_fast(scope_type=scope_type, scope_id=scope_id)
+            used_legacy_fast = True
         except Exception:  # pragma: no cover - fall back on backend miss
+            fast_df = None
+        if used_legacy_fast and asof is not None:
+            # A legacy fast path may have ignored ``asof``. Let the fallback
+            # table scan choose the latest valid historical row.
             fast_df = None
         if fast_df is not None and not fast_df.empty:
             return _row_to_output(fast_df.iloc[0])
@@ -739,6 +749,12 @@ def latest_liquidity_stress_score(
             return None
     elif scope_type is not None:
         df = df.loc[df["scope_type"].astype(str) == str(scope_type)]
+        if df.empty:
+            return None
+    if asof is not None:
+        asof_ts = to_utc(asof)
+        timestamps = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        df = df.loc[timestamps <= asof_ts]
         if df.empty:
             return None
     df = df.sort_values("timestamp")

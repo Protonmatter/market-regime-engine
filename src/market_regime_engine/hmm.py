@@ -11,7 +11,7 @@ Two operating modes are supported:
    full-covariance Gaussian emissions on a domain-score panel and replaces the
    centroids, emission covariances, and transition matrix with learned
    estimates. After fitting, each learned state is **label-pinned** back to the
-   nearest hand-prior centroid by greedy Hungarian-style assignment so that the
+   nearest hand-prior centroid by exact minimum-cost assignment so that the
    reporting names (``risk_on_expansion``, ``stagflation``, ...) remain stable
    downstream. ``score()`` then runs a forward pass with the learned emissions.
 
@@ -23,6 +23,7 @@ report writer all rely on.
 from __future__ import annotations
 
 import math
+from itertools import permutations
 from dataclasses import dataclass, field
 from typing import overload
 
@@ -174,6 +175,42 @@ def _logsumexp(a: np.ndarray, axis: int | None = None) -> float | np.ndarray:
     return np.squeeze(out, axis=axis)
 
 
+def _optimal_assignment(cost: np.ndarray) -> list[int]:
+    """Return the minimum-cost one-to-one assignment for a square cost matrix.
+
+    ``assignment[i] = j`` means row ``i`` is assigned to column ``j``.
+    The implementation uses SciPy's linear-sum assignment when available and
+    otherwise falls back to an exact brute-force solver. The fallback is
+    acceptable here because regime counts are small (K <= 9 in the production
+    configuration), while exactness matters for stable regime naming.
+    """
+    arr = np.asarray(cost, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError("assignment cost matrix must be square")
+    K = int(arr.shape[0])
+    if K == 0:
+        return []
+    try:  # pragma: no cover - optional dependency branch
+        from scipy.optimize import linear_sum_assignment
+
+        rows, cols = linear_sum_assignment(arr)
+        assignment = [-1] * K
+        for r, c in zip(rows, cols, strict=True):
+            assignment[int(r)] = int(c)
+        return assignment
+    except Exception:
+        best_perm: tuple[int, ...] | None = None
+        best_cost = float("inf")
+        for perm in permutations(range(K)):
+            total = float(sum(arr[i, perm[i]] for i in range(K)))
+            if total < best_cost:
+                best_cost = total
+                best_perm = perm
+        if best_perm is None:  # defensive; only possible for malformed input
+            return list(range(K))
+        return [int(x) for x in best_perm]
+
+
 def _mvn_logpdf(x: np.ndarray, mean: np.ndarray, cov: np.ndarray, *, ridge: float = 1e-6) -> float:
     """Multivariate normal log density. Uses Cholesky for stability."""
     d = x.shape[-1]
@@ -315,7 +352,7 @@ class HMMRegimePosterior:
         The hand-prior centroids and transition matrix are used as starting
         points so EM converges to a local optimum that is recognizable; the
         post-fit pinning step then re-aligns the learned state ordering to the
-        named regime ordering by a greedy Hungarian-style assignment.
+        named regime ordering by an exact minimum-cost assignment.
 
         Parameters
         ----------
@@ -441,9 +478,9 @@ class HMMRegimePosterior:
         """Reorder learned states so that index ``i`` is the closest learned
         match to the ``self.states[i]`` hand-prior centroid.
 
-        Uses greedy nearest-neighbor assignment: pair the smallest distance
-        first, remove that pair from contention, repeat. This is O(K^2 log K)
-        for K=9 and avoids pulling scipy.optimize for the 1:1 assignment.
+        Uses an exact minimum-cost one-to-one assignment. Greedy matching is
+        not equivalent to the Hungarian / linear-sum assignment problem and can
+        mislabel regimes when distances are close or partially symmetric.
 
         After this step, ``self.centroids[i]`` is the learned mean of the
         regime named ``self.states[i]``, ``self.transition[i, j]`` is the
@@ -453,20 +490,7 @@ class HMMRegimePosterior:
         # cost[i, k] = ||prior_centroid_i - learned_centroid_k||
         diffs = self._prior_centroids[:, None, :] - self.centroids[None, :, :]
         cost = np.linalg.norm(diffs, axis=2)
-        assignment: dict[int, int] = {}
-        used_priors: set[int] = set()
-        used_learned: set[int] = set()
-        flat = [(cost[i, k], i, k) for i in range(K) for k in range(K)]
-        flat.sort(key=lambda t: t[0])
-        for _, i, k in flat:
-            if i in used_priors or k in used_learned:
-                continue
-            assignment[i] = k
-            used_priors.add(i)
-            used_learned.add(k)
-            if len(assignment) == K:
-                break
-        order = [assignment[i] for i in range(K)]
+        order = _optimal_assignment(cost)
         self.centroids = self.centroids[order]
         self.covariances = self.covariances[order]
         # Reorder transition rows and columns.
