@@ -71,9 +71,7 @@ def _draw_skew_negative(seed: int, n: int = 252) -> np.ndarray:
     ids=lambda x: x[0] if isinstance(x, tuple) else str(x),
 )
 @pytest.mark.parametrize("n_trials", [1, 5, 50])
-def test_deflated_sharpe_ratio_matches_validation(
-    fixture: tuple[str, callable], n_trials: int
-) -> None:
+def test_deflated_sharpe_ratio_matches_validation(fixture: tuple[str, callable], n_trials: int) -> None:
     """The frontier wrapper must produce the same DSR probability as
     ``validation.deflated_sharpe`` on every fixture / n_trials combo.
 
@@ -141,14 +139,10 @@ def _build_pbo_panel(seed: int, n_strategies: int = 4, n_periods: int = 200) -> 
 @pytest.mark.parametrize("n_folds", [4, 8])
 @pytest.mark.parametrize("purge", [0, 2])
 @pytest.mark.parametrize("embargo", [0, 1])
-def test_probability_of_backtest_overfitting_matches_validation(
-    n_folds: int, purge: int, embargo: int
-) -> None:
+def test_probability_of_backtest_overfitting_matches_validation(n_folds: int, purge: int, embargo: int) -> None:
     """Wrapper PBO must equal validation PBO for the same inputs."""
     panel = _build_pbo_panel(seed=42)
-    wrapper = probability_of_backtest_overfitting(
-        panel, n_folds=n_folds, purge=purge, embargo=embargo
-    )
+    wrapper = probability_of_backtest_overfitting(panel, n_folds=n_folds, purge=purge, embargo=embargo)
     canonical = _validation.probability_of_backtest_overfitting(
         panel, n_partitions=n_folds, purge=purge, embargo=embargo
     )
@@ -165,23 +159,17 @@ def test_probability_of_backtest_overfitting_purge_embargo_now_applied() -> None
     rng = np.random.default_rng(123)
     n_periods = 240
     n_strategies = 6
-    panel = pd.DataFrame(
-        {f"s_{i}": rng.normal(0.0, 0.01, size=n_periods) for i in range(n_strategies)}
-    )
+    panel = pd.DataFrame({f"s_{i}": rng.normal(0.0, 0.01, size=n_periods) for i in range(n_strategies)})
     no_purge = probability_of_backtest_overfitting(panel, n_folds=8, purge=0, embargo=0)
     with_purge = probability_of_backtest_overfitting(panel, n_folds=8, purge=3, embargo=2)
     # The two PBO values may agree numerically when noise dominates; what
     # matters here is that ``with_purge`` was computed (not silently
     # ignored as in the pre-fix fork) — i.e. its PBO equals the canonical
     # validation PBO with the same purge/embargo plumbing.
-    canonical = _validation.probability_of_backtest_overfitting(
-        panel, n_partitions=8, purge=3, embargo=2
-    )
+    canonical = _validation.probability_of_backtest_overfitting(panel, n_partitions=8, purge=3, embargo=2)
     assert with_purge.pbo == pytest.approx(canonical, abs=1e-12)
     # And differs from the no-purge baseline path through validation too:
-    canonical_no_purge = _validation.probability_of_backtest_overfitting(
-        panel, n_partitions=8, purge=0, embargo=0
-    )
+    canonical_no_purge = _validation.probability_of_backtest_overfitting(panel, n_partitions=8, purge=0, embargo=0)
     assert no_purge.pbo == pytest.approx(canonical_no_purge, abs=1e-12)
 
 

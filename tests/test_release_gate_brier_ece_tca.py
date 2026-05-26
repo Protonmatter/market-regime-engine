@@ -106,9 +106,7 @@ def test_release_gate_passes_when_some_tca_segment_significant() -> None:
 
 def test_release_gate_accepts_tca_lift_as_json_string() -> None:
     """The ``tca_lift`` cell may be a JSON string after a warehouse round-trip."""
-    tca_lift_json = json.dumps(
-        {"stressed": {"p_value": 0.001, "effect_size": 0.5, "n": 200}}
-    )
+    tca_lift_json = json.dumps({"stressed": {"p_value": 0.001, "effect_size": 0.5, "n": 200}})
     conf = _baseline_confidence(tca_lift=tca_lift_json)
     out = evaluate_release_gate(
         confidence=conf,
@@ -131,9 +129,7 @@ def test_release_gate_skips_brier_when_column_absent() -> None:
 
 def test_release_gate_skips_tca_lift_when_threshold_unset() -> None:
     """``profile='default'`` opts out of the TCA rail entirely."""
-    conf = _baseline_confidence(
-        tca_lift={"alone": {"p_value": 1.0, "effect_size": 0.0, "n": 10}}
-    )
+    conf = _baseline_confidence(tca_lift={"alone": {"p_value": 1.0, "effect_size": 0.0, "n": 10}})
     out = evaluate_release_gate(
         confidence=conf,
         promotion=_baseline_promotion(),

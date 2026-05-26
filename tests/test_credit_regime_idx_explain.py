@@ -59,14 +59,9 @@ def test_idx_credit_regime_ts_run_is_created(wh_sqlite: Warehouse) -> None:
     after the warehouse boots its FI schema."""
     _seed(wh_sqlite, n=10)
     backend = wh_sqlite._backend
-    rows = backend.read_sql(
-        "SELECT name FROM sqlite_master WHERE type='index' "
-        "AND tbl_name='credit_regime_scores'"
-    )
+    rows = backend.read_sql("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='credit_regime_scores'")
     index_names = set(rows["name"].astype(str).tolist())
-    assert "idx_credit_regime_ts_run" in index_names, (
-        f"missing idx_credit_regime_ts_run; got: {index_names}"
-    )
+    assert "idx_credit_regime_ts_run" in index_names, f"missing idx_credit_regime_ts_run; got: {index_names}"
 
 
 def test_latest_credit_regime_score_plan_hits_secondary_index(
@@ -77,15 +72,10 @@ def test_latest_credit_regime_score_plan_hits_secondary_index(
     _seed(wh_sqlite, n=200)
     backend = wh_sqlite._backend
     plan = backend.read_sql(
-        "EXPLAIN QUERY PLAN "
-        "SELECT * FROM credit_regime_scores "
-        "ORDER BY timestamp DESC, model_run_id DESC "
-        "LIMIT 1"
+        "EXPLAIN QUERY PLAN SELECT * FROM credit_regime_scores ORDER BY timestamp DESC, model_run_id DESC LIMIT 1"
     )
     plan_text = " ".join(plan["detail"].astype(str).tolist())
-    assert "idx_credit_regime_ts_run" in plan_text, (
-        f"planner did NOT pick idx_credit_regime_ts_run; plan={plan_text!r}"
-    )
+    assert "idx_credit_regime_ts_run" in plan_text, f"planner did NOT pick idx_credit_regime_ts_run; plan={plan_text!r}"
 
 
 def test_latest_credit_regime_score_returns_max_timestamp_row(
@@ -99,8 +89,6 @@ def test_latest_credit_regime_score_returns_max_timestamp_row(
     assert out is not None
     assert len(out) == 1
     legacy = wh_sqlite.read_credit_regime_scores()
-    legacy = legacy.sort_values(
-        ["timestamp", "model_run_id"], ascending=[False, False]
-    )
+    legacy = legacy.sort_values(["timestamp", "model_run_id"], ascending=[False, False])
     expected_ts = legacy.iloc[0]["timestamp"]
     assert out.iloc[0]["timestamp"] == expected_ts

@@ -57,15 +57,13 @@ def resolve_boundary(name: BoundaryName | str | None = None) -> PackageBoundary:
     try:
         return _BOUNDARIES[key]
     except KeyError as exc:
-        raise ValueError(
-            f"unknown package boundary {key!r}; valid boundaries are {sorted(_BOUNDARIES)}"
-        ) from exc
+        raise ValueError(f"unknown package boundary {key!r}; valid boundaries are {sorted(_BOUNDARIES)}") from exc
 
 
 __all__ = [
-    "BoundaryName",
     "EXPERIMENTAL_FRONTIER",
-    "PackageBoundary",
     "STABLE_CORE",
+    "BoundaryName",
+    "PackageBoundary",
     "resolve_boundary",
 ]

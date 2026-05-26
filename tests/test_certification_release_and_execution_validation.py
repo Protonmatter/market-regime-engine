@@ -76,9 +76,9 @@ def _synthetic_execution_frames(n: int = 90) -> tuple[pd.DataFrame, pd.DataFrame
 def _baseline_gate_inputs() -> dict:
     return {
         "drift": pd.DataFrame([{"date": "2026-01-01", "feature_name": "x", "psi": 0.0, "status": "ok"}]),
-        "invalidation": pd.DataFrame([
-            {"date": "2026-01-01", "trigger": "none", "severity": "low", "status": "inactive"}
-        ]),
+        "invalidation": pd.DataFrame(
+            [{"date": "2026-01-01", "trigger": "none", "severity": "low", "status": "inactive"}]
+        ),
         "promotion": pd.DataFrame([{"date": "2026-01-01", "promoted": True, "mcs_evidence": "in_set"}]),
         "coverage_report": pd.DataFrame([{"coverage": 0.95, "bucket": "all", "n": 90}]),
     }
@@ -127,48 +127,52 @@ def test_execution_validation_report_feeds_certification_release_gate() -> None:
 def test_certification_tca_lift_requires_positive_direction() -> None:
     gate_inputs = _baseline_gate_inputs()
     # Statistically significant but adverse: high-confidence executions are worse.
-    conf = pd.DataFrame([
-        {
-            "date": "2026-01-01",
-            "confidence": 0.99,
-            "grade": "A",
-            "dsr": 0.80,
-            "pbo": 0.01,
-            "brier": 0.05,
-            "ece": 0.01,
-            "tca_lift": {"calm": {"p_value": 0.001, "effect_size": -0.9, "n": 60}},
-            "pit_leakage_passed": True,
-            "walk_forward_passed": True,
-            "validation_artifact_hash": "sha256:abc",
-            "model_card_path": "docs/method_cards/execution_confidence.md",
-            "evidence_pack_hmac": "v1:hmac",
-            "min_regime_sample_size": 60,
-        }
-    ])
+    conf = pd.DataFrame(
+        [
+            {
+                "date": "2026-01-01",
+                "confidence": 0.99,
+                "grade": "A",
+                "dsr": 0.80,
+                "pbo": 0.01,
+                "brier": 0.05,
+                "ece": 0.01,
+                "tca_lift": {"calm": {"p_value": 0.001, "effect_size": -0.9, "n": 60}},
+                "pit_leakage_passed": True,
+                "walk_forward_passed": True,
+                "validation_artifact_hash": "sha256:abc",
+                "model_card_path": "docs/method_cards/execution_confidence.md",
+                "evidence_pack_hmac": "v1:hmac",
+                "min_regime_sample_size": 60,
+            }
+        ]
+    )
     out = evaluate_release_gate(confidence=conf, profile="certification", **gate_inputs)
     assert bool(out.iloc[0]["approved"]) is False
     assert "tca_lift_no_positive_significant_segment" in str(out.iloc[0]["reasons"])
 
 
 def test_malformed_tca_payload_fails_closed_without_exception() -> None:
-    conf = pd.DataFrame([
-        {
-            "date": "2026-01-01",
-            "confidence": 0.99,
-            "grade": "A",
-            "dsr": 0.80,
-            "pbo": 0.01,
-            "brier": 0.05,
-            "ece": 0.01,
-            "tca_lift": {"calm": "not-a-dict"},
-            "pit_leakage_passed": True,
-            "walk_forward_passed": True,
-            "validation_artifact_hash": "sha256:abc",
-            "model_card_path": "docs/method_cards/execution_confidence.md",
-            "evidence_pack_hmac": "v1:hmac",
-            "min_regime_sample_size": 60,
-        }
-    ])
+    conf = pd.DataFrame(
+        [
+            {
+                "date": "2026-01-01",
+                "confidence": 0.99,
+                "grade": "A",
+                "dsr": 0.80,
+                "pbo": 0.01,
+                "brier": 0.05,
+                "ece": 0.01,
+                "tca_lift": {"calm": "not-a-dict"},
+                "pit_leakage_passed": True,
+                "walk_forward_passed": True,
+                "validation_artifact_hash": "sha256:abc",
+                "model_card_path": "docs/method_cards/execution_confidence.md",
+                "evidence_pack_hmac": "v1:hmac",
+                "min_regime_sample_size": 60,
+            }
+        ]
+    )
     out = evaluate_release_gate(confidence=conf, profile="certification", **_baseline_gate_inputs())
     assert bool(out.iloc[0]["approved"]) is False
     assert "tca_lift_missing_or_invalid" in str(out.iloc[0]["reasons"])

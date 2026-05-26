@@ -116,7 +116,9 @@ def _safe_rmtree_target(path: Path) -> None:
     resolved = path.resolve()
     forbidden = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
     try:
-        repo_root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL)
+        repo_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"], text=True, stderr=subprocess.DEVNULL
+        )
         forbidden.add(Path(repo_root.strip()).resolve())
     except Exception:
         pass

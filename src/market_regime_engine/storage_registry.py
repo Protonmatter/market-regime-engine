@@ -126,10 +126,7 @@ _CORE_TABLES: tuple[TableSpec, ...] = (
         # index whose leading column matches the read pattern so
         # the planner can serve the sort from an index scan
         # instead of a full table sort.
-        index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_observations_date_series "
-            "ON observations(date, series_id)",
-        ),
+        index_sql=("CREATE INDEX IF NOT EXISTS idx_observations_date_series ON observations(date, series_id)",),
     ),
     TableSpec(
         name="features",
@@ -147,10 +144,7 @@ _CORE_TABLES: tuple[TableSpec, ...] = (
         # v1.6.0 (A13): leading column on the hot read path is
         # ``date`` not ``feature_name``. Add a secondary index
         # to match.
-        index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_features_date_name "
-            "ON features(date, feature_name)",
-        ),
+        index_sql=("CREATE INDEX IF NOT EXISTS idx_features_date_name ON features(date, feature_name)",),
     ),
     TableSpec(
         name="regimes",
@@ -183,10 +177,7 @@ _CORE_TABLES: tuple[TableSpec, ...] = (
         # v1.6.0 (A13): the PK leads with ``model_name`` but the
         # read path orders by ``date`` only. Add a secondary index
         # so the planner can index-scan the date column.
-        index_sql=(
-            "CREATE INDEX IF NOT EXISTS idx_model_outputs_date "
-            "ON model_outputs(date)",
-        ),
+        index_sql=("CREATE INDEX IF NOT EXISTS idx_model_outputs_date ON model_outputs(date)",),
     ),
     TableSpec(
         name="recession_labels",
@@ -707,6 +698,8 @@ _CORE_TABLES: tuple[TableSpec, ...] = (
 # (fixed_income, future product lines) call register_tables(...) in
 # their own __init__.py to extend the registry.
 _register_core_tables()
+
+
 # legacy: TODO remove after PR-3+ migrations.
 # Pre-PR-2 the warehouse extracted the PRIMARY KEY tuple from each
 # CREATE TABLE statement via a naive parse. PR-2 makes the PK an
@@ -785,14 +778,15 @@ def legacy_aggregate(name: str) -> Any:
         return tuple(spec.name for spec in _REGISTRY)
     raise AttributeError(name)
 
+
 __all__ = [
+    "_REGISTRY",
     "BackendName",
     "TableSpec",
-    "register_tables",
-    "registered_tables",
-    "legacy_aggregate",
-    "_REGISTRY",
-    "_get_table_pk",
     "_extract_pk",
     "_extract_table_name",
+    "_get_table_pk",
+    "legacy_aggregate",
+    "register_tables",
+    "registered_tables",
 ]

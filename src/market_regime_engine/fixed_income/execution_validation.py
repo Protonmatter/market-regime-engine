@@ -194,7 +194,7 @@ def lift_by_decile(dataset: pd.DataFrame) -> list[dict[str, Any]]:
     if frame.empty:
         return []
     ranks = frame["raw_confidence_score"].rank(method="first")
-    bins = min(10, int(len(frame)))
+    bins = min(10, len(frame))
     frame["confidence_decile"] = pd.qcut(ranks, q=bins, labels=False, duplicates="drop") + 1
     rows: list[dict[str, Any]] = []
     for decile, sub in frame.groupby("confidence_decile"):
@@ -202,7 +202,7 @@ def lift_by_decile(dataset: pd.DataFrame) -> list[dict[str, Any]]:
         rows.append(
             {
                 "decile": int(decile),
-                "n": int(len(sub)),
+                "n": len(sub),
                 "mean_score": float(sub["raw_confidence_score"].mean()),
                 "fill_rate": float(sub["fill_success"].mean()),
                 "mean_observed_slippage_bps": float(slip.dropna().mean()) if not slip.dropna().empty else float("nan"),
@@ -244,7 +244,11 @@ def tca_lift_by_regime(dataset: pd.DataFrame, *, min_n: int = DEFAULT_MIN_TCA_LI
         diff = float(np.mean(low) - np.mean(high)) if low.size and high.size else float("nan")
         pooled = np.concatenate([low, high]) if low.size and high.size else np.asarray([], dtype=float)
         pooled_sd = float(np.std(pooled, ddof=1)) if pooled.size > 1 else float("nan")
-        se = float(math.sqrt(np.var(low, ddof=1) / len(low) + np.var(high, ddof=1) / len(high))) if len(low) > 1 and len(high) > 1 else float("nan")
+        se = (
+            float(math.sqrt(np.var(low, ddof=1) / len(low) + np.var(high, ddof=1) / len(high)))
+            if len(low) > 1 and len(high) > 1
+            else float("nan")
+        )
         effect = float(diff / pooled_sd) if pooled_sd and math.isfinite(pooled_sd) and pooled_sd > 0 else 0.0
         out[str(regime)] = {
             "n": float(n),
@@ -315,7 +319,7 @@ def validate_execution_confidence_realized_outcomes(
         reasons.append("tca_lift_underpowered_segments")
     payload = {
         "asof_utc": iso8601_z(cutoff),
-        "observations": int(len(frame)),
+        "observations": len(frame),
         "min_regime_sample_size": int(min_regime_sample_size),
         "metrics": metrics,
         "invalid_probability_rows": invalid_probability_rows,
@@ -327,7 +331,7 @@ def validate_execution_confidence_realized_outcomes(
     artifact_hash = canonical_sha256(payload)
     return ExecutionValidationReport(
         asof_utc=iso8601_z(cutoff),
-        observations=int(len(frame)),
+        observations=len(frame),
         min_regime_sample_size=int(min((r.get("n", 0) for r in by_regime), default=0)),
         min_required_regime_sample_size=int(min_regime_sample_size),
         brier=float(metrics["brier"]),

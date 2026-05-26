@@ -228,7 +228,6 @@ def test_fi_evidence_resign_raises_when_key_not_in_versions(
     assert "vNEW" in payload["detail"]
 
 
-
 def _persist_signed_v1_pack(
     warehouse: Warehouse,
     *,
@@ -293,9 +292,7 @@ def test_fi_evidence_resign_to_version_v2_upgrades_legacy_packs(
 
     # Stage 2: add the v2 key alongside v1 so the resign tool can pick
     # the new key version.
-    monkeypatch.setenv(
-        "MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": v1_key, "v2": v2_key})
-    )
+    monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": v1_key, "v2": v2_key}))
 
     rc = fi_cli_run(
         [
@@ -345,9 +342,7 @@ def test_fi_evidence_resign_default_preserves_canonical_version(
     finally:
         wh.close()
 
-    monkeypatch.setenv(
-        "MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": v1_key, "v2": v2_key})
-    )
+    monkeypatch.setenv("MRE_FI_HMAC_KEY_VERSIONS", json.dumps({"v1": v1_key, "v2": v2_key}))
 
     rc = fi_cli_run(
         [

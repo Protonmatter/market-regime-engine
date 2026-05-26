@@ -41,9 +41,7 @@ from market_regime_engine.fixed_income.correlation import log_safe
         (None, "None"),
     ],
 )
-def test_log_safe_strips_newlines_and_carriage_returns(
-    payload: object, expected: str
-) -> None:
+def test_log_safe_strips_newlines_and_carriage_returns(payload: object, expected: str) -> None:
     assert log_safe(payload) == expected
 
 
@@ -69,9 +67,7 @@ def test_log_call_with_injected_newline_produces_single_line() -> None:
 
     text = stream.getvalue()
     # The injected fake INFO line MUST NOT appear as its own record.
-    assert text.count("\n") == 1, (
-        f"expected one trailing newline, got {text.count(chr(10))} lines: {text!r}"
-    )
+    assert text.count("\n") == 1, f"expected one trailing newline, got {text.count(chr(10))} lines: {text!r}"
     assert "synthetic-second-record" in text  # payload preserved
     assert "\\n" in text  # newline rendered as escape
 
@@ -94,8 +90,7 @@ def test_correlation_middleware_sanitises_inbound_request_id_header() -> None:
     # sanitise step fails this test.
     src = inspect.getsource(CorrelationIdMiddleware.__call__)
     assert "log_safe" in src, (
-        "CorrelationIdMiddleware no longer sanitises caller-controlled "
-        "request_id before binding to the contextvar"
+        "CorrelationIdMiddleware no longer sanitises caller-controlled request_id before binding to the contextvar"
     )
 
     async def _scenario() -> str | None:

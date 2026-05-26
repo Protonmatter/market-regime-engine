@@ -146,13 +146,8 @@ def test_ece_equal_width_honest_on_clustered_probabilities() -> None:
     p = rng.uniform(0.45, 0.55, size=n)
     y = (rng.uniform(0, 1, size=n) < 0.8).astype(float)
     with pytest.warns(RuntimeWarning, match=r"ECE bin collapse"):
-        ece = expected_calibration_error(
-            y, p, n_bins=10, bin_strategy="equal_width"
-        )
-    assert ece >= 0.25, (
-        "equal_width ECE should reflect honest miscalibration on "
-        "clustered probability inputs"
-    )
+        ece = expected_calibration_error(y, p, n_bins=10, bin_strategy="equal_width")
+    assert ece >= 0.25, "equal_width ECE should reflect honest miscalibration on clustered probability inputs"
 
 
 def test_ece_bin_collapse_warning_fires_when_triggered() -> None:
@@ -182,9 +177,7 @@ def test_ece_equal_mass_documented_collapse_with_small_n() -> None:
     p = [0.5] * 50 + [0.51] * 50
     y = [0.0, 1.0] * 50
     with pytest.warns(RuntimeWarning, match=r"ECE bin collapse"):
-        ece = expected_calibration_error(
-            y, p, n_bins=10, bin_strategy="equal_mass"
-        )
+        ece = expected_calibration_error(y, p, n_bins=10, bin_strategy="equal_mass")
     assert 0.0 <= ece <= 1.0
 
 
@@ -197,16 +190,17 @@ def test_ece_equal_mass_balanced_bins_no_warning() -> None:
 
     with _w.catch_warnings():
         _w.simplefilter("error", RuntimeWarning)
-        ece = expected_calibration_error(
-            y, p, n_bins=10, bin_strategy="equal_mass"
-        )
+        ece = expected_calibration_error(y, p, n_bins=10, bin_strategy="equal_mass")
     assert 0.0 <= ece <= 1.0
 
 
 def test_ece_invalid_bin_strategy_raises() -> None:
     with pytest.raises(ValueError, match="bin_strategy must be"):
         expected_calibration_error(
-            [0.0, 1.0], [0.1, 0.9], n_bins=10, bin_strategy="exotic"  # type: ignore[arg-type]
+            [0.0, 1.0],
+            [0.1, 0.9],
+            n_bins=10,
+            bin_strategy="exotic",  # type: ignore[arg-type]
         )
 
 
@@ -234,7 +228,5 @@ def test_release_gate_default_routes_to_equal_width() -> None:
     p = rng.uniform(0.05, 0.95, size=500)
     y = (rng.uniform(0, 1, size=500) < p).astype(float)
     default = expected_calibration_error(y, p, n_bins=10)
-    explicit = expected_calibration_error(
-        y, p, n_bins=10, bin_strategy="equal_width"
-    )
+    explicit = expected_calibration_error(y, p, n_bins=10, bin_strategy="equal_width")
     assert default == pytest.approx(explicit, abs=1e-12)

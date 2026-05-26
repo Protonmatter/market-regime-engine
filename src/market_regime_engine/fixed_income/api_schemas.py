@@ -17,6 +17,7 @@ from market_regime_engine.fixed_income.schemas import (
     TcaRegimeSegment,
 )
 
+
 class ExecutionConfidenceRequestModel(BaseModel):
     """Pydantic v2 validation model for POST /v1/execution_confidence body.
 
@@ -64,9 +65,7 @@ class ExecutionConfidenceRequestModel(BaseModel):
         except Exception as exc:
             raise ValueError(f"timestamp must be ISO-8601: {v!r}") from exc
         if parsed.tzinfo is None:
-            raise ValueError(
-                f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}"
-            )
+            raise ValueError(f"timestamp must carry explicit tz info (e.g. 'Z' suffix): {v!r}")
         utc_ts = parsed.tz_convert("UTC")
         canonical = utc_ts.strftime("%Y-%m-%dT%H:%M:%S")
         if utc_ts.microsecond:
@@ -83,9 +82,7 @@ class ExecutionConfidenceRequestModel(BaseModel):
 
     @field_validator("metadata")
     @classmethod
-    def _metadata_size_and_depth(
-        cls, v: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
+    def _metadata_size_and_depth(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
         """Cap metadata payload at 8 KiB canonical-JSON / depth 5.
 
         v1.6.0 (REVIEW_DEEP_V1_5_2.md F9 / Finding §3.13): the
@@ -105,13 +102,9 @@ class ExecutionConfidenceRequestModel(BaseModel):
         try:
             encoded = _json.dumps(v, sort_keys=True, default=str)
         except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"metadata must be JSON-serialisable: {exc}"
-            ) from exc
+            raise ValueError(f"metadata must be JSON-serialisable: {exc}") from exc
         if len(encoded) > 8192:
-            raise ValueError(
-                f"metadata too large: {len(encoded)} bytes > 8192 byte cap"
-            )
+            raise ValueError(f"metadata too large: {len(encoded)} bytes > 8192 byte cap")
 
         def _depth(obj: Any, current: int = 0) -> int:
             if current > 5:
@@ -148,11 +141,18 @@ class ExecutionConfidenceRequestModel(BaseModel):
         )
 
 
+XProProtocol = Literal["Auto-X", "RFQ", "Manual"]
+
+
+def _default_candidate_protocols() -> list[XProProtocol]:
+    return ["Auto-X", "RFQ", "Manual"]
+
+
 class XProDecisionRequestModel(ExecutionConfidenceRequestModel):
     """Pydantic body for POST /v1/xpro/decision."""
 
-    candidate_protocols: list[Literal["Auto-X", "RFQ", "Manual"]] = Field(
-        default_factory=lambda: ["Auto-X", "RFQ", "Manual"],
+    candidate_protocols: list[XProProtocol] = Field(
+        default_factory=_default_candidate_protocols,
         min_length=1,
         max_length=3,
     )
@@ -179,9 +179,7 @@ def credit_regime_output_to_dict(output: CreditRegimeOutput) -> dict[str, Any]:
     # subclass and the subclass raises on mutation, so coerce
     # to a plain dict before attaching derived fields.
     out["metadata"] = dict(out.get("metadata", {}) or {})
-    out["metadata"].setdefault(
-        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
-    )
+    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
     return out
 
 
@@ -219,9 +217,7 @@ def liquidity_stress_output_to_dict(output: LiquidityStressOutput) -> dict[str, 
     out = liquidity_output_to_dict(output)
     # v1.6.0 F2: coerce read-only metadata to plain dict before mutation.
     out["metadata"] = dict(out.get("metadata", {}) or {})
-    out["metadata"].setdefault(
-        "signal_age_seconds", _signal_age_seconds_now(output.timestamp)
-    )
+    out["metadata"].setdefault("signal_age_seconds", _signal_age_seconds_now(output.timestamp))
     return out
 
 
@@ -248,9 +244,9 @@ def tca_regime_segment_to_dict(segment: TcaRegimeSegment) -> dict[str, Any]:
 __all__ = [
     "ExecutionConfidenceRequestModel",
     "XProDecisionRequestModel",
+    "_signal_age_seconds_now",
     "credit_regime_output_to_dict",
     "execution_confidence_response_to_dict",
     "liquidity_stress_output_to_dict",
     "tca_regime_segment_to_dict",
-    "_signal_age_seconds_now",
 ]

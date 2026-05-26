@@ -280,9 +280,7 @@ def test_midas_regressor_nan_policy_replaces_silent_fillna_zero() -> None:
     X = pd.DataFrame({"x": x}, index=dates)
     y_s = pd.Series(y, index=dates)
     spec = MIDASLagSpec(column="x", lags=6, polynomial_degree=2)
-    model = MIDASRegressor(max_iter=10, nan_policy=NanPolicy.NAN_TO_LAST_VALID).fit(
-        X, y_s, lag_specs=[spec]
-    )
+    model = MIDASRegressor(max_iter=10, nan_policy=NanPolicy.NAN_TO_LAST_VALID).fit(X, y_s, lag_specs=[spec])
     assert model.fitted
     assert model.nan_policy is NanPolicy.NAN_TO_LAST_VALID
     preds = model.predict(X)

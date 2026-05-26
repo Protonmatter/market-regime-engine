@@ -9,8 +9,8 @@ SRC = ROOT / "src" / "market_regime_engine"
 ALLOWED_STABLE_FRONTIER_IMPORTERS = {
     "release_gates.py",
     "package_boundary.py",
-    "cli_handlers.py",          # command boundary; commands are explicit operator entrypoints
-    "orchestration.py",         # research/stable workflow boundary
+    "cli_handlers.py",  # command boundary; commands are explicit operator entrypoints
+    "orchestration.py",  # research/stable workflow boundary
 }
 ALLOWED_FRONTIER_UTILITY_MODULES = {
     "market_regime_engine.frontier",
@@ -54,10 +54,6 @@ def test_stable_core_does_not_import_frontier_implementations_directly() -> None
                         and alias.name not in ALLOWED_FRONTIER_UTILITY_MODULES
                     ):
                         offenders.append(f"{rel}: import {alias.name}")
-            if (
-                mod
-                and mod.startswith("market_regime_engine.frontier")
-                and mod not in ALLOWED_FRONTIER_UTILITY_MODULES
-            ):
+            if mod and mod.startswith("market_regime_engine.frontier") and mod not in ALLOWED_FRONTIER_UTILITY_MODULES:
                 offenders.append(f"{rel}: from {mod} import ...")
     assert offenders == []

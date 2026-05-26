@@ -107,7 +107,9 @@ class _CustomMixedFrequencyStateSpace:
             loadings = -loadings
             factor = -factor
         den = float(np.dot(factor[:-1], factor[:-1])) if len(factor) > 1 else 0.0
-        phi = float(np.clip(np.dot(factor[1:], factor[:-1]) / max(den, 1e-12), -0.95, 0.95)) if len(factor) > 1 else 0.85
+        phi = (
+            float(np.clip(np.dot(factor[1:], factor[:-1]) / max(den, 1e-12), -0.95, 0.95)) if len(factor) > 1 else 0.85
+        )
         innov = factor[1:] - phi * factor[:-1] if len(factor) > 1 else factor
         factor_var = max(float(np.nanvar(innov)), self.obs_ridge)
         residual = filled - np.outer(factor, loadings)
@@ -187,7 +189,13 @@ class _CustomMixedFrequencyStateSpace:
     def nowcast(self, asof: pd.Timestamp) -> dict[str, Any]:
         asof_ts = pd.Timestamp(asof).normalize()
         if not self.fitted or self.filtered_factor.empty:
-            return {"as_of": str(asof_ts.date()), "factor": 0.0, "factor_se": float("nan"), "backend": "custom_state_space", "fitted": False}
+            return {
+                "as_of": str(asof_ts.date()),
+                "factor": 0.0,
+                "factor_se": float("nan"),
+                "backend": "custom_state_space",
+                "fitted": False,
+            }
         prefix = self.filtered_factor.loc[self.filtered_factor.index <= asof_ts]
         vprefix = self.filtered_var.loc[self.filtered_var.index <= asof_ts]
         if prefix.empty:
@@ -196,7 +204,13 @@ class _CustomMixedFrequencyStateSpace:
         else:
             val = float(prefix.iloc[-1])
             var = float(vprefix.iloc[-1])
-        return {"as_of": str(asof_ts.date()), "factor": val, "factor_se": float(np.sqrt(max(var, 1e-12))), "backend": "custom_state_space", "fitted": self.fitted}
+        return {
+            "as_of": str(asof_ts.date()),
+            "factor": val,
+            "factor_se": float(np.sqrt(max(var, 1e-12))),
+            "backend": "custom_state_space",
+            "fitted": self.fitted,
+        }
 
     def update(self, panel: pd.DataFrame, frequencies: dict[str, str]) -> _CustomMixedFrequencyStateSpace:
         return self.fit(panel, frequencies)
@@ -229,7 +243,7 @@ class MQDynamicFactorModel:
 
     @staticmethod
     def _normalize_frequencies(panel: pd.DataFrame, frequencies: dict[str, str] | None) -> dict[str, str]:
-        freq_map = {col: "M" for col in panel.columns}
+        freq_map = dict.fromkeys(panel.columns, "M")
         if frequencies:
             unknown = set(frequencies).difference(panel.columns)
             if unknown:
@@ -246,14 +260,22 @@ class MQDynamicFactorModel:
         if values and values.issubset({"Q"}):
             raise ValueError("at least one monthly ('M') series is required when quarterly series are supplied")
         if values.intersection({"D", "W"}) and "Q" in values:
-            raise ValueError("unsupported frequency layout: quarterly ('Q') cannot be mixed with daily/weekly custom D/W/M state-space inputs")
+            raise ValueError(
+                "unsupported frequency layout: quarterly ('Q') cannot be mixed with daily/weekly custom D/W/M state-space inputs"
+            )
         return freq_map
 
     @staticmethod
-    def _statsmodels_kwargs(panel: pd.DataFrame, frequencies: dict[str, str], *, n_factors: int, factor_orders: int) -> dict[str, Any]:
+    def _statsmodels_kwargs(
+        panel: pd.DataFrame, frequencies: dict[str, str], *, n_factors: int, factor_orders: int
+    ) -> dict[str, Any]:
         monthly_cols = [col for col in panel.columns if frequencies.get(col, "M") == "M"]
         quarterly_cols = [col for col in panel.columns if frequencies.get(col, "M") == "Q"]
-        kwargs: dict[str, Any] = {"endog": panel[monthly_cols] if monthly_cols else panel, "factors": n_factors, "factor_orders": factor_orders}
+        kwargs: dict[str, Any] = {
+            "endog": panel[monthly_cols] if monthly_cols else panel,
+            "factors": n_factors,
+            "factor_orders": factor_orders,
+        }
         if quarterly_cols and monthly_cols:
             kwargs["endog_quarterly"] = panel[quarterly_cols]
         elif quarterly_cols and not monthly_cols:
@@ -280,7 +302,11 @@ class MQDynamicFactorModel:
         installed, dfm_cls = _statsmodels_available()
         if installed:
             try:
-                model = dfm_cls(**self._statsmodels_kwargs(self._panel, self.frequencies, n_factors=self.n_factors, factor_orders=self.factor_orders))
+                model = dfm_cls(
+                    **self._statsmodels_kwargs(
+                        self._panel, self.frequencies, n_factors=self.n_factors, factor_orders=self.factor_orders
+                    )
+                )
                 results = model.fit(disp=False)
                 self._model = model
                 self._results = results
@@ -308,7 +334,9 @@ class MQDynamicFactorModel:
     @staticmethod
     def _extract_factor_series(results: Any, *, filtered: bool = True) -> pd.Series | None:
         if not filtered:
-            require_frontier_experimental("DFM-MQ smoothed latent factors are retrospective-only and use future observations")
+            require_frontier_experimental(
+                "DFM-MQ smoothed latent factors are retrospective-only and use future observations"
+            )
         preferred = "filtered" if filtered else "smoothed"
         fallback_attr = "smoothed" if filtered else "filtered"
         for attr in ("factors", "smoothed_state"):
@@ -341,13 +369,23 @@ class MQDynamicFactorModel:
         except Exception:
             pass
         if strict:
-            raise ValueError("factor_se: structured smoothed_state_cov unavailable; refusing to return params-based proxy")
-        log.warning("MQDynamicFactorModel: structured smoothed_state_cov unavailable; factor_se will be reported as NaN")
+            raise ValueError(
+                "factor_se: structured smoothed_state_cov unavailable; refusing to return params-based proxy"
+            )
+        log.warning(
+            "MQDynamicFactorModel: structured smoothed_state_cov unavailable; factor_se will be reported as NaN"
+        )
         return None
 
     def nowcast(self, asof: pd.Timestamp) -> dict[str, Any]:
         asof_ts = pd.Timestamp(asof)
-        response = {"as_of": str(asof_ts.date()), "factor": float(self._last_factor), "factor_se": float(self._last_factor_se) if self._last_factor_se is not None else float("nan"), "backend": self.backend, "fitted": self.fitted}
+        response = {
+            "as_of": str(asof_ts.date()),
+            "factor": float(self._last_factor),
+            "factor_se": float(self._last_factor_se) if self._last_factor_se is not None else float("nan"),
+            "backend": self.backend,
+            "fitted": self.fitted,
+        }
         if not self.fitted or self._panel is None:
             return response
         prefix = self._panel[self._panel.index <= asof_ts]
@@ -359,7 +397,11 @@ class MQDynamicFactorModel:
             try:
                 installed, dfm_cls = _statsmodels_available()
                 if installed:
-                    pit_model = dfm_cls(**self._statsmodels_kwargs(prefix, self.frequencies, n_factors=self.n_factors, factor_orders=self.factor_orders))
+                    pit_model = dfm_cls(
+                        **self._statsmodels_kwargs(
+                            prefix, self.frequencies, n_factors=self.n_factors, factor_orders=self.factor_orders
+                        )
+                    )
                     pit_results = pit_model.fit(disp=False)
                     series = self._extract_factor_series(pit_results, filtered=True)
                     if series is not None and len(series) > 0:
@@ -417,7 +459,9 @@ class MQDynamicFactorModel:
         return self.nowcast(obs_ts)
 
 
-def build_synthetic_panel(*, n_months: int = 60, seed: int = 0, n_series: int = 4, factor_persistence: float = 0.7) -> tuple[pd.DataFrame, np.ndarray]:
+def build_synthetic_panel(
+    *, n_months: int = 60, seed: int = 0, n_series: int = 4, factor_persistence: float = 0.7
+) -> tuple[pd.DataFrame, np.ndarray]:
     """Build a synthetic monthly panel and latent factor for tests."""
     rng = np.random.default_rng(seed)
     dates = pd.date_range("2020-01-01", periods=n_months, freq="MS")

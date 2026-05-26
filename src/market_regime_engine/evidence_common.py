@@ -88,7 +88,7 @@ _RFC8785_ESCAPES: dict[int, str] = {
     0x0A: "\\n",
     0x0C: "\\f",
     0x0D: "\\r",
-    0x22: "\\\"",
+    0x22: '\\"',
     0x5C: "\\\\",
 }
 
@@ -121,9 +121,7 @@ def _ecma262_number_tostring(x: float | int) -> str:
     if isinstance(x, int):
         return str(x)
     if not isinstance(x, float):
-        raise TypeError(
-            f"_ecma262_number_tostring: unsupported type {type(x).__name__}"
-        )
+        raise TypeError(f"_ecma262_number_tostring: unsupported type {type(x).__name__}")
     if math.isnan(x):
         raise ValueError("RFC 8785 rejects NaN/Infinity")
     if math.isinf(x):
@@ -190,7 +188,7 @@ def _escape_string_rfc8785(value: str) -> str:
     is emitted as raw UTF-8 -- the encoder itself drops
     ``ensure_ascii``.
     """
-    chunks: list[str] = ["\""]
+    chunks: list[str] = ['"']
     for ch in value:
         code = ord(ch)
         if code in _RFC8785_ESCAPES:
@@ -199,7 +197,7 @@ def _escape_string_rfc8785(value: str) -> str:
             chunks.append(f"\\u{code:04x}")
         else:
             chunks.append(ch)
-    chunks.append("\"")
+    chunks.append('"')
     return "".join(chunks)
 
 
@@ -245,9 +243,7 @@ def _encode_v2(value: Any) -> str:
         pieces: list[str] = []
         for k, v in items:
             if not isinstance(k, str):
-                raise TypeError(
-                    f"RFC 8785 object keys must be strings; got {type(k).__name__}"
-                )
+                raise TypeError(f"RFC 8785 object keys must be strings; got {type(k).__name__}")
             pieces.append(_escape_string_rfc8785(k) + ":" + _encode_v2(v))
         return "{" + ",".join(pieces) + "}"
     if isinstance(value, (list, tuple)):
@@ -343,9 +339,7 @@ def canonical_json(
         :func:`coerce_for_canonical`.
     """
     if version == "v1":
-        return json.dumps(
-            payload, sort_keys=True, separators=(",", ":"), default=str
-        )
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     if version == "v2":
         return _canonical_json_v2(payload)
     raise ValueError(f"canonical_json version must be 'v1' or 'v2'; got {version!r}")

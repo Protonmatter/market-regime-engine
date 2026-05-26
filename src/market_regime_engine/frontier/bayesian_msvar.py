@@ -100,9 +100,9 @@ def _coerce_panel(
     for d in domains:
         if d not in frame:
             frame[d] = 0.0
-    return clean_with_policy(
-        frame[domains], default_policy=nan_policy, column_policies=column_policies
-    ).to_numpy(dtype=float)
+    return clean_with_policy(frame[domains], default_policy=nan_policy, column_policies=column_policies).to_numpy(
+        dtype=float
+    )
 
 
 def _logsumexp(arr: np.ndarray, axis: int | None = None) -> np.ndarray:
@@ -438,9 +438,7 @@ class BayesianMSVAR:
             self.states[k]: float(radii[k]) for k in range(len(radii))
         }
         self.last_diagnostics["max_companion_radius"] = float(np.nanmax(radii)) if radii else float("nan")
-        self.last_diagnostics["stationary"] = bool(
-            all(np.isfinite(r) and r < 1.0 for r in radii)
-        )
+        self.last_diagnostics["stationary"] = bool(all(np.isfinite(r) and r < 1.0 for r in radii))
 
     def _emission_logpdf(self, y_t: np.ndarray, y_lags: np.ndarray) -> np.ndarray:
         K = len(self.states)

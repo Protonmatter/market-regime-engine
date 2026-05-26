@@ -23,8 +23,8 @@ report writer all rely on.
 from __future__ import annotations
 
 import math
-from itertools import permutations
 from dataclasses import dataclass, field
+from itertools import permutations
 from typing import overload
 
 import numpy as np
@@ -486,7 +486,6 @@ class HMMRegimePosterior:
         regime named ``self.states[i]``, ``self.transition[i, j]`` is the
         learned transition from regime i to regime j, etc.
         """
-        K = len(self.states)
         # cost[i, k] = ||prior_centroid_i - learned_centroid_k||
         diffs = self._prior_centroids[:, None, :] - self.centroids[None, :, :]
         cost = np.linalg.norm(diffs, axis=2)

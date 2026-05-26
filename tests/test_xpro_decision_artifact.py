@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import copy
 
-import pandas as pd
-
 from market_regime_engine.fixed_income import ExecutionConfidenceRequest
 from market_regime_engine.fixed_income.xpro_decision import (
     build_xpro_decision_artifact,
@@ -84,13 +82,16 @@ def test_xpro_decision_artifact_is_fixed_point_and_hash_stable(monkeypatch) -> N
     assert artifact["input"]["limit_price"]["value"] == 101250000
     assert artifact["model_outputs"]["execution_confidence"]["score_ppm"] == 612440
     assert artifact["evidence"]["artifact_hash"].startswith("sha256:")
-    assert build_xpro_decision_artifact(
-        _request(),
-        warehouse=_Warehouse(),
-        request_id="req-1",
-        decision_id="dec-1",
-        recommendation=recommendation,
-    )["evidence"]["artifact_hash"] == artifact["evidence"]["artifact_hash"]
+    assert (
+        build_xpro_decision_artifact(
+            _request(),
+            warehouse=_Warehouse(),
+            request_id="req-1",
+            decision_id="dec-1",
+            recommendation=recommendation,
+        )["evidence"]["artifact_hash"]
+        == artifact["evidence"]["artifact_hash"]
+    )
 
 
 def test_xpro_signature_verification_fails_on_tamper(monkeypatch) -> None:

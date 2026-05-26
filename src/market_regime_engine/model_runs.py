@@ -412,9 +412,7 @@ def build_repro_envelope(
         # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 3.7) -- new fields:
         numpy_blas=_detect_numpy_blas(),
         python_hash_seed=os.environ.get("PYTHONHASHSEED", ""),
-        runtime_env_snapshot={
-            key: os.environ.get(key, "") for key in _RUNTIME_ENV_KEYS
-        },
+        runtime_env_snapshot={key: os.environ.get(key, "") for key in _RUNTIME_ENV_KEYS},
     )
 
 

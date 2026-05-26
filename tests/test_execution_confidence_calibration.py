@@ -25,8 +25,8 @@ from market_regime_engine.fixed_income.execution_calibration import (
     build_execution_calibration_dataset,
     calibrate_execution_confidence_from_outcomes,
 )
-from market_regime_engine.fixed_income.schemas import ExecutionConfidenceRequest
 from market_regime_engine.fixed_income.execution_confidence import score_execution_confidence
+from market_regime_engine.fixed_income.schemas import ExecutionConfidenceRequest
 from market_regime_engine.storage import Warehouse
 
 
@@ -90,7 +90,7 @@ def _seed_prediction_outcome_history(wh: Warehouse) -> None:
     successes = [False, False, False, True, True, True]
     prediction_rows = []
     outcome_rows = []
-    for idx, (score, success) in enumerate(zip(raw_scores, successes)):
+    for idx, (score, success) in enumerate(zip(raw_scores, successes, strict=True)):
         decision = base + pd.Timedelta(minutes=idx)
         observed = decision + pd.Timedelta(minutes=5)
         request_id = f"req-{idx}"
@@ -195,9 +195,7 @@ def test_build_execution_calibration_dataset_is_pit_safe(tmp_path: Path) -> None
     wh = _warehouse(tmp_path)
     _seed_prediction_outcome_history(wh)
 
-    dataset = build_execution_calibration_dataset(
-        wh, asof="2026-01-02T14:30:00Z", fill_ratio_threshold=0.999
-    )
+    dataset = build_execution_calibration_dataset(wh, asof="2026-01-02T14:30:00Z", fill_ratio_threshold=0.999)
 
     assert len(dataset) == 6
     assert set(dataset["request_id"]) == {f"req-{i}" for i in range(6)}
@@ -220,8 +218,7 @@ def test_calibrate_execution_confidence_persists_probability_and_slippage_models
     calibration_rows = wh.read_calibration_models()
     assert set(calibration_rows["target"]) >= {FILL_SUCCESS_TARGET, SLIPPAGE_TARGET}
     fill_row = calibration_rows.loc[
-        (calibration_rows["target"] == FILL_SUCCESS_TARGET)
-        & (calibration_rows["method"] == FILL_SUCCESS_METHOD)
+        (calibration_rows["target"] == FILL_SUCCESS_TARGET) & (calibration_rows["method"] == FILL_SUCCESS_METHOD)
     ].iloc[0]
     fill_meta = json.loads(fill_row["metadata_json"])
     assert int(fill_row["observations"]) == 6
@@ -230,8 +227,7 @@ def test_calibrate_execution_confidence_persists_probability_and_slippage_models
     assert "metrics" in fill_meta
 
     slippage_row = calibration_rows.loc[
-        (calibration_rows["target"] == SLIPPAGE_TARGET)
-        & (calibration_rows["method"] == SLIPPAGE_METHOD)
+        (calibration_rows["target"] == SLIPPAGE_TARGET) & (calibration_rows["method"] == SLIPPAGE_METHOD)
     ].iloc[0]
     assert int(slippage_row["observations"]) == 6
 
@@ -291,5 +287,7 @@ def test_score_execution_confidence_skips_future_calibrator_for_historical_decis
 
     assert response.metadata["probability_calibration_applied"] is False
     assert response.metadata["slippage_calibration_applied"] is False
-    assert response.metadata["probability_calibration_skip_reason"] == "calibrator_not_pit_usable_for_decision_timestamp"
+    assert (
+        response.metadata["probability_calibration_skip_reason"] == "calibrator_not_pit_usable_for_decision_timestamp"
+    )
     assert response.metadata["raw_confidence_score"] == response.confidence_score

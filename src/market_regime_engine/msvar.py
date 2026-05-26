@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import overload
+from typing import Any, overload
 
 import numpy as np
 import pandas as pd
@@ -104,7 +104,7 @@ class MarkovSwitchingVAR:
     prior: np.ndarray = field(default_factory=lambda: np.array([]))
 
     fitted: bool = False
-    fit_log: dict[str, float] = field(default_factory=dict)
+    fit_log: dict[str, Any] = field(default_factory=dict)
     # v1.6.0 (REVIEW_DEEP_V1_5_2.md §1.5): the prior emission means at
     # init time act as the pin reference so EM-converged labels stay
     # stable across re-fits (mirrors HMMRegimePosterior._pin_to_handprior_labels).
@@ -272,7 +272,9 @@ class MarkovSwitchingVAR:
                 if w.sum() < d + 2:
                     new_intercepts[k] = self.intercepts[k]
                     new_coefficients[k] = self.coefficients[k]
-                    cov_shrunk, intensity, cond = self._shrink_covariance(self.covariances[k], effective_n=float(w.sum()))
+                    cov_shrunk, intensity, cond = self._shrink_covariance(
+                        self.covariances[k], effective_n=float(w.sum())
+                    )
                     new_covariances[k] = cov_shrunk
                     max_cov_condition = max(max_cov_condition, cond if np.isfinite(cond) else float("inf"))
                     max_shrinkage_intensity = max(max_shrinkage_intensity, intensity)

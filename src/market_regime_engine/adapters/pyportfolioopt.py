@@ -23,7 +23,9 @@ class RegimeConditionedInputs:
     block_reason: str | None = None
 
 
-def allocation_permission(signals: pd.DataFrame, *, confidence_floor: float = 0.50) -> tuple[bool, str | None, pd.Series]:
+def allocation_permission(
+    signals: pd.DataFrame, *, confidence_floor: float = 0.50
+) -> tuple[bool, str | None, pd.Series]:
     governed = normalize_governed_signals(signals)
     assert_governed_signal_contract(governed)
     latest = governed.iloc[-1]

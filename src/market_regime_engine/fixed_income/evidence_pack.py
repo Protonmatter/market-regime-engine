@@ -185,9 +185,7 @@ def _pack_to_canonical_dict(
     if not request_id_bound:
         raw.pop("request_id", None)
     if isinstance(metadata, dict) and _ENVELOPE_HASH_METADATA_KEY in metadata:
-        raw["metadata"] = {
-            k: v for k, v in metadata.items() if k != _ENVELOPE_HASH_METADATA_KEY
-        }
+        raw["metadata"] = {k: v for k, v in metadata.items() if k != _ENVELOPE_HASH_METADATA_KEY}
     # v1.6.0 (REVIEW_DEEP_V1_5_2.md section 2.5): under the RFC 8785
     # encoder the dict must be JSON-native (no datetime / Decimal /
     # Path / set). ``coerce_for_canonical`` is the documented
@@ -314,9 +312,7 @@ def compute_pack_hash(
     transition an existing pack to the new encoder).
     """
     resolved = version if version is not None else _pack_canonical_version(pack)
-    return canonical_sha256(
-        _pack_to_canonical_dict(pack, version=resolved), version=resolved
-    )
+    return canonical_sha256(_pack_to_canonical_dict(pack, version=resolved), version=resolved)
 
 
 def canonical_pack_payload(
@@ -335,9 +331,7 @@ def canonical_pack_payload(
     encoder-version resolution rules.
     """
     resolved = version if version is not None else _pack_canonical_version(pack)
-    return canonical_json(
-        _pack_to_canonical_dict(pack, version=resolved), version=resolved
-    )
+    return canonical_json(_pack_to_canonical_dict(pack, version=resolved), version=resolved)
 
 
 def verify_pack_hash(pack: FixedIncomeEvidencePack, expected_hash: str) -> bool:
@@ -413,13 +407,9 @@ def get_hmac_keys() -> dict[str, bytes]:
         try:
             mapping = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"{_HMAC_KEY_VERSIONS_ENV} must be a JSON object: {exc}"
-            ) from exc
+            raise RuntimeError(f"{_HMAC_KEY_VERSIONS_ENV} must be a JSON object: {exc}") from exc
         if not isinstance(mapping, dict):
-            raise RuntimeError(
-                f"{_HMAC_KEY_VERSIONS_ENV} must decode to a JSON object; got {type(mapping).__name__}"
-            )
+            raise RuntimeError(f"{_HMAC_KEY_VERSIONS_ENV} must decode to a JSON object; got {type(mapping).__name__}")
         out: dict[str, bytes] = {}
         for version, value in mapping.items():
             if not isinstance(version, str) or not version:
@@ -528,11 +518,7 @@ def sign_pack(
     components (e.g. ``credit_regime``) are exempt because they do
     not consume an inbound request id.
     """
-    if (
-        require_production_hmac()
-        and pack.component_name == "execution_confidence"
-        and not pack.request_id
-    ):
+    if require_production_hmac() and pack.component_name == "execution_confidence" and not pack.request_id:
         raise RuntimeError(
             "FI HMAC production mode (MRE_ENV=production or "
             "MRE_FI_REQUIRE_HMAC=1) requires request_id on "
@@ -552,10 +538,7 @@ def sign_pack(
     if key_version is None:
         key_version = latest_hmac_version()
     if key_version not in keys:
-        raise RuntimeError(
-            f"HMAC key version {key_version!r} is not in the configured "
-            f"versions {sorted(keys)!r}"
-        )
+        raise RuntimeError(f"HMAC key version {key_version!r} is not in the configured versions {sorted(keys)!r}")
     payload = canonical_pack_payload(pack)
     digest = _hmac_hex(keys[key_version], payload)
     signature = f"{key_version}:{digest}"
@@ -832,8 +815,7 @@ def write_evidence_pack(
         signed = sign_pack(stamped)
         if signed.hmac_signature is None:
             raise RuntimeError(
-                "sign=True requested but no HMAC keys are configured "
-                "(set MRE_FI_HMAC_KEY_VERSIONS or MRE_FI_HMAC_KEY)"
+                "sign=True requested but no HMAC keys are configured (set MRE_FI_HMAC_KEY_VERSIONS or MRE_FI_HMAC_KEY)"
             )
     elif sign is False:
         if require_production_hmac():
@@ -869,9 +851,7 @@ def read_evidence_pack(
     ``latest_evidence_pack`` (older callers / test mocks).
     """
     if hasattr(warehouse, "latest_evidence_pack"):
-        sub = warehouse.latest_evidence_pack(
-            model_run_id, request_id=request_id
-        )
+        sub = warehouse.latest_evidence_pack(model_run_id, request_id=request_id)
         if sub is None or sub.empty:
             return None
         row = sub.iloc[0]
@@ -944,16 +924,11 @@ def _row_to_pack(row: pd.Series) -> FixedIncomeEvidencePack:
     """
     hmac_sig = (
         None
-        if pd.isna(row.get("hmac_signature"))
-        or row.get("hmac_signature") in ("", None)
+        if pd.isna(row.get("hmac_signature")) or row.get("hmac_signature") in ("", None)
         else str(row["hmac_signature"])
     )
     row_rid = row.get("request_id")
-    has_row_rid = (
-        row_rid is not None
-        and not (isinstance(row_rid, float) and pd.isna(row_rid))
-        and str(row_rid) != ""
-    )
+    has_row_rid = row_rid is not None and not (isinstance(row_rid, float) and pd.isna(row_rid)) and str(row_rid) != ""
     request_id_for_pack: str | None = str(row_rid) if has_row_rid else None
     return FixedIncomeEvidencePack(
         model_run_id=str(row["model_run_id"]),
@@ -968,13 +943,8 @@ def _row_to_pack(row: pd.Series) -> FixedIncomeEvidencePack:
         validation_results=_parse_json_field(row.get("validation_results_json")),
         release_gate=bool(int(row["release_gate"])),
         random_seeds=_parse_json_field(row.get("random_seeds_json")),
-        python_version=(
-            None if pd.isna(row.get("python_version")) else str(row["python_version"])
-        )
-        or "",
-        lockfile_hash=(
-            None if pd.isna(row.get("lockfile_hash")) else str(row["lockfile_hash"])
-        ),
+        python_version=(None if pd.isna(row.get("python_version")) else str(row["python_version"])) or "",
+        lockfile_hash=(None if pd.isna(row.get("lockfile_hash")) else str(row["lockfile_hash"])),
         hmac_signature=hmac_sig,
         metadata=_parse_json_field(row.get("metadata_json")),
         request_id=request_id_for_pack,

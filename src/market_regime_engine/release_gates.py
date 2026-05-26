@@ -636,11 +636,7 @@ def evaluate_release_gate(
     # well-formed payload with no significant segment may emit the
     # ``tca_lift_no_significant_segment`` rejection reason.
     lift: dict[str, dict[str, float]] = {}
-    if (
-        max_tca_p is not None
-        and min_tca_effect is not None
-        and tca_lift_raw is not None
-    ):
+    if max_tca_p is not None and min_tca_effect is not None and tca_lift_raw is not None:
         lift = _coerce_tca_lift_payload(tca_lift_raw)
         if not lift:
             reasons.append("tca_lift_missing_or_invalid")
@@ -649,19 +645,14 @@ def evaluate_release_gate(
             # lower observed slippage than low-confidence executions. A large
             # negative effect is adverse evidence, not a reason to certify.
             best_passes = any(
-                float(row["p_value"]) <= max_tca_p
-                and float(row["effect_size"]) >= min_tca_effect
+                float(row["p_value"]) <= max_tca_p and float(row["effect_size"]) >= min_tca_effect
                 for row in lift.values()
             )
             if not best_passes:
                 reasons.append("tca_lift_no_significant_segment")
                 reasons.append("tca_lift_no_positive_significant_segment")
             if min_tca_lift_n is not None:
-                underpowered = [
-                    name
-                    for name, row in lift.items()
-                    if int(float(row.get("n", 0.0))) < min_tca_lift_n
-                ]
+                underpowered = [name for name, row in lift.items() if int(float(row.get("n", 0.0))) < min_tca_lift_n]
                 if underpowered:
                     reasons.append("tca_lift_underpowered_segments")
 
@@ -688,10 +679,13 @@ def evaluate_release_gate(
             raw_n = certification_fields.get("min_regime_sample_size")
             if raw_n is None:
                 raw_n = certification_fields.get("min_regime_n")
-            try:
-                regime_n = int(raw_n)
-            except Exception:
+            if raw_n is None:
                 regime_n = 0
+            else:
+                try:
+                    regime_n = int(raw_n)
+                except Exception:
+                    regime_n = 0
             if regime_n < min_regime_sample_size:
                 reasons.append("certification_regime_sample_size_below_floor")
         if tca_lift_raw is None:

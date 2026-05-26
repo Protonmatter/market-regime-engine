@@ -46,7 +46,11 @@ def to_vectorbt_signals(
     states = governed["regime_state"].str.lower()
     long_state = states.isin({s.lower() for s in long_regimes}).astype(float)
     risk_state = states.isin({s.lower() for s in risk_off_regimes})
-    gate_ok = governed["release_gate_approved"].astype(bool) if require_release_gate else pd.Series(True, index=governed.index)
+    gate_ok = (
+        governed["release_gate_approved"].astype(bool)
+        if require_release_gate
+        else pd.Series(True, index=governed.index)
+    )
     confidence = governed["confidence_score"].astype(float).clip(0.0, 1.0)
     cp_ok = (1.0 - governed["change_point_prob"].astype(float).clip(0.0, 1.0)).clip(0.0, 1.0)
     drawdown_ok = (1.0 - governed["drawdown_prob"].astype(float).clip(0.0, 1.0)).clip(0.0, 1.0)
@@ -54,8 +58,11 @@ def to_vectorbt_signals(
     entry_score = long_state * confidence * cp_ok * drawdown_ok * gate_ok.astype(float)
     confidence_ok = confidence >= float(min_confidence)
     entries = entry_score >= float(entry_threshold)
-    risk_off = risk_state | ~gate_ok | (governed["change_point_prob"].astype(float) > float(max_change_point_prob)) | (
-        governed["drawdown_prob"].astype(float) > float(max_drawdown_prob)
+    risk_off = (
+        risk_state
+        | ~gate_ok
+        | (governed["change_point_prob"].astype(float) > float(max_change_point_prob))
+        | (governed["drawdown_prob"].astype(float) > float(max_drawdown_prob))
     )
     exits = risk_off | ~confidence_ok | (entry_score <= float(exit_threshold))
 

@@ -16,6 +16,7 @@ from market_regime_engine.storage_registry import (
     registered_tables,
 )
 
+
 class _Backend(Protocol):
     """Minimal backend interface used by the Warehouse facade."""
 
@@ -48,7 +49,6 @@ class _Backend(Protocol):
     def column_names(self, table: str) -> set[str]: ...
 
 
-
 def _sqlite_scalar(value: Any) -> Any:
     """Coerce pandas/numpy scalar values to sqlite3-bindable values."""
     if isinstance(value, pd.Timestamp):
@@ -61,10 +61,8 @@ def _sqlite_scalar(value: Any) -> Any:
     except Exception:
         pass
     if hasattr(value, "item"):
-        try:
+        with contextlib.suppress(Exception):
             value = value.item()
-        except Exception:
-            pass
     if hasattr(value, "isoformat") and value.__class__.__module__.startswith(("datetime", "pandas")):
         try:
             return value.isoformat()
@@ -437,8 +435,8 @@ def _select_backend(path: Path, backend: BackendName) -> _Backend:
 
 __all__ = [
     "_Backend",
-    "_SqliteBackend",
     "_DuckDBBackend",
-    "_select_backend",
+    "_SqliteBackend",
     "_quote_columns",
+    "_select_backend",
 ]

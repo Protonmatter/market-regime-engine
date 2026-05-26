@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: F405
+# mypy: disable-error-code=name-defined
 from __future__ import annotations
 
 import argparse
 
-from market_regime_engine.cli_handlers import *  # noqa: F401,F403 - parser binds handler names
+from market_regime_engine.cli_handlers import *  # noqa: F403 - parser binds handler names
+
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mre")
@@ -485,7 +488,6 @@ def parser() -> argparse.ArgumentParser:
     s.set_defaults(func=refresh_release_calendars_cmd)
 
     return p
-
 
 
 __all__ = ["parser"]

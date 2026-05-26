@@ -58,8 +58,7 @@ def _emit_bin_collapse_warning(populated: int, requested: int) -> None:
     """
     if requested >= 2 and populated * 2 < requested:
         warnings.warn(
-            f"ECE bin collapse: only {populated}/{requested} bins populated; "
-            "ECE may understate miscalibration",
+            f"ECE bin collapse: only {populated}/{requested} bins populated; ECE may understate miscalibration",
             RuntimeWarning,
             stacklevel=3,
         )
@@ -135,9 +134,7 @@ def calibration_table(
         edges = np.linspace(0.0, 1.0, requested_bins + 1)
         frame["bin"] = pd.cut(frame["p"], edges, include_lowest=True)
     else:
-        raise ValueError(
-            f"bin_strategy must be 'equal_width' or 'equal_mass'; got {bin_strategy!r}"
-        )
+        raise ValueError(f"bin_strategy must be 'equal_width' or 'equal_mass'; got {bin_strategy!r}")
     out = (
         frame.groupby("bin", observed=True)
         .agg(count=("y", "size"), pred_mean=("p", "mean"), actual_rate=("y", "mean"))

@@ -43,18 +43,12 @@ def test_fixed_income_api_facade_preserves_router_and_schema() -> None:
 
 def _release_gate_inputs() -> dict:
     return {
-        "confidence": pd.DataFrame(
-            [{"date": "2026-01-01", "confidence": 0.90, "grade": "A"}]
-        ),
-        "drift": pd.DataFrame(
-            [{"date": "2026-01-01", "feature_name": "x", "psi": 0.0, "status": "ok"}]
-        ),
+        "confidence": pd.DataFrame([{"date": "2026-01-01", "confidence": 0.90, "grade": "A"}]),
+        "drift": pd.DataFrame([{"date": "2026-01-01", "feature_name": "x", "psi": 0.0, "status": "ok"}]),
         "invalidation": pd.DataFrame(
             [{"date": "2026-01-01", "trigger": "none", "severity": "low", "status": "inactive"}]
         ),
-        "promotion": pd.DataFrame(
-            [{"date": "2026-01-01", "promoted": True, "mcs_evidence": "in_set"}]
-        ),
+        "promotion": pd.DataFrame([{"date": "2026-01-01", "promoted": True, "mcs_evidence": "in_set"}]),
         "profile": "default",
     }
 

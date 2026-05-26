@@ -56,19 +56,13 @@ def _candidate_to_artifact(score: ProtocolScore) -> dict[str, Any]:
         "protocol": str(score.protocol),
         "execution_score_ppm": prob_to_ppm(score.confidence_score),
         "expected_slippage_bps_q4": (
-            bps_to_q4(score.expected_slippage_bps)
-            if score.expected_slippage_bps is not None
-            else None
+            bps_to_q4(score.expected_slippage_bps) if score.expected_slippage_bps is not None else None
         ),
         "confidence_interval_low_ppm": (
-            prob_to_ppm(score.confidence_interval_low)
-            if score.confidence_interval_low is not None
-            else None
+            prob_to_ppm(score.confidence_interval_low) if score.confidence_interval_low is not None else None
         ),
         "confidence_interval_high_ppm": (
-            prob_to_ppm(score.confidence_interval_high)
-            if score.confidence_interval_high is not None
-            else None
+            prob_to_ppm(score.confidence_interval_high) if score.confidence_interval_high is not None else None
         ),
         "recommended_action": str(score.recommended_action),
         "human_review_required": bool(score.human_review_required),
@@ -147,9 +141,7 @@ def build_xpro_decision_artifact(
             },
             "protocol_requested": str(request.protocol),
             "limit_price": (
-                {"value": price_to_q6(request.limit_price), "scale": "q6"}
-                if request.limit_price is not None
-                else None
+                {"value": price_to_q6(request.limit_price), "scale": "q6"} if request.limit_price is not None else None
             ),
             "urgency": _safe_text(request.urgency),
             "sector": _safe_text(request.sector),
@@ -158,27 +150,19 @@ def build_xpro_decision_artifact(
             "client_request_id": _safe_text(request.client_request_id),
             "metadata_hash": _metadata_hash(request.metadata),
         },
-        "candidate_protocol_scores": [
-            _candidate_to_artifact(score) for score in recommendation.candidate_scores
-        ],
+        "candidate_protocol_scores": [_candidate_to_artifact(score) for score in recommendation.candidate_scores],
         "model_outputs": {
             "execution_confidence": {
                 "protocol": str(best.protocol),
                 "score_ppm": prob_to_ppm(best.confidence_score),
                 "expected_slippage_bps_q4": (
-                    bps_to_q4(best.expected_slippage_bps)
-                    if best.expected_slippage_bps is not None
-                    else None
+                    bps_to_q4(best.expected_slippage_bps) if best.expected_slippage_bps is not None else None
                 ),
                 "confidence_interval_low_ppm": (
-                    prob_to_ppm(best.confidence_interval_low)
-                    if best.confidence_interval_low is not None
-                    else None
+                    prob_to_ppm(best.confidence_interval_low) if best.confidence_interval_low is not None else None
                 ),
                 "confidence_interval_high_ppm": (
-                    prob_to_ppm(best.confidence_interval_high)
-                    if best.confidence_interval_high is not None
-                    else None
+                    prob_to_ppm(best.confidence_interval_high) if best.confidence_interval_high is not None else None
                 ),
                 "recommended_action": str(best.recommended_action),
                 "release_gate": bool(best.release_gate),

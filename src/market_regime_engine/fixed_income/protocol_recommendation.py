@@ -101,19 +101,13 @@ def recommend_execution_protocol(
                 artifact_hash=response.artifact_hash,
                 human_review_required=bool(response.human_review_required),
                 expected_slippage_bps=(
-                    float(response.expected_slippage_bps)
-                    if response.expected_slippage_bps is not None
-                    else None
+                    float(response.expected_slippage_bps) if response.expected_slippage_bps is not None else None
                 ),
                 confidence_interval_low=(
-                    float(response.confidence_interval_low)
-                    if response.confidence_interval_low is not None
-                    else None
+                    float(response.confidence_interval_low) if response.confidence_interval_low is not None else None
                 ),
                 confidence_interval_high=(
-                    float(response.confidence_interval_high)
-                    if response.confidence_interval_high is not None
-                    else None
+                    float(response.confidence_interval_high) if response.confidence_interval_high is not None else None
                 ),
                 model_run_id=response.model_run_id,
                 reason=str(dict(response.metadata).get("reason") or ""),
@@ -158,7 +152,7 @@ __all__ = [
     "DEFAULT_CANDIDATE_PROTOCOLS",
     "DEFAULT_TIE_BREAK_ORDER",
     "ProtocolCandidateScore",
-    "ProtocolScore",
     "ProtocolRecommendation",
+    "ProtocolScore",
     "recommend_execution_protocol",
 ]

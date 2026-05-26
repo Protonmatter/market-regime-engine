@@ -140,13 +140,15 @@ def validate_production_settings(env: Mapping[str, str] | None = None) -> Produc
         db_path = values.get("MRE_DB_PATH", "").strip()
         if db_path and Path(db_path).suffix.lower() == ".db":
             warnings.append("MRE_DB_PATH uses a .db suffix; DuckDB production deployments should prefer .duckdb")
-        if values.get("MRE_LEGACY_API_ALLOW_UNAUTH", "").strip() == "1" and values.get(
-            "MRE_ALLOW_LEGACY_API_IN_PRODUCTION", ""
-        ).strip() != "1":
+        if (
+            values.get("MRE_LEGACY_API_ALLOW_UNAUTH", "").strip() == "1"
+            and values.get("MRE_ALLOW_LEGACY_API_IN_PRODUCTION", "").strip() != "1"
+        ):
             errors.append("legacy unauthenticated API is not allowed in production")
-        if values.get("MRE_CACHE_BACKEND", "").strip().lower() == "redis" and not values.get(
-            "MRE_REDIS_URL", ""
-        ).strip():
+        if (
+            values.get("MRE_CACHE_BACKEND", "").strip().lower() == "redis"
+            and not values.get("MRE_REDIS_URL", "").strip()
+        ):
             errors.append("MRE_REDIS_URL is required when MRE_CACHE_BACKEND=redis in production")
         if _truthy(values.get("MRE_CACHE_ALLOW_PICKLE")):
             errors.append("MRE_CACHE_ALLOW_PICKLE is forbidden in production")
@@ -157,12 +159,8 @@ def validate_production_settings(env: Mapping[str, str] | None = None) -> Produc
         # tamper-evident. Either ``MRE_FI_HMAC_KEY_VERSIONS``
         # (preferred) or the legacy ``MRE_FI_HMAC_KEY`` single-
         # version env var satisfies the contract.
-        has_hmac_versions = bool(
-            values.get("MRE_FI_HMAC_KEY_VERSIONS", "").strip()
-        )
-        has_hmac_legacy = bool(
-            values.get("MRE_FI_HMAC_KEY", "").strip()
-        )
+        has_hmac_versions = bool(values.get("MRE_FI_HMAC_KEY_VERSIONS", "").strip())
+        has_hmac_legacy = bool(values.get("MRE_FI_HMAC_KEY", "").strip())
         if not (has_hmac_versions or has_hmac_legacy):
             errors.append(
                 "MRE_FI_HMAC_KEY_VERSIONS (or legacy MRE_FI_HMAC_KEY) "
@@ -177,13 +175,9 @@ def validate_production_settings(env: Mapping[str, str] | None = None) -> Produc
         # the env var is actually set in the first place AND that
         # slowapi imports cleanly so the rate-limit fail-closed
         # contract holds end-to-end.
-        rate_limit_raw = (
-            values.get("MRE_FI_RATE_LIMIT_ENABLED", "").strip().lower()
-        )
+        rate_limit_raw = values.get("MRE_FI_RATE_LIMIT_ENABLED", "").strip().lower()
         if rate_limit_raw not in {"1", "true", "yes", "on"}:
-            errors.append(
-                "MRE_FI_RATE_LIMIT_ENABLED must be set (1/true/yes/on) in production"
-            )
+            errors.append("MRE_FI_RATE_LIMIT_ENABLED must be set (1/true/yes/on) in production")
         else:
             try:
                 import importlib

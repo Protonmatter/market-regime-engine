@@ -36,7 +36,7 @@ REQUIRED_SECTIONS = [
 
 def test_required_method_cards_exist() -> None:
     existing = {p.name for p in CARDS.glob("*.md")}
-    assert REQUIRED <= existing
+    assert existing >= REQUIRED
 
 
 def test_method_cards_have_required_sections_and_tests() -> None:

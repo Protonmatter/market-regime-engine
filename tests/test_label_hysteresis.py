@@ -113,41 +113,20 @@ def test_hysteresis_transitions_when_score_clears_exit() -> None:
     # NORMAL band exit is 25.0 — score = 25 is at the edge, stays
     # NORMAL. 25.01 is strictly past — sharp bucket maps to
     # MILD_STRESS.
-    assert (
-        classify_liquidity_with_hysteresis(24.99, LiquidityLabel.NORMAL)
-        is LiquidityLabel.NORMAL
-    )
-    assert (
-        classify_liquidity_with_hysteresis(25.0, LiquidityLabel.NORMAL)
-        is LiquidityLabel.NORMAL
-    )
-    assert (
-        classify_liquidity_with_hysteresis(25.01, LiquidityLabel.NORMAL)
-        is LiquidityLabel.MILD_STRESS
-    )
+    assert classify_liquidity_with_hysteresis(24.99, LiquidityLabel.NORMAL) is LiquidityLabel.NORMAL
+    assert classify_liquidity_with_hysteresis(25.0, LiquidityLabel.NORMAL) is LiquidityLabel.NORMAL
+    assert classify_liquidity_with_hysteresis(25.01, LiquidityLabel.NORMAL) is LiquidityLabel.MILD_STRESS
     # MILD_STRESS band (20, 45) — score = 45 is at the edge, stays.
     # 45.01 falls through to sharp ELEVATED_STRESS.
-    assert (
-        classify_liquidity_with_hysteresis(45.0, LiquidityLabel.MILD_STRESS)
-        is LiquidityLabel.MILD_STRESS
-    )
-    assert (
-        classify_liquidity_with_hysteresis(45.01, LiquidityLabel.MILD_STRESS)
-        is LiquidityLabel.ELEVATED_STRESS
-    )
+    assert classify_liquidity_with_hysteresis(45.0, LiquidityLabel.MILD_STRESS) is LiquidityLabel.MILD_STRESS
+    assert classify_liquidity_with_hysteresis(45.01, LiquidityLabel.MILD_STRESS) is LiquidityLabel.ELEVATED_STRESS
     # Downward transition: ELEVATED_STRESS → NORMAL when the score
     # drops strictly below ELEVATED's enter threshold (40). The
     # intermediate MILD_STRESS is skipped because the sharp-bucket
     # re-classify maps 18 → NORMAL.
-    assert (
-        classify_liquidity_with_hysteresis(18.0, LiquidityLabel.ELEVATED_STRESS)
-        is LiquidityLabel.NORMAL
-    )
+    assert classify_liquidity_with_hysteresis(18.0, LiquidityLabel.ELEVATED_STRESS) is LiquidityLabel.NORMAL
     # CRISIS_LIQUIDITY → SEVERE_STRESS when score drops below 80.
-    assert (
-        classify_liquidity_with_hysteresis(75.0, LiquidityLabel.CRISIS_LIQUIDITY)
-        is LiquidityLabel.SEVERE_STRESS
-    )
+    assert classify_liquidity_with_hysteresis(75.0, LiquidityLabel.CRISIS_LIQUIDITY) is LiquidityLabel.SEVERE_STRESS
 
 
 def test_hysteresis_applied_to_credit_regime_too() -> None:
@@ -156,21 +135,14 @@ def test_hysteresis_applied_to_credit_regime_too() -> None:
     assert classify_credit_with_hysteresis(22.0, RegimeLabel.RISK_ON_COMPRESSION) is RegimeLabel.RISK_ON_COMPRESSION
     # WATCH_TRANSITION band is (40, 65); a previous WATCH stays WATCH
     # at a sharp-bucket NORMAL_LIQUIDITY-ish 44 AND at the 65 edge.
-    assert (
-        classify_credit_with_hysteresis(44.0, RegimeLabel.WATCH_TRANSITION)
-        is RegimeLabel.WATCH_TRANSITION
-    )
+    assert classify_credit_with_hysteresis(44.0, RegimeLabel.WATCH_TRANSITION) is RegimeLabel.WATCH_TRANSITION
     # v1.6.0 F3: closed [enter, exit] convention — score = 65 is the
     # edge, stays WATCH (was: flipped under the old half-open).
-    assert (
-        classify_credit_with_hysteresis(65.0, RegimeLabel.WATCH_TRANSITION)
-        is RegimeLabel.WATCH_TRANSITION
-    )
+    assert classify_credit_with_hysteresis(65.0, RegimeLabel.WATCH_TRANSITION) is RegimeLabel.WATCH_TRANSITION
     # 65.01 is strictly past the exit → sharp bucket maps to
     # RISK_OFF_HIGH_RISK_AVERSION.
     assert (
-        classify_credit_with_hysteresis(65.01, RegimeLabel.WATCH_TRANSITION)
-        is RegimeLabel.RISK_OFF_HIGH_RISK_AVERSION
+        classify_credit_with_hysteresis(65.01, RegimeLabel.WATCH_TRANSITION) is RegimeLabel.RISK_OFF_HIGH_RISK_AVERSION
     )
     # CRISIS_SEVERE_DISLOCATION → drop below 80 transitions out.
     assert (
@@ -212,6 +184,7 @@ def test_hysteresis_bands_liquidity_cover_all_labels() -> None:
     """Defence-in-depth: every liquidity label has an entry in the band table."""
     assert set(HYSTERESIS_BANDS_LIQUIDITY) == set(LiquidityLabel)
 
+
 def test_hysteresis_no_oscillation_at_exact_boundary() -> None:
     """v1.6.0 regression test (REVIEW_DEEP_V1_5_2.md F3 /
     Finding §3.9): repeated calls with the same exact-boundary
@@ -239,4 +212,3 @@ def test_hysteresis_no_oscillation_at_exact_boundary() -> None:
         new = classify_liquidity_with_hysteresis(20.0, label)
         assert new is label, f"MILD_STRESS oscillated at score=20 -> {new}"
         label = new
-

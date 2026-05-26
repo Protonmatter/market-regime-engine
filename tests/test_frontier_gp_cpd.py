@@ -51,8 +51,7 @@ def test_gp_bocpd_detects_synthetic_changepoint():
     pre_max = float(out["change_point_prob"].iloc[20:45].max())
     post_max = float(out["change_point_prob"].iloc[55:80].max())
     assert post_max > pre_max, (
-        f"post-change max cp_prob {post_max:.3f} should exceed pre-change "
-        f"max cp_prob {pre_max:.3f}"
+        f"post-change max cp_prob {post_max:.3f} should exceed pre-change max cp_prob {pre_max:.3f}"
     )
 
 

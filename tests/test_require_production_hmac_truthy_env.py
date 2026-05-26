@@ -23,9 +23,7 @@ from market_regime_engine.fixed_income.evidence_pack import require_production_h
     "value",
     ["1", "true", "True", "TRUE", "yes", "YES", "on", "ON", " 1 ", "  true\t"],
 )
-def test_require_production_hmac_truthy_values_enforce(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_require_production_hmac_truthy_values_enforce(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.delenv("MRE_ENV", raising=False)
     monkeypatch.setenv("MRE_FI_REQUIRE_HMAC", value)
     assert require_production_hmac() is True
@@ -35,9 +33,7 @@ def test_require_production_hmac_truthy_values_enforce(
     "value",
     ["0", "false", "no", "off", "", "  ", "maybe", "2"],
 )
-def test_require_production_hmac_falsy_values_do_not_enforce(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_require_production_hmac_falsy_values_do_not_enforce(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.delenv("MRE_ENV", raising=False)
     monkeypatch.setenv("MRE_FI_REQUIRE_HMAC", value)
     assert require_production_hmac() is False

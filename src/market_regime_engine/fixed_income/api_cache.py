@@ -110,7 +110,6 @@ def _latest_liquidity_timestamp(
     return str(df.iloc[-1]["timestamp"])
 
 
-
 __all__ = [
     "_fi_cache_get_or_compute",
     "_latest_credit_regime_timestamp",

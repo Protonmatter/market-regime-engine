@@ -1,6 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-from __future__ import annotations
-
 """Backward-compatible Fixed-Income API facade.
 
 The router has been split into focused modules:
@@ -15,24 +12,17 @@ This module preserves historical imports such as
 monkeypatch-compatible scorer bindings for existing tests.
 """
 
+# SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 from market_regime_engine.fixed_income.api_cache import (
-    _fi_cache_get_or_compute,
-    _latest_credit_regime_timestamp,
-    _latest_liquidity_timestamp,
-    _warehouse_identity,
     reset_fi_cache,
 )
 from market_regime_engine.fixed_income.api_handlers import (
-    _close_if_not_pooled,
-    _resolve_db_path,
-    _stub_response,
-    _warehouse_factory_default,
     build_router,
 )
 from market_regime_engine.fixed_income.api_middleware import (
-    _BODY_SIZE_CAP_BYTES,
     _build_rate_limiter,
-    _resolve_rate_limit_spec,
     assert_slowapi_available,
     rate_limit_enabled,
 )
@@ -57,6 +47,8 @@ from market_regime_engine.fixed_income.execution_confidence import (
 __all__ = [
     "ExecutionConfidenceRequestModel",
     "XProDecisionRequestModel",
+    "_build_rate_limiter",
+    "_signal_age_seconds_now",
     "assert_slowapi_available",
     "build_router",
     "credit_regime_output_to_dict",

@@ -56,9 +56,7 @@ def test_almon_weights_gradient_matches_finite_difference():
         w_plus = MIDASRegressor.almon_weights(theta_plus, k)
         w_minus = MIDASRegressor.almon_weights(theta_minus, k)
         numeric = (w_plus - w_minus) / (2.0 * eps)
-        assert np.allclose(analytic, numeric, atol=1e-5), (
-            f"theta_d={d} analytic={analytic} vs numeric={numeric}"
-        )
+        assert np.allclose(analytic, numeric, atol=1e-5), f"theta_d={d} analytic={analytic} vs numeric={numeric}"
 
 
 def test_midas_regressor_fit_predict_smoke():
