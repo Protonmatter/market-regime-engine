@@ -11,6 +11,7 @@ python -m pytest -q tests/test_execution_validation_certification_cli.py tests/t
 python -m pytest -q tests/test_execution_confidence.py tests/test_execution_confidence_api_endpoint.py tests/test_execution_confidence_cli.py
 python -m pytest -q tests/test_canonical_json_rfc8785.py tests/test_fixed_income_evidence_pack_hmac.py tests/test_certification_release_and_execution_validation.py
 python -m pytest -q tests/test_method_cards_docs_audit.py
+python -m pytest -q tests/test_certification_report.py
 ```
 
 If full-suite runtime needs investigation, run:
@@ -24,3 +25,12 @@ The XPro verifier accepts unsigned hash-valid artifacts in dev mode. Use strict 
 ```powershell
 mre fi-verify-xpro-decision --db data/mre.duckdb --decision-id <decision_id> --require-hmac
 ```
+
+Build and verify the release-level certification report artifact:
+
+```powershell
+python scripts/build_xpro_certification_fixture.py --db data/xpro-certification.duckdb --validation-dir data/xpro-certification-validation --force
+mre certification-report --db data/xpro-certification.duckdb --validation-dir data/xpro-certification-validation --asof 2026-01-02T00:00:00Z --out-json data/certification_report.json --dsr 0.75 --pbo 0.01 --evidence-pack-hmac v1:ci-certification-fixture --fail-on-hold
+```
+
+GitHub Actions publishes the same JSON payload as the `xpro-certification-report` artifact.

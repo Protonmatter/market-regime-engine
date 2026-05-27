@@ -328,6 +328,47 @@ jobs:
           path: data/mre.db
           retention-days: 7
 
+  xpro-certification-report:
+    name: XPro certification report artifact
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[analytics]"
+      - name: Build deterministic certification fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data .ci-artifacts
+          python scripts/build_xpro_certification_fixture.py \
+            --db data/xpro-certification.duckdb \
+            --validation-dir data/xpro-certification-validation \
+            --force
+      - name: Emit certification report
+        shell: bash
+        run: |
+          set -euo pipefail
+          mre certification-report \
+            --db data/xpro-certification.duckdb \
+            --validation-dir data/xpro-certification-validation \
+            --asof 2026-01-02T00:00:00Z \
+            --out-json .ci-artifacts/certification_report.json \
+            --dsr 0.75 \
+            --pbo 0.01 \
+            --evidence-pack-hmac v1:ci-certification-fixture \
+            --fail-on-hold
+      - name: Upload certification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: xpro-certification-report
+          path: .ci-artifacts/certification_report.json
+          retention-days: 30
+
   bench:
     name: Bench (BOCPD/WFST/PSI)
     runs-on: ubuntu-latest
