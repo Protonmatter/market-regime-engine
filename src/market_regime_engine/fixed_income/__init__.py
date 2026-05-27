@@ -25,6 +25,9 @@ Public surface (PR-1):
 - Helpers: :func:`assert_pit_safe`, :func:`canonical_sha256`.
 """
 
+import market_regime_engine.fixed_income.credit_spread_regime as _credit_spread_regime
+import market_regime_engine.fixed_income.execution_confidence as _execution_confidence
+import market_regime_engine.fixed_income.liquidity_stress as _liquidity_stress
 from market_regime_engine.fixed_income.calendars import (
     TradingCalendar,
     is_trading_day,
@@ -157,6 +160,32 @@ from market_regime_engine.fixed_income.xpro_decision import (
     verify_xpro_decision_artifact,
 )
 
+# v1.6.1 compatibility aliases: PR-9's indexed SQL reads landed as
+# ``latest_*(..., asof=...)`` methods. Keep the explicit ``*_asof`` names
+# alive for downstream callers and review checklists that adopted the earlier
+# public-name proposal. These are aliases, not wrappers, so call signatures and
+# behaviour stay exactly identical to the canonical functions.
+latest_credit_regime_score_asof = latest_credit_regime_score
+latest_liquidity_stress_score_asof = latest_liquidity_stress_score
+latest_execution_confidence_prediction_asof = latest_execution_confidence_prediction
+
+_credit_spread_regime.latest_credit_regime_score_asof = latest_credit_regime_score_asof  # type: ignore[attr-defined]
+_liquidity_stress.latest_liquidity_stress_score_asof = latest_liquidity_stress_score_asof  # type: ignore[attr-defined]
+_execution_confidence.latest_execution_confidence_prediction_asof = (  # type: ignore[attr-defined]
+    latest_execution_confidence_prediction_asof
+)
+
+for _module, _name in (
+    (_credit_spread_regime, "latest_credit_regime_score_asof"),
+    (_liquidity_stress, "latest_liquidity_stress_score_asof"),
+    (_execution_confidence, "latest_execution_confidence_prediction_asof"),
+):
+    _module_all = getattr(_module, "__all__", None)
+    if isinstance(_module_all, list) and _name not in _module_all:
+        _module_all.append(_name)
+
+del _module, _module_all, _name
+
 # v1.5 (PR-2 task B): register the FI warehouse tables with the
 # storage registry on package import. ``register_tables`` is idempotent
 # on name so a re-import is a no-op; the resulting warehouse therefore
@@ -232,9 +261,12 @@ __all__ = [
     "is_trading_day",
     "iso8601_z",
     "latest_credit_regime_score",
+    "latest_credit_regime_score_asof",
     "latest_execution_confidence_prediction",
+    "latest_execution_confidence_prediction_asof",
     "latest_hmac_version",
     "latest_liquidity_stress_score",
+    "latest_liquidity_stress_score_asof",
     "latest_tca_regime_segments",
     "list_recent_liquidity_stress_scores",
     "load_execution_probability_calibrator",
