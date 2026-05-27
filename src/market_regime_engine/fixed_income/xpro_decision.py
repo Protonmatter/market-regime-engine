@@ -9,7 +9,12 @@ from typing import Any
 
 import pandas as pd
 
-from market_regime_engine.evidence_common import canonical_json, canonical_sha256, hmac_sha256_hex
+from market_regime_engine.evidence_common import (
+    canonical_json,
+    canonical_sha256,
+    coerce_for_canonical,
+    hmac_sha256_hex,
+)
 from market_regime_engine.fixed_income.evidence_pack import (
     get_hmac_keys,
     latest_hmac_version,
@@ -46,9 +51,38 @@ def _safe_text(value: Any) -> str | None:
     return str(value)
 
 
+def _is_missing_scalar(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        return False
+    try:
+        missing = pd.isna(value)
+    except Exception:
+        return False
+    if isinstance(missing, bool):
+        return missing
+    try:
+        return bool(missing)
+    except Exception:
+        return False
+
+
+def _canonical_metadata_value(value: Any) -> Any:
+    if _is_missing_scalar(value):
+        return None
+    if isinstance(value, Mapping):
+        return {str(k): _canonical_metadata_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_metadata_value(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return [_canonical_metadata_value(v) for v in sorted(value, key=repr)]
+    return coerce_for_canonical(value)
+
+
 def _metadata_hash(metadata: Mapping[str, Any] | None) -> str:
-    text_safe = {str(k): _safe_text(v) for k, v in dict(metadata or {}).items()}
-    return canonical_sha256(text_safe, version="v2")
+    normalized = _canonical_metadata_value(dict(metadata or {}))
+    return canonical_sha256(normalized, version="v2")
 
 
 def _candidate_to_artifact(score: ProtocolScore) -> dict[str, Any]:

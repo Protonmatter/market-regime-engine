@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -112,6 +113,24 @@ def _close_if_not_pooled(warehouse: Any) -> None:
     if is_pooled_warehouse(warehouse):
         return
     close()
+
+
+def _xpro_write_context(warehouse: Any):
+    """Return the write guard required for pooled DuckDB-backed warehouses."""
+
+    try:
+        from market_regime_engine.storage import is_pooled_warehouse, pooled_warehouse_write_lock
+    except Exception:
+        return nullcontext()
+    try:
+        if not is_pooled_warehouse(warehouse):
+            return nullcontext()
+    except Exception:
+        return nullcontext()
+    path = getattr(warehouse, "path", None)
+    if path is None:
+        return nullcontext()
+    return pooled_warehouse_write_lock(path)
 
 
 def build_router(
@@ -401,7 +420,8 @@ def build_router(
                     decision_id=body.decision_id,
                     candidate_protocols=tuple(body.candidate_protocols),
                 )
-                wh.write_xpro_decision_artifact(artifact)
+                with _xpro_write_context(wh):
+                    wh.write_xpro_decision_artifact(artifact)
             except PitViolationError as exc:
                 raise HTTPException(
                     status_code=_HTTP_BAD_REQUEST,
@@ -421,16 +441,27 @@ def build_router(
                     detail={"detail": "xpro_decision_failed", "release_gate": False},
                 ) from exc
         finally:
-            pass
+            _close_if_not_pooled(wh)
         return JSONResponse(artifact, status_code=200)
 
     @router.get("/xpro/decision/{decision_id}", status_code=200)
     async def xpro_decision_get(decision_id: str) -> JSONResponse:
         wh = factory()
         try:
-            latest = wh.latest_xpro_decision_artifact(decision_id)
+            try:
+                latest = wh.latest_xpro_decision_artifact(decision_id)
+            except Exception as exc:
+                log.exception(
+                    "xpro decision read failed (decision_id=%s): %s",
+                    log_safe(decision_id),
+                    exc,
+                )
+                return JSONResponse(
+                    {"detail": "xpro_decision_read_failed", "release_gate": False},
+                    status_code=_HTTP_SERVICE_UNAVAILABLE,
+                )
         finally:
-            pass
+            _close_if_not_pooled(wh)
         if latest is None or latest.empty:
             return JSONResponse({"detail": "not_found"}, status_code=_HTTP_NOT_FOUND)
         try:
