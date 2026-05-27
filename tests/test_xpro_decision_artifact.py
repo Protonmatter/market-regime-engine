@@ -15,7 +15,7 @@ class _Warehouse:
     pass
 
 
-def _request() -> ExecutionConfidenceRequest:
+def _request(metadata: dict | None = None) -> ExecutionConfidenceRequest:
     return ExecutionConfidenceRequest(
         timestamp="2026-05-26T12:31:00Z",
         cusip="123456AB7",
@@ -25,7 +25,7 @@ def _request() -> ExecutionConfidenceRequest:
         limit_price=101.25,
         urgency="normal",
         rating="BBB+",
-        metadata={"mid_price": "101.00"},
+        metadata={"mid_price": "101.00"} if metadata is None else metadata,
     )
 
 
@@ -92,6 +92,91 @@ def test_xpro_decision_artifact_is_fixed_point_and_hash_stable(monkeypatch) -> N
         )["evidence"]["artifact_hash"]
         == artifact["evidence"]["artifact_hash"]
     )
+
+
+def test_xpro_metadata_hash_canonicalizes_nested_values(monkeypatch) -> None:
+    from market_regime_engine.evidence_common import canonical_sha256
+    from market_regime_engine.fixed_income.protocol_recommendation import (
+        ProtocolRecommendation,
+        ProtocolScore,
+    )
+    from market_regime_engine.fixed_income.schemas import ExecutionConfidenceResponse
+
+    monkeypatch.setattr(
+        "market_regime_engine.fixed_income.xpro_decision.recommend_execution_protocol",
+        lambda request, warehouse, **kwargs: kwargs["recommendation"],
+    )
+    response = ExecutionConfidenceResponse(
+        timestamp="2026-05-26T12:31:00Z",
+        cusip="123456AB7",
+        side="buy",
+        notional=5_000_000.0,
+        protocol="RFQ",
+        confidence_score=0.61244,
+        expected_slippage_bps=12.125,
+        confidence_interval_low=0.51244,
+        confidence_interval_high=0.71244,
+        recommended_action="Auto-X caution / trader confirm",
+        human_review_required=False,
+        model_run_id="run-1",
+        release_gate=True,
+        artifact_hash="sha256:exec",
+    )
+    recommendation = ProtocolRecommendation(
+        request=_request(),
+        recommended_protocol="RFQ",
+        candidate_scores=(ProtocolScore("RFQ", 0.61244, True, "Auto-X caution / trader confirm", "sha256:rfq", False),),
+        best_response=response,
+        release_gate=True,
+        human_review_required=False,
+        reason_codes=("rfq_ranked_best_counterfactual",),
+    )
+    metadata_a = {
+        "nested": {"b": 2, "a": 1},
+        "items": [{"z": "last", "a": "first"}],
+        "missing": None,
+    }
+    metadata_b = {
+        "missing": None,
+        "items": [{"a": "first", "z": "last"}],
+        "nested": {"a": 1, "b": 2},
+    }
+
+    artifact_a = build_xpro_decision_artifact(
+        _request(metadata_a),
+        warehouse=_Warehouse(),
+        request_id="req-1",
+        decision_id="dec-1",
+        recommendation=recommendation,
+    )
+    artifact_b = build_xpro_decision_artifact(
+        _request(metadata_b),
+        warehouse=_Warehouse(),
+        request_id="req-1",
+        decision_id="dec-1",
+        recommendation=recommendation,
+    )
+
+    expected_hash = canonical_sha256(
+        {
+            "items": [{"a": "first", "z": "last"}],
+            "missing": None,
+            "nested": {"a": 1, "b": 2},
+        },
+        version="v2",
+    )
+    legacy_repr_hash = canonical_sha256(
+        {
+            "items": "[{'z': 'last', 'a': 'first'}]",
+            "missing": None,
+            "nested": "{'b': 2, 'a': 1}",
+        },
+        version="v2",
+    )
+
+    assert artifact_a["input"]["metadata_hash"] == expected_hash
+    assert artifact_b["input"]["metadata_hash"] == expected_hash
+    assert artifact_a["input"]["metadata_hash"] != legacy_repr_hash
 
 
 def test_xpro_signature_verification_fails_on_tamper(monkeypatch) -> None:
