@@ -204,6 +204,19 @@ This build estimates and stores:
 > `<!-- ci-status-start -->` / `<!-- ci-status-end -->` sentinel block
 > will be overwritten.
 
+## Documentation map
+
+Use these focused docs when the README release narrative is too broad for the
+task at hand:
+
+| Document | Use |
+|---|---|
+| [`docs/WORKFLOW.md`](docs/WORKFLOW.md) | End-to-end operator workflows for macro/regime, live vintage, frontier, FI/XPro, API, and release validation |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | System boundaries, data-plane/control-plane design, failure domains, and change checklist |
+| [`docs/MATHEMATICS_USED.md`](docs/MATHEMATICS_USED.md) | Concise map of forecast targets, regime/change-point models, validation statistics, conformal methods, and XPro numeric contracts |
+| [`docs/INSTRUCTIONS.md`](docs/INSTRUCTIONS.md) | Install, validate, run, API, HMAC, XPro, certification, and publish instructions |
+| [`docs/HANDOFF.md`](docs/HANDOFF.md) | Current handoff for maintainers and reviewers |
+
 ## Pinned dependencies
 
 `requirements-lock.txt` is the canonical pinned dependency manifest for
