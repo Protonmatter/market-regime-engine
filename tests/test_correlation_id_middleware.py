@@ -90,6 +90,19 @@ def test_install_correlation_id_log_filter_is_idempotent() -> None:
     assert isinstance(f1, CorrelationIdLogFilter)
 
 
+def test_install_correlation_id_log_filter_attaches_existing_filter_to_new_handlers() -> None:
+    f1 = install_correlation_id_log_filter()
+    handler = logging.NullHandler()
+    root = logging.getLogger()
+    root.addHandler(handler)
+    try:
+        f2 = install_correlation_id_log_filter()
+        assert f1 is f2
+        assert any(existing is f1 for existing in handler.filters)
+    finally:
+        root.removeHandler(handler)
+
+
 def test_set_request_id_is_context_local() -> None:
     set_request_id("ctx-1")
     assert current_request_id() == "ctx-1"

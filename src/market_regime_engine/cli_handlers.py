@@ -662,6 +662,38 @@ def release_gate_cmd(args: argparse.Namespace) -> None:
         db.close()
 
 
+def certification_report_cmd(args: argparse.Namespace) -> None:
+    from market_regime_engine.certification_report import (
+        build_certification_report,
+        write_certification_report,
+    )
+
+    db = Warehouse(args.db)
+    try:
+        report = build_certification_report(
+            db,
+            validation_dir=getattr(args, "validation_dir", "data/validation"),
+            profile=getattr(args, "profile", "certification"),
+            asof=getattr(args, "asof", None),
+            run_execution_validation=not bool(getattr(args, "skip_execution_validation", False)),
+            dsr=getattr(args, "dsr", None),
+            pbo=getattr(args, "pbo", None),
+            evidence_pack_hmac=getattr(args, "evidence_pack_hmac", None),
+            model_card_path=getattr(args, "model_card_path", "docs/method_cards/execution_confidence.md"),
+            require_hmac=True if getattr(args, "require_hmac", False) else None,
+            xpro_decision_id=getattr(args, "xpro_decision_id", None),
+            frontier_diagnostics_json=getattr(args, "frontier_diagnostics_json", None),
+        )
+    finally:
+        db.close()
+    out = getattr(args, "out_json", None)
+    if out:
+        write_certification_report(out, report)
+    print(json.dumps(report, sort_keys=True))
+    if bool(getattr(args, "fail_on_hold", False)) and not bool(report.get("approved")):
+        raise SystemExit(2)
+
+
 def alfred_plan_cmd(args: argparse.Namespace) -> None:
     catalog = load_catalog()
     series = args.series or [c["series_id"] for c in catalog if c.get("source") == "fred"]

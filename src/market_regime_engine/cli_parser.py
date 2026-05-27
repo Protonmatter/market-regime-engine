@@ -246,6 +246,26 @@ def parser() -> argparse.ArgumentParser:
     )
     s.set_defaults(func=release_gate_cmd)
 
+    s = sub.add_parser(
+        "certification-report",
+        help="Build a machine-readable XPro certification report artifact.",
+    )
+    s.add_argument("--db", default="data/mre.duckdb")
+    s.add_argument("--validation-dir", default="data/validation")
+    s.add_argument("--out-json", default="data/certification_report.json")
+    s.add_argument("--asof", default=None)
+    s.add_argument("--profile", default="certification", choices=["production", "certification", "default"])
+    s.add_argument("--dsr", type=float, default=None)
+    s.add_argument("--pbo", type=float, default=None)
+    s.add_argument("--evidence-pack-hmac", default=None)
+    s.add_argument("--model-card-path", default="docs/method_cards/execution_confidence.md")
+    s.add_argument("--xpro-decision-id", default=None)
+    s.add_argument("--require-hmac", action="store_true")
+    s.add_argument("--frontier-diagnostics-json", default=None)
+    s.add_argument("--skip-execution-validation", action="store_true")
+    s.add_argument("--fail-on-hold", action="store_true")
+    s.set_defaults(func=certification_report_cmd)
+
     s = sub.add_parser("alfred-plan")
     s.add_argument("--series", nargs="*")
     s.add_argument("--observation-start", default="1960-01-01")

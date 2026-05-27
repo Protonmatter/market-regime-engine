@@ -159,9 +159,13 @@ def install_correlation_id_log_filter() -> CorrelationIdLogFilter:
     root = logging.getLogger()
     for existing in root.filters:
         if isinstance(existing, CorrelationIdLogFilter):
+            for handler in root.handlers:
+                if not any(installed is existing for installed in handler.filters):
+                    handler.addFilter(existing)
             return existing
     correlation_filter = CorrelationIdLogFilter()
     root.addFilter(correlation_filter)
     for handler in root.handlers:
-        handler.addFilter(correlation_filter)
+        if not any(existing is correlation_filter for existing in handler.filters):
+            handler.addFilter(correlation_filter)
     return correlation_filter
