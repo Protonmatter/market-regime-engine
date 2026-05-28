@@ -189,7 +189,7 @@ This build estimates and stores:
 ## Build status
 
 <!-- ci-status-start -->
-- **Tests: 1446 passed / 0 failed / 0 errored / 31 skipped (junit `tests/`).**
+- **Tests: 1451 passed / 0 failed / 0 errored / 31 skipped (junit `tests/`).**
 - **Ruff: 0 offences (`ruff check src tests`).**
 - **Mypy: 0 errors (`mypy src/market_regime_engine`).**
 - **Bench: `mre bench` recorded 15 measurements.**
